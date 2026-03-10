@@ -623,3 +623,6 @@ int ufs_chown(const char *path, u16 uid, u16 gid) {
     (void)gid;
     return 0; // UFS пока не поддерживает владельцев
 }
+// Для автоматической регистрации в kinit
+static const char __ufs_name[] __attribute__((section(".kinit.modules"))) = "ufs_mount";
+static void* __ufs_func __attribute__((section(".kinit.modules"))) = ufs_mount;

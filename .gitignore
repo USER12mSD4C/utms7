@@ -3,5 +3,6 @@
 *.bin
 *.elf
 *.img
+*.log
 iso
 

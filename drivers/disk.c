@@ -219,3 +219,6 @@ u64 disk_get_sectors(u8 drive) {
     if (index < 0 || index >= 4) return 0;
     return disks[index].sectors;
 }
+// Для автоматической регистрации в kinit
+static const char __disk_name[] __attribute__((section(".kinit.modules"))) = "disk_init";
+static void* __disk_func __attribute__((section(".kinit.modules"))) = disk_init;

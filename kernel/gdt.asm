@@ -4,9 +4,11 @@ global gdt_init
 section .text
 bits 64
 
-; This is a wrapper for the C function
+; Функция инициализации GDT (просто вызывает gdt_flush с правильным указателем)
 gdt_init:
-    ; Just call the C function - the actual implementation is in gdt.c
+    ; Загружаем адрес gdt_ptr из .data секции
+    lea rdi, [gdt_ptr]
+    call gdt_flush
     ret
 
 gdt_flush:
@@ -23,3 +25,12 @@ gdt_flush:
     retfq
 .flush_ret:
     ret
+
+section .data
+gdt:
+    dq 0x0000000000000000  ; 0x00 NULL
+    dq 0x0020980000000000  ; 0x08 CODE
+    dq 0x0000920000000000  ; 0x10 DATA
+gdt_ptr:
+    dw $ - gdt - 1
+    dq gdt

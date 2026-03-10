@@ -20,7 +20,7 @@ struct gdt_ptr {
     u64 base;
 } __attribute__((packed));
 
-int gdt_init(void);  // ВОЗВРАЩАЕТ int
+int gdt_init(void);
 void gdt_set_gate(u32 num, u64 base, u64 limit, u8 access, u8 gran);
 
 #endif

@@ -74,3 +74,9 @@ int timer_init(void) {  // ВОЗВРАЩАЕТ int
     outb(0x40, (divisor >> 8) & 0xFF);
     return 0;
 }
+// Для автоматической регистрации в kinit
+static const char __idt_name[] __attribute__((section(".kinit.modules"))) = "idt_init";
+static void* __idt_func __attribute__((section(".kinit.modules"))) = idt_init;
+
+static const char __timer_name[] __attribute__((section(".kinit.modules"))) = "timer_init";
+static void* __timer_func __attribute__((section(".kinit.modules"))) = timer_init;

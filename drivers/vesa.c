@@ -155,3 +155,6 @@ void vesa_scroll(i32 lines) {
 u32 vesa_get_width(void) { return width; }
 u32 vesa_get_height(void) { return height; }
 int vesa_is_active(void) { return vesa_active; }
+// Для автоматической регистрации в kinit
+static const char __vesa_name[] __attribute__((section(".kinit.modules"))) = "vesa_init";
+static void* __vesa_func __attribute__((section(".kinit.modules"))) = vesa_init;

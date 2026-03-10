@@ -20,17 +20,18 @@ void gdt_set_gate(u32 num, u64 base, u64 limit, u8 access, u8 gran) {
     gdt[num].limit_high |= (gran & 0x0F);
 }
 
-int gdt_init(void) {  // ТЕПЕРЬ ВОЗВРАЩАЕТ int
+int gdt_init(void) {
     gp.limit = (sizeof(struct gdt_entry) * 6) - 1;
     gp.base = (u64)&gdt;
     
-    gdt_set_gate(0, 0, 0, 0, 0);
-    gdt_set_gate(1, 0, 0xFFFFF, 0x9A, 0xAF);
-    gdt_set_gate(2, 0, 0xFFFFF, 0x92, 0xAF);
-    gdt_set_gate(3, 0, 0xFFFFF, 0xFA, 0xAF);
-    gdt_set_gate(4, 0, 0xFFFFF, 0xF2, 0xAF);
-    gdt_set_gate(5, 0, 0, 0, 0);
+    gdt_set_gate(0, 0, 0, 0, 0);                // Null
+    gdt_set_gate(1, 0, 0xFFFFF, 0x9A, 0xAF);    // Code kernel
+    gdt_set_gate(2, 0, 0xFFFFF, 0x92, 0xAF);    // Data kernel
+    gdt_set_gate(3, 0, 0xFFFFF, 0xFA, 0xAF);    // Code user
+    gdt_set_gate(4, 0, 0xFFFFF, 0xF2, 0xAF);    // Data user
+    gdt_set_gate(5, 0, 0, 0, 0);                 // TSS
     
     gdt_flush();
-    return 0;  // ВОЗВРАЩАЕМ 0
+    
+    return 0;
 }

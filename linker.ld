@@ -21,7 +21,7 @@ SECTIONS
         *(.rodata)
         *(.rodata.*)
         
-        // Таблица модулей для kinit
+        . = ALIGN(8);
         __modules_start = .;
         KEEP(*(.kinit.modules))
         __modules_end = .;
