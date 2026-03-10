@@ -1,7 +1,8 @@
 # UTMS7
 
+**Copyright (c) 2026 The UOPL Authors**
+
 x86-64 operating system written in C and NASM assembly.
-Under UOPLicense 1.6.2
 
 ## Project structure
 
@@ -32,3 +33,7 @@ make run #with qemu
 make runD #with logs
 make iso
 ```
+
+## What is that?
+
+thats ultra modular operating system, where you can change or add absolutely anything
