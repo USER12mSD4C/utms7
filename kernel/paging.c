@@ -51,12 +51,9 @@ int paging_init(void) {
     for (int i = 0; i < 512; i++) {
         pd2[i] = 0;
     }
-    
-    // Добавляем отображение для framebuffer (0xFD000000)
-    // Индекс в PD2: 0xFD000000 / 0x200000 = 0x7E8
+
     pd2[0x7E8] = 0xFD000000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE;
     
-    // Сбрасываем TLB
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4));
     
     return 0;

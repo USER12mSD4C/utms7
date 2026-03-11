@@ -5,7 +5,6 @@
 
 #define KEY_BUFFER_SIZE 256
 
-// Специальные коды клавиш
 #define KEY_UP      0xE0
 #define KEY_DOWN    0xE1
 #define KEY_LEFT    0xE2

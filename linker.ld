@@ -20,12 +20,7 @@ SECTIONS
         __rodata_start = .;
         *(.rodata)
         *(.rodata.*)
-        
-        . = ALIGN(8);
-        __modules_start = .;
-        KEEP(*(.kinit.modules))
-        __modules_end = .;
-        
+        . = ALIGN(4096);
         __rodata_end = .;
     }
 

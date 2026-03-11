@@ -23,7 +23,6 @@ void shell_init(void) {
 int shell_register_command(const char* name, int (*func)(int argc, char** argv), const char* desc) {
     if (!name || !func || cmd_count >= MAX_COMMANDS) return -1;
     
-    // Проверяем уникальность
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(commands[i].name, name) == 0) return -1;
     }
@@ -39,7 +38,6 @@ int shell_register_command(const char* name, int (*func)(int argc, char** argv),
 int shell_unregister_command(const char* name) {
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(commands[i].name, name) == 0) {
-            // Сдвигаем остальные команды
             for (int j = i; j < cmd_count - 1; j++) {
                 commands[j] = commands[j + 1];
             }
@@ -158,8 +156,13 @@ void shell_run(void) {
                     }
                 } else {
                     line[pos++] = c;
-                    shell_print(&c);
+                    // Печатаем ТОЛЬКО один символ
+                    char str[2] = {c, '\0'};
+                    shell_print(str);
                 }
+                
+                // Маленькая задержка чтоб не плодить символы
+                for (int i = 0; i < 1000; i++) asm volatile ("nop");
             }
         }
     }

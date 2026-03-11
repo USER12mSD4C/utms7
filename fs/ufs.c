@@ -3,69 +3,43 @@
 #include "../kernel/memory.h"
 #include "../include/string.h"
 #include "../drivers/vga.h"
-#include "../include/io.h"
 
 #define UFS_MAGIC 0x55465300
 #define UFS_BLOCK_SIZE 512
-#define UFS_BLOCK_OFFSET 2048
 
 typedef struct {
     u32 magic;
     u32 total_blocks;
     u32 free_blocks;
     u32 root_dir;
-    u32 reserved[125];
 } ufs_superblock_t;
 
 typedef struct {
-    char name[56];
+    char name[256];
     u32 size;
     u32 first_block;
-    u32 created;
-    u32 modified;
     u8 is_dir;
-    u8 reserved[55];
 } ufs_entry_t;
 
 static ufs_superblock_t sb;
 static int mounted = 0;
-static u32 partition_start = 0;
+static u32 part_start = 0;
 
-static void debug_putc(char c) { outb(0xE9, c); }
-static void debug_puts(const char* s) { while (*s) debug_putc(*s++); }
-
-static void debug_puthex(u32 val) {
-    char hex[] = "0123456789ABCDEF";
-    debug_putc('0');
-    debug_putc('x');
-    debug_putc(hex[(val >> 28) & 0xF]);
-    debug_putc(hex[(val >> 24) & 0xF]);
-    debug_putc(hex[(val >> 20) & 0xF]);
-    debug_putc(hex[(val >> 16) & 0xF]);
-    debug_putc(hex[(val >> 12) & 0xF]);
-    debug_putc(hex[(val >> 8) & 0xF]);
-    debug_putc(hex[(val >> 4) & 0xF]);
-    debug_putc(hex[val & 0xF]);
+static int read_block(u32 b, u8* buf) {
+    return disk_read(part_start + b, buf);
 }
 
-static int read_block(u32 block, u8 *buf) {
-    u32 lba = partition_start + UFS_BLOCK_OFFSET + block;
-    return disk_read(lba, buf);
-}
-
-static int write_block(u32 block, u8 *buf) {
-    u32 lba = partition_start + UFS_BLOCK_OFFSET + block;
-    return disk_write(lba, buf);
+static int write_block(u32 b, u8* buf) {
+    return disk_write(part_start + b, buf);
 }
 
 static u32 find_free_block(void) {
     for (u32 i = 2; i < sb.total_blocks; i++) {
-        u8 buf[UFS_BLOCK_SIZE];
+        u8 buf[512];
         if (read_block(i, buf) != 0) continue;
-        
         int empty = 1;
-        for (int j = 0; j < UFS_BLOCK_SIZE; j++) {
-            if (buf[j] != 0) { empty = 0; break; }
+        for (int j = 0; j < 512; j++) {
+            if (buf[j]) { empty = 0; break; }
         }
         if (empty) {
             sb.free_blocks--;
@@ -75,403 +49,279 @@ static u32 find_free_block(void) {
     return 0;
 }
 
-static void split_path(const char *full, char *dir, char *name) {
-    const char *last_slash = strrchr(full, '/');
-    
-    if (!last_slash) {
+static void split_path(const char* full, char* dir, char* name) {
+    const char* last = strrchr(full, '/');
+    if (!last || last == full) {
         strcpy(dir, "/");
-        strcpy(name, full);
+        strcpy(name, last ? full + 1 : full);
         return;
     }
-    
-    int dir_len = last_slash - full;
-    if (dir_len == 0) {
-        strcpy(dir, "/");
-    } else {
-        strncpy(dir, full, dir_len);
-        dir[dir_len] = '\0';
-    }
-    strcpy(name, last_slash + 1);
+    int dlen = last - full;
+    strncpy(dir, full, dlen);
+    dir[dlen] = 0;
+    strcpy(name, last + 1);
 }
 
-static int find_in_dir(u32 dir_block, const char *name, ufs_entry_t *out) {
-    u8 buf[UFS_BLOCK_SIZE];
-    if (read_block(dir_block, buf) != 0) return -1;
-    
-    ufs_entry_t *entries = (ufs_entry_t*)buf;
-    for (int i = 0; i < UFS_BLOCK_SIZE / sizeof(ufs_entry_t); i++) {
-        if (entries[i].name[0] && strcmp((char*)entries[i].name, name) == 0) {
-            if (out) *out = entries[i];
+static int find_in_dir(u32 block, const char* name, ufs_entry_t* out) {
+    u8 buf[512];
+    if (read_block(block, buf) != 0) return -1;
+    ufs_entry_t* e = (ufs_entry_t*)buf;
+    int count = 512 / sizeof(ufs_entry_t);
+    for (int i = 0; i < count; i++) {
+        if (e[i].name[0] && strcmp(e[i].name, name) == 0) {
+            if (out) *out = e[i];
             return i;
         }
     }
     return -1;
 }
 
-int ufs_is_mounted(void) {
-    return mounted;
-}
-
-static int add_to_dir(u32 dir_block, ufs_entry_t *entry) {
-    u8 buf[UFS_BLOCK_SIZE];
-    int res = read_block(dir_block, buf);
-    if (res != 0) {
-        debug_puts("add_to_dir: creating new directory block\n");
-        memset(buf, 0, sizeof(buf));
-    }
-    
-    ufs_entry_t *entries = (ufs_entry_t*)buf;
-    int entries_per_block = UFS_BLOCK_SIZE / sizeof(ufs_entry_t);
-    
-    // Ищем свободное место
-    for (int i = 0; i < entries_per_block; i++) {
-        if (entries[i].name[0] == 0) {
-            debug_puts("add_to_dir: found free slot at "); debug_puthex(i); debug_puts("\n");
-            entries[i] = *entry;
-            return write_block(dir_block, buf);
+static int add_to_dir(u32 block, ufs_entry_t* e) {
+    u8 buf[512];
+    if (read_block(block, buf) != 0) memset(buf, 0, 512);
+    ufs_entry_t* entries = (ufs_entry_t*)buf;
+    int count = 512 / sizeof(ufs_entry_t);
+    for (int i = 0; i < count; i++) {
+        if (!entries[i].name[0]) {
+            entries[i] = *e;
+            return write_block(block, buf);
         }
     }
-    
-    debug_puts("add_to_dir: no free slots\n");
     return -1;
 }
 
-static int remove_from_dir(u32 dir_block, const char *name) {
-    u8 buf[UFS_BLOCK_SIZE];
-    if (read_block(dir_block, buf) != 0) return -1;
-    
-    ufs_entry_t *entries = (ufs_entry_t*)buf;
-    for (int i = 0; i < UFS_BLOCK_SIZE / sizeof(ufs_entry_t); i++) {
-        if (entries[i].name[0] && strcmp((char*)entries[i].name, name) == 0) {
+static int remove_from_dir(u32 block, const char* name) {
+    u8 buf[512];
+    if (read_block(block, buf) != 0) return -1;
+    ufs_entry_t* entries = (ufs_entry_t*)buf;
+    int count = 512 / sizeof(ufs_entry_t);
+    for (int i = 0; i < count; i++) {
+        if (entries[i].name[0] && strcmp(entries[i].name, name) == 0) {
             memset(&entries[i], 0, sizeof(ufs_entry_t));
-            return write_block(dir_block, buf);
+            return write_block(block, buf);
         }
     }
     return -1;
 }
 
-static int get_dir_block(const char *path, u32 *block, char *name) {
-    char dir_path[256];
-    split_path(path, dir_path, name);
+static int get_parent(const char* path, u32* block, char* name) {
+    char dir[256];
+    split_path(path, dir, name);
     
-    if (strcmp(dir_path, "/") == 0) {
+    if (strcmp(dir, "/") == 0) {
         *block = sb.root_dir;
         return 0;
     }
     
-    const char *search = dir_path;
-    if (search[0] == '/') search++;
+    // Проходим по пути
+    char temp[256];
+    strcpy(temp, dir);
+    char* part = strtok(temp, "/");
+    u32 current = sb.root_dir;
     
-    ufs_entry_t dir_entry;
-    if (find_in_dir(sb.root_dir, search, &dir_entry) != 0) {
-        return -1;
+    while (part) {
+        ufs_entry_t e;
+        if (find_in_dir(current, part, &e) != 0) return -1;
+        if (!e.is_dir) return -1;
+        current = e.first_block;
+        part = strtok(NULL, "/");
     }
     
-    if (!dir_entry.is_dir) return -1;
-    *block = dir_entry.first_block;
+    *block = current;
     return 0;
 }
 
 int ufs_mount(u32 start_lba) {
-    partition_start = start_lba;
-    
-    u8 buf[UFS_BLOCK_SIZE];
-    if (read_block(0, buf) != 0) return -1;
-    
+    part_start = start_lba;
+    u8 buf[512];
+    if (disk_read(start_lba, buf) != 0) return -1;
     memcpy(&sb, buf, sizeof(sb));
     if (sb.magic != UFS_MAGIC) return -1;
-    
     mounted = 1;
     return 0;
 }
 
 int ufs_format(u32 start_lba, u32 blocks) {
-    partition_start = start_lba;
+    part_start = start_lba;
     
+    // Суперблок
     memset(&sb, 0, sizeof(sb));
     sb.magic = UFS_MAGIC;
     sb.total_blocks = blocks;
-    sb.free_blocks = blocks - 2;
+    sb.free_blocks = blocks - 1;
     sb.root_dir = 1;
     
-    u8 buf[UFS_BLOCK_SIZE];
+    u8 buf[512];
     memcpy(buf, &sb, sizeof(sb));
-    if (write_block(0, buf) != 0) return -1;
+    if (disk_write(start_lba, buf) != 0) return -1;
     
-    memset(buf, 0, sizeof(buf));
-    ufs_entry_t *entries = (ufs_entry_t*)buf;
+    // Корневая директория
+    memset(buf, 0, 512);
+    ufs_entry_t* e = (ufs_entry_t*)buf;
+    strcpy(e[0].name, ".");
+    e[0].is_dir = 1;
+    e[0].first_block = 1;
+    strcpy(e[1].name, "..");
+    e[1].is_dir = 1;
+    e[1].first_block = 1;
     
-    strcpy((char*)entries[0].name, ".");
-    entries[0].is_dir = 1;
-    entries[0].first_block = sb.root_dir;
-    
-    strcpy((char*)entries[1].name, "..");
-    entries[1].is_dir = 1;
-    entries[1].first_block = sb.root_dir;
-    
-    if (write_block(sb.root_dir, buf) != 0) return -1;
+    if (disk_write(start_lba + 1, buf) != 0) return -1;
     
     mounted = 1;
     return 0;
 }
 
-int ufs_write(const char *path, u8 *data, u32 size) {
+int ufs_read(const char* path, u8** data, u32* size) {
     if (!mounted) return -1;
     
-    char name[56];
-    u32 parent_block;
+    char name[256];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return -1;
     
-    if (get_dir_block(path, &parent_block, name) != 0) return -1;
+    ufs_entry_t e;
+    if (find_in_dir(parent, name, &e) != 0) return -1;
+    if (e.is_dir) return -1;
     
+    *size = e.size;
+    *data = kmalloc(e.size + 1);
+    if (!*data) return -1;
+    
+    if (e.size > 0) {
+        u32 block = e.first_block;
+        u32 left = e.size;
+        u32 pos = 0;
+        
+        while (left > 0) {
+            u8 buf[512];
+            if (read_block(block, buf) != 0) {
+                kfree(*data);
+                return -1;
+            }
+            u32 chunk = left < 512 ? left : 512;
+            memcpy(*data + pos, buf, chunk);
+            pos += chunk;
+            left -= chunk;
+            block++;
+        }
+    }
+    (*data)[e.size] = 0;
+    return 0;
+}
+
+int ufs_write(const char* path, u8* data, u32 size) {
+    if (!mounted) return -1;
+    
+    char name[256];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return -1;
+    
+    // Удаляем если есть
     ufs_entry_t old;
-    if (find_in_dir(parent_block, name, &old) == 0) {
+    if (find_in_dir(parent, name, &old) == 0) {
         if (old.is_dir) return -1;
-        remove_from_dir(parent_block, name);
+        remove_from_dir(parent, name);
     }
     
     if (size == 0) {
-        ufs_entry_t entry;
-        memset(&entry, 0, sizeof(entry));
-        strcpy((char*)entry.name, name);
-        entry.size = 0;
-        entry.first_block = 0;
-        entry.is_dir = 0;
-        
-        if (add_to_dir(parent_block, &entry) != 0) return -1;
-        
-        u8 sb_buf[UFS_BLOCK_SIZE];
-        memcpy(sb_buf, &sb, sizeof(sb));
-        write_block(0, sb_buf);
-        return 0;
+        ufs_entry_t ne;
+        memset(&ne, 0, sizeof(ne));
+        strcpy(ne.name, name);
+        ne.size = 0;
+        ne.first_block = 0;
+        ne.is_dir = 0;
+        return add_to_dir(parent, &ne);
     }
     
-    u32 blocks = (size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
+    u32 blocks = (size + 511) / 512;
     if (sb.free_blocks < blocks) return -1;
     
-    u32 first_block = 0;
-    
+    u32 first = 0;
     for (u32 i = 0; i < blocks; i++) {
-        u32 new_block = find_free_block();
-        if (new_block == 0) return -1;
+        u32 b = find_free_block();
+        if (!b) return -1;
+        if (i == 0) first = b;
         
-        if (i == 0) first_block = new_block;
+        u8 buf[512] = {0};
+        u32 offset = i * 512;
+        u32 chunk = size - offset;
+        if (chunk > 512) chunk = 512;
+        memcpy(buf, data + offset, chunk);
         
-        u8 buf[UFS_BLOCK_SIZE] = {0};
-        u32 offset = i * UFS_BLOCK_SIZE;
-        if (offset < size) {
-            u32 chunk = size - offset;
-            if (chunk > UFS_BLOCK_SIZE) chunk = UFS_BLOCK_SIZE;
-            memcpy(buf, data + offset, chunk);
-        }
-        
-        if (write_block(new_block, buf) != 0) return -1;
+        if (write_block(b, buf) != 0) return -1;
     }
     
-    ufs_entry_t entry;
-    memset(&entry, 0, sizeof(entry));
-    strcpy((char*)entry.name, name);
-    entry.size = size;
-    entry.first_block = first_block;
-    entry.is_dir = 0;
+    ufs_entry_t ne;
+    memset(&ne, 0, sizeof(ne));
+    strcpy(ne.name, name);
+    ne.size = size;
+    ne.first_block = first;
+    ne.is_dir = 0;
     
-    if (add_to_dir(parent_block, &entry) != 0) return -1;
-    
-    u8 sb_buf[UFS_BLOCK_SIZE];
-    memcpy(sb_buf, &sb, sizeof(sb));
-    write_block(0, sb_buf);
-    
-    return 0;
+    return add_to_dir(parent, &ne);
 }
 
-int ufs_read(const char *path, u8 **data, u32 *size) {
+int ufs_mkdir(const char* path) {
     if (!mounted) return -1;
-    
-    char name[56];
-    u32 parent_block;
-    
-    if (get_dir_block(path, &parent_block, name) != 0) return -1;
-    
-    ufs_entry_t entry;
-    if (find_in_dir(parent_block, name, &entry) != 0) return -1;
-    if (entry.is_dir) return -1;
-    
-    *size = entry.size;
-    *data = kmalloc(entry.size + 1);
-    if (!*data) return -1;
-    
-    if (entry.size == 0) {
-        **data = '\0';
-        return 0;
-    }
-    
-    u32 blocks = (entry.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
-    u32 block = entry.first_block;
-    
-    for (u32 i = 0; i < blocks; i++) {
-        if (read_block(block + i, *data + i * UFS_BLOCK_SIZE) != 0) {
-            kfree(*data);
-            return -1;
-        }
-    }
-    
-    (*data)[entry.size] = '\0';
-    return 0;
-}
-
-int ufs_delete(const char *path) {
-    if (!mounted) return -1;
-    
-    char name[56];
-    u32 parent_block;
-    
-    if (get_dir_block(path, &parent_block, name) != 0) return -1;
-    
-    ufs_entry_t entry;
-    if (find_in_dir(parent_block, name, &entry) != 0) return -1;
-    if (entry.is_dir) return -1;
-    
-    if (remove_from_dir(parent_block, name) != 0) return -1;
-    
-    u8 sb_buf[UFS_BLOCK_SIZE];
-    memcpy(sb_buf, &sb, sizeof(sb));
-    write_block(0, sb_buf);
-    
-    return 0;
-}
-
-int ufs_mkdir(const char *path) {
-    if (!mounted) return -1;
-    if (!path || strlen(path) == 0) return -1;
     if (strcmp(path, "/") == 0) return -1;
     
-    debug_puts("ufs_mkdir: "); debug_puts(path); debug_puts("\n");
+    char name[256];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return -1;
     
-    char name[56];
-    u32 parent_block;
-    
-    if (get_dir_block(path, &parent_block, name) != 0) {
-        debug_puts("  get_dir_block failed\n");
-        return -1;
-    }
-    
-    debug_puts("  parent_block="); debug_puthex(parent_block); 
-    debug_puts(" name="); debug_puts(name); debug_puts("\n");
-    
-    // Проверяем что не существует
-    if (find_in_dir(parent_block, name, NULL) >= 0) {
-        debug_puts("  already exists\n");
-        return -1;
-    }
+    // Проверяем что нет такого
+    if (find_in_dir(parent, name, NULL) >= 0) return -1;
     
     // Выделяем блок для новой директории
-    u32 new_block = find_free_block();
-    if (new_block == 0) {
-        debug_puts("  no free block\n");
-        return -1;
-    }
+    u32 nb = find_free_block();
+    if (!nb) return -1;
     
-    debug_puts("  new_block="); debug_puthex(new_block); debug_puts("\n");
+    // Создаём новую директорию
+    u8 buf[512] = {0};
+    ufs_entry_t* e = (ufs_entry_t*)buf;
+    strcpy(e[0].name, ".");
+    e[0].is_dir = 1;
+    e[0].first_block = nb;
+    strcpy(e[1].name, "..");
+    e[1].is_dir = 1;
+    e[1].first_block = parent;
     
-    // Создаем новую директорию с . и ..
-    u8 buf[UFS_BLOCK_SIZE];
-    memset(buf, 0, sizeof(buf));
+    if (write_block(nb, buf) != 0) return -1;
     
-    ufs_entry_t *new_entries = (ufs_entry_t*)buf;
+    // Добавляем запись в родительскую директорию
+    ufs_entry_t ne;
+    memset(&ne, 0, sizeof(ne));
+    strcpy(ne.name, name);
+    ne.is_dir = 1;
+    ne.first_block = nb;
     
-    // .
-    strcpy((char*)new_entries[0].name, ".");
-    new_entries[0].is_dir = 1;
-    new_entries[0].first_block = new_block;
-    new_entries[0].size = 0;
-    
-    // ..
-    strcpy((char*)new_entries[1].name, "..");
-    new_entries[1].is_dir = 1;
-    new_entries[1].first_block = parent_block;
-    new_entries[1].size = 0;
-    
-    if (write_block(new_block, buf) != 0) {
-        debug_puts("  write_block failed\n");
-        sb.free_blocks++;
-        return -1;
-    }
-    
-    // Создаем запись в родительской директории
-    ufs_entry_t entry;
-    memset(&entry, 0, sizeof(entry));
-    strcpy((char*)entry.name, name);
-    entry.is_dir = 1;
-    entry.first_block = new_block;
-    entry.size = 0;
-    
-    if (add_to_dir(parent_block, &entry) != 0) {
-        debug_puts("  add_to_dir failed\n");
-        sb.free_blocks++;
-        return -1;
-    }
-    
-    // Обновляем суперблок
-    u8 sb_buf[UFS_BLOCK_SIZE];
-    memcpy(sb_buf, &sb, sizeof(sb));
-    if (write_block(0, sb_buf) != 0) {
-        debug_puts("  write_sb failed\n");
-        return -1;
-    }
-    
-    debug_puts("  OK\n");
-    return 0;
+    return add_to_dir(parent, &ne);
 }
 
-int ufs_rmdir(const char *path) {
-    if (!mounted) return -1;
-    if (strcmp(path, "/") == 0) return -1;
-    
-    char name[56];
-    u32 parent_block;
-    
-    if (get_dir_block(path, &parent_block, name) != 0) return -1;
-    
-    ufs_entry_t entry;
-    if (find_in_dir(parent_block, name, &entry) != 0) return -1;
-    if (!entry.is_dir) return -1;
-    
-    u8 buf[UFS_BLOCK_SIZE];
-    if (read_block(entry.first_block, buf) != 0) return -1;
-    
-    ufs_entry_t *sub_entries = (ufs_entry_t*)buf;
-    for (int i = 2; i < UFS_BLOCK_SIZE / sizeof(ufs_entry_t); i++) {
-        if (sub_entries[i].name[0]) return -1;
-    }
-    
-    if (remove_from_dir(parent_block, name) != 0) return -1;
-    sb.free_blocks++;
-    
-    u8 sb_buf[UFS_BLOCK_SIZE];
-    memcpy(sb_buf, &sb, sizeof(sb));
-    write_block(0, sb_buf);
-    
-    return 0;
-}
-
-int ufs_readdir(const char *path, FSNode **entries, u32 *count) {
+int ufs_readdir(const char* path, FSNode** entries, u32* count) {
     if (!mounted) return -1;
     
-    u32 dir_block;
+    u32 block;
     if (strcmp(path, "/") == 0) {
-        dir_block = sb.root_dir;
+        block = sb.root_dir;
     } else {
-        char name[56];
-        if (get_dir_block(path, &dir_block, name) != 0) return -1;
+        char name[256];
+        u32 parent;
+        if (get_parent(path, &parent, name) != 0) return -1;
+        ufs_entry_t e;
+        if (find_in_dir(parent, name, &e) != 0) return -1;
+        if (!e.is_dir) return -1;
+        block = e.first_block;
     }
     
-    u8 buf[UFS_BLOCK_SIZE];
-    if (read_block(dir_block, buf) != 0) return -1;
+    u8 buf[512];
+    if (read_block(block, buf) != 0) return -1;
+    ufs_entry_t* raw = (ufs_entry_t*)buf;
+    int total = 512 / sizeof(ufs_entry_t);
     
-    ufs_entry_t *raw = (ufs_entry_t*)buf;
-    
+    // Считаем реальные записи (пропускаем . и ..)
     *count = 0;
-    for (int i = 2; i < UFS_BLOCK_SIZE / sizeof(ufs_entry_t); i++) {
-        if (raw[i].name[0]) (*count)++;
+    for (int i = 2; i < total; i++) {
+        if (raw[i].name[0] != 0) (*count)++;
     }
     
     if (*count == 0) {
@@ -480,89 +330,124 @@ int ufs_readdir(const char *path, FSNode **entries, u32 *count) {
     }
     
     *entries = kmalloc(*count * sizeof(FSNode));
-    if (!*entries) return -1;
-    
     int idx = 0;
-    for (int i = 2; i < UFS_BLOCK_SIZE / sizeof(ufs_entry_t); i++) {
-        if (raw[i].name[0]) {
-            strcpy((*entries)[idx].name, (char*)raw[i].name);
+    for (int i = 2; i < total; i++) {
+        if (raw[i].name[0] != 0) {
+            // Копируем имя без мусора
+            int name_len = strlen(raw[i].name);
+            if (name_len > 55) name_len = 55;
+            memcpy((*entries)[idx].name, raw[i].name, name_len);
+            (*entries)[idx].name[name_len] = '\0';
+            
             (*entries)[idx].size = raw[i].size;
             (*entries)[idx].is_dir = raw[i].is_dir;
             idx++;
         }
     }
-    
     return 0;
 }
 
-int ufs_exists(const char *path) {
+int ufs_exists(const char* path) {
     if (!mounted) return 0;
     if (strcmp(path, "/") == 0) return 1;
     
-    char name[56];
-    u32 parent_block;
-    
-    if (get_dir_block(path, &parent_block, name) != 0) return 0;
-    return (find_in_dir(parent_block, name, NULL) >= 0);
+    char name[256];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return 0;
+    return find_in_dir(parent, name, NULL) >= 0;
 }
 
-int ufs_isdir(const char *path) {
+int ufs_isdir(const char* path) {
     if (!mounted) return 0;
     if (strcmp(path, "/") == 0) return 1;
     
-    char name[56];
-    u32 parent_block;
-    
-    if (get_dir_block(path, &parent_block, name) != 0) return 0;
-    
-    ufs_entry_t entry;
-    if (find_in_dir(parent_block, name, &entry) != 0) return 0;
-    return entry.is_dir;
+    char name[256];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return 0;
+    ufs_entry_t e;
+    if (find_in_dir(parent, name, &e) != 0) return 0;
+    return e.is_dir;
 }
 
-int ufs_stat(u32 *total, u32 *used, u32 *free) {
+int ufs_rmdir(const char* path) {
     if (!mounted) return -1;
-    *total = sb.total_blocks * UFS_BLOCK_SIZE;
-    *free = sb.free_blocks * UFS_BLOCK_SIZE;
+    if (strcmp(path, "/") == 0) return -1;
+    
+    char name[256];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return -1;
+    
+    ufs_entry_t e;
+    if (find_in_dir(parent, name, &e) != 0) return -1;
+    if (!e.is_dir) return -1;
+    
+    // Проверяем что директория пуста
+    u8 buf[512];
+    if (read_block(e.first_block, buf) != 0) return -1;
+    ufs_entry_t* entries = (ufs_entry_t*)buf;
+    int total = 512 / sizeof(ufs_entry_t);
+    for (int i = 2; i < total; i++) {
+        if (entries[i].name[0]) return -1;
+    }
+    
+    return remove_from_dir(parent, name);
+}
+
+int ufs_delete(const char* path) {
+    if (!mounted) return -1;
+    
+    char name[256];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return -1;
+    
+    ufs_entry_t e;
+    if (find_in_dir(parent, name, &e) != 0) return -1;
+    if (e.is_dir) return -1;
+    
+    return remove_from_dir(parent, name);
+}
+
+int ufs_stat(u32* total, u32* used, u32* free) {
+    if (!mounted) return -1;
+    *total = sb.total_blocks * 512;
+    *free = sb.free_blocks * 512;
     *used = *total - *free;
     return 0;
 }
 
-int ufs_cp(const char *src, const char *dst) {
-    u8 *data;
+int ufs_cp(const char* src, const char* dst) {
+    u8* data;
     u32 size;
-    
     if (ufs_read(src, &data, &size) != 0) return -1;
     int ret = ufs_write(dst, data, size);
     kfree(data);
     return ret;
 }
 
-int ufs_mv(const char *src, const char *dst) {
+int ufs_mv(const char* src, const char* dst) {
     if (ufs_cp(src, dst) != 0) return -1;
     return ufs_delete(src);
 }
 
-int ufs_grep(const char *path, const char *pattern, void (*callback)(const char *line, u32 line_num)) {
-    u8 *data;
+int ufs_grep(const char* path, const char* pattern, void (*callback)(const char* line, u32 line_num)) {
+    u8* data;
     u32 size;
     
     if (ufs_read(path, &data, &size) != 0) return -1;
     
-    char *p = (char*)data;
+    char* p = (char*)data;
     char line[256];
     u32 line_num = 1;
     u32 line_pos = 0;
     
-    while (*p && line_num < 1000) {
-        if (*p == '\n' || *p == '\r') {
+    while (*p) {
+        if (*p == '\n') {
             line[line_pos] = '\0';
             if (strstr(line, pattern)) {
                 callback(line, line_num);
             }
             line_pos = 0;
             line_num++;
-            if (*p == '\r' && *(p+1) == '\n') p++;
         } else if (line_pos < 255) {
             line[line_pos++] = *p;
         }
@@ -580,49 +465,47 @@ int ufs_grep(const char *path, const char *pattern, void (*callback)(const char 
     return 0;
 }
 
-static void find_recursive(const char *start_path, const char *name, void (*callback)(const char *path)) {
-    FSNode *entries;
+static void find_recursive(const char* start, const char* name, void (*callback)(const char* path)) {
+    FSNode* entries;
     u32 count;
     
-    if (ufs_readdir(start_path, &entries, &count) != 0) return;
+    if (ufs_readdir(start, &entries, &count) != 0) return;
     
     for (u32 i = 0; i < count; i++) {
-        char full_path[256];
-        if (strcmp(start_path, "/") == 0) {
-            snprintf(full_path, sizeof(full_path), "/%s", entries[i].name);
+        char full[256];
+        if (strcmp(start, "/") == 0) {
+            snprintf(full, sizeof(full), "/%s", entries[i].name);
         } else {
-            snprintf(full_path, sizeof(full_path), "%s/%s", start_path, entries[i].name);
+            snprintf(full, sizeof(full), "%s/%s", start, entries[i].name);
         }
         
         if (strcmp(entries[i].name, name) == 0) {
-            callback(full_path);
+            callback(full);
         }
         
         if (entries[i].is_dir) {
-            find_recursive(full_path, name, callback);
+            find_recursive(full, name, callback);
         }
     }
     
     if (entries) kfree(entries);
 }
 
-int ufs_find(const char *start_path, const char *name, void (*callback)(const char *path)) {
-    find_recursive(start_path, name, callback);
+int ufs_find(const char* start, const char* name, void (*callback)(const char* path)) {
+    find_recursive(start, name, callback);
     return 0;
 }
 
-int ufs_chmod(const char *path, u16 mode) {
+int ufs_chmod(const char* path, u16 mode) {
     (void)path;
     (void)mode;
-    return 0; // UFS пока не поддерживает права
+    // UFS пока без прав, но функция есть
+    return 0;
 }
 
-int ufs_chown(const char *path, u16 uid, u16 gid) {
+int ufs_chown(const char* path, u16 uid, u16 gid) {
     (void)path;
     (void)uid;
     (void)gid;
-    return 0; // UFS пока не поддерживает владельцев
+    return 0;
 }
-// Для автоматической регистрации в kinit
-static const char __ufs_name[] __attribute__((section(".kinit.modules"))) = "ufs_mount";
-static void* __ufs_func __attribute__((section(".kinit.modules"))) = ufs_mount;

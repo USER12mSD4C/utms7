@@ -1,15 +1,6 @@
 [bits 32]
 global _start
-global keyboard_handler
-global timer_handler
-global mouse_handler
-global double_fault_handler
-global context_switch
 extern kernel_main
-extern keyboard_handler_c
-extern timer_handler_c
-extern mouse_handler_c
-extern double_fault_handler_c
 extern __bss_start
 extern __bss_end
 
@@ -38,12 +29,11 @@ multiboot_info:
     resb 8192
 
 section .text
-bits 32
 _start:
     cli
     mov [multiboot_info], ebx
     
-    ; Очистка BSS
+    ; очистка BSS
     mov ecx, __bss_end
     mov eax, __bss_start
     sub ecx, eax
@@ -51,40 +41,39 @@ _start:
     xor eax, eax
     rep stosb
     
-    ; === СТРАНИЧНАЯ АДРЕСАЦИЯ ===
-    ; Очищаем PML4 (0x1000)
+    ; страничная адресация
     mov edi, 0x1000
     mov cr3, edi
     xor eax, eax
     mov ecx, 4096
     rep stosd
     
-    ; PML4[0] -> PDPT (0x2000)
+    ; PML4[0] -> PDPT
     mov edi, 0x1000
     mov eax, 0x2000
     or eax, 3
     mov [edi], eax
     
-    ; PML4[510] -> PDPT2 (0x4000) для верхней памяти
+    ; PML4[510] -> PDPT2
     mov eax, 0x4000
     or eax, 3
     mov [edi + 510*8], eax
     
-    ; PDPT[0] -> PD (0x3000)
+    ; PDPT[0] -> PD
     mov edi, 0x2000
     mov eax, 0x3000
     or eax, 3
     mov [edi], eax
     
-    ; PDPT2[0] -> PD2 (0x5000)
+    ; PDPT2[0] -> PD2
     mov edi, 0x4000
     mov eax, 0x5000
     or eax, 3
     mov [edi], eax
     
-    ; Заполняем PD (первые 1GB)
+    ; заполняем PD
     mov edi, 0x3000
-    mov eax, 0x83          ; 2MB page, present, writable
+    mov eax, 0x83
     mov ecx, 512
 .map_pd:
     mov [edi], eax
@@ -92,36 +81,34 @@ _start:
     add edi, 8
     loop .map_pd
     
-    ; Заполняем PD2 (для framebuffer)
+    ; framebuffer
     mov edi, 0x5000
     xor eax, eax
-    mov ecx, 4096          ; 4096 байт = весь PD2
-    rep stosb
+    mov ecx, 4096
+    rep stosd
     
-    ; Добавляем запись для framebuffer (0xFD000000)
     mov edi, 0x5000
     mov eax, 0xFD000000
-    or eax, 0x83           ; present + writable + huge
-    mov [edi + 0x3F40], eax ; 0x7E8 * 8 = 0x3F40
-    mov dword [edi + 0x3F44], 0 ; старшие 32 бита
+    or eax, 0x83
+    mov [edi + 0x3F40], eax
     
-    ; Включаем PAE
+    ; PAE
     mov eax, cr4
     or eax, 1 << 5
     mov cr4, eax
     
-    ; Включаем long mode
+    ; long mode
     mov ecx, 0xC0000080
     rdmsr
     or eax, 1 << 8
     wrmsr
     
-    ; Включаем paging
+    ; paging
     mov eax, cr0
     or eax, 0x80000001
     mov cr0, eax
     
-    ; Загружаем GDT и прыгаем в 64 бита
+    ; GDT
     lgdt [gdt64_ptr]
     jmp 0x08:start64
 
@@ -143,210 +130,6 @@ start64:
     cli
     hlt
     jmp $
-
-; === ОБРАБОТЧИКИ ПРЕРЫВАНИЙ ===
-align 16
-keyboard_handler:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    
-    cld
-    call keyboard_handler_c
-    
-    mov al, 0x20
-    out 0x20, al
-    out 0xa0, al
-    
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    iretq
-
-align 16
-timer_handler:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    
-    cld
-    call timer_handler_c
-    
-    mov al, 0x20
-    out 0x20, al
-    
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    iretq
-
-align 16
-mouse_handler:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    
-    cld
-    call mouse_handler_c
-    
-    mov al, 0x20
-    out 0xa0, al
-    out 0x20, al
-    
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    iretq
-
-align 16
-double_fault_handler:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    
-    cld
-    call double_fault_handler_c
-    
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    iretq
-
-align 16
-context_switch:
-    push r15
-    push r14
-    push r13
-    push r12
-    push r11
-    push r10
-    push r9
-    push r8
-    push rbp
-    push rsi
-    push rdi
-    push rdx
-    push rcx
-    push rbx
-    push rax
-    pushfq
-    
-    mov [rdi], rsp
-    mov rsp, rsi
-    
-    popfq
-    pop rax
-    pop rbx
-    pop rcx
-    pop rdx
-    pop rdi
-    pop rsi
-    pop rbp
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    pop r12
-    pop r13
-    pop r14
-    pop r15
-    ret
 
 section .data
 align 16

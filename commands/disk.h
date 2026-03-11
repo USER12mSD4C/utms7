@@ -14,6 +14,7 @@ int disk_install_grub(u8 drive);
 int disk_update_boot_config(u8 drive, u32 partition_start);
 int disk_set_disk(int disk_num);
 int disk_get_disk_count(void);
+void disk_commands_init(void);
 void disk_list_disks(void);
 u64 disk_get_sectors(u8 drive);
 

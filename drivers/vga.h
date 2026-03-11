@@ -7,13 +7,13 @@
 #define VGA_HEIGHT 25
 #define VGA_ADDR   0xB8000
 
-void vga_init(void);
+int vga_init(void);
 void vga_clear(void);
 void vga_putchar(char c);
 void vga_write(const char* s);
 void vga_setcolor(u8 fg, u8 bg);
 void vga_setpos(u8 x, u8 y);
 void vga_update_cursor(void);
-void vga_scroll_lines(i8 lines);  // Безопасно даже если мыши нет
+void vga_scroll_lines(i8 lines);
 
 #endif

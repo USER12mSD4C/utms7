@@ -3,15 +3,14 @@
 #include "../drivers/vga.h"
 #include "gdt.h"
 #include "panic.h"
-
-extern void keyboard_handler(void);
-extern void timer_handler(void);
-extern void mouse_handler(void);
-extern void double_fault_handler(void);
+#include "../include/string.h"
+#include "../drivers/keyboard.h"
 
 static struct idt_entry idt[256] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
 u32 system_ticks = 0;
+
+static void* irq_handlers[16] = {0};
 
 void idt_set_gate(u8 num, u64 base, u16 selector, u8 flags) {
     idt[num].base_low = base & 0xFFFF;
@@ -23,16 +22,45 @@ void idt_set_gate(u8 num, u64 base, u16 selector, u8 flags) {
     idt[num].zero = 0;
 }
 
-void timer_handler_c(void) {
-    system_ticks++;
+void irq_register(int irq, void* handler) {
+    if (irq >= 0 && irq < 16) {
+        irq_handlers[irq] = handler;
+    }
+}
+
+void irq_handler(int irq) {
+    if (irq_handlers[irq]) {
+        ((void(*)(void))irq_handlers[irq])();
+    }
+    
+    if (irq >= 8) outb(0xA0, 0x20);
     outb(0x20, 0x20);
 }
 
-void double_fault_handler_c(void) {
-    panic("DOUBLE FAULT");
+static void exception_handler(int num) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Exception %d", num);
+    panic(buf);
 }
 
-int idt_init(void) {  // ВОЗВРАЩАЕТ int
+extern void irq_wrapper_0(void);
+extern void irq_wrapper_1(void);
+extern void irq_wrapper_2(void);
+extern void irq_wrapper_3(void);
+extern void irq_wrapper_4(void);
+extern void irq_wrapper_5(void);
+extern void irq_wrapper_6(void);
+extern void irq_wrapper_7(void);
+extern void irq_wrapper_8(void);
+extern void irq_wrapper_9(void);
+extern void irq_wrapper_10(void);
+extern void irq_wrapper_11(void);
+extern void irq_wrapper_12(void);
+extern void irq_wrapper_13(void);
+extern void irq_wrapper_14(void);
+extern void irq_wrapper_15(void);
+
+int idt_init(void) {
     idtp.limit = sizeof(struct idt_entry) * 256 - 1;
     idtp.base = (u64)&idt[0];
     
@@ -41,12 +69,12 @@ int idt_init(void) {  // ВОЗВРАЩАЕТ int
     }
     
     for (int i = 0; i < 32; i++) {
-        idt_set_gate(i, (u64)double_fault_handler, 0x08, 0x8E);
+        idt_set_gate(i, (u64)exception_handler, 0x08, 0x8E);
     }
     
-    idt_set_gate(32, (u64)timer_handler, 0x08, 0x8E);
-    idt_set_gate(33, (u64)keyboard_handler, 0x08, 0x8E);
-    idt_set_gate(44, (u64)mouse_handler, 0x08, 0x8E);
+    idt_set_gate(32, (u64)irq_wrapper_0, 0x08, 0x8E);  // PIT
+    idt_set_gate(33, (u64)irq_wrapper_1, 0x08, 0x8E);  // Keyboard
+    idt_set_gate(44, (u64)irq_wrapper_12, 0x08, 0x8E); // Mouse
     
     __asm__ volatile ("lidt %0" : : "m"(idtp));
     
@@ -59,13 +87,15 @@ int idt_init(void) {  // ВОЗВРАЩАЕТ int
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
     
-    outb(0x21, 0xFC);
-    outb(0xA1, 0xEF);
+    outb(0x21, ~0x02);
+    outb(0xA1, 0xFF);
+    
+    irq_register(1, keyboard_handler_c);
     
     return 0;
 }
 
-int timer_init(void) {  // ВОЗВРАЩАЕТ int
+int timer_init(void) {
     u32 freq = 100;
     u32 divisor = 1193180 / freq;
     
@@ -74,9 +104,11 @@ int timer_init(void) {  // ВОЗВРАЩАЕТ int
     outb(0x40, (divisor >> 8) & 0xFF);
     return 0;
 }
-// Для автоматической регистрации в kinit
-static const char __idt_name[] __attribute__((section(".kinit.modules"))) = "idt_init";
-static void* __idt_func __attribute__((section(".kinit.modules"))) = idt_init;
 
-static const char __timer_name[] __attribute__((section(".kinit.modules"))) = "timer_init";
-static void* __timer_func __attribute__((section(".kinit.modules"))) = timer_init;
+void timer_handler_c(void) {
+    system_ticks++;
+}
+
+void double_fault_handler_c(void) {
+    panic("DOUBLE FAULT");
+}

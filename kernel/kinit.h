@@ -11,12 +11,7 @@ typedef struct {
     u64 addr;
 } kinit_module_t;
 
-// Главная функция
+// Основные функции
 void kinit_run_all(void);
-
-// Для внутреннего использования
-void kinit_register(const char* name, int (*init)(void), int priority);
-void kinit_scan_sections(void);
-void kinit_scan_memory(void);
 
 #endif

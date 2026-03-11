@@ -55,38 +55,15 @@ int mouse_init(u32 width, u32 height, int is_graphic) {
     mouse_state.width = width;
     mouse_state.height = height;
     
-    // Активируем мышь
     outb(0x64, 0xA8);
+    for (int i = 0; i < 1000; i++) asm volatile ("pause");
     
-    for (int i = 0; i < 1000; i++) {
-        __asm__ volatile ("nop");
-    }
-    
-    // Получаем статус
     outb(0x64, 0x20);
-    for (int i = 0; i < 1000; i++) {
-        if (inb(0x64) & 1) {
-            u8 status = inb(0x60);
-            if (status & 0x20) {
-                mouse_present = 1;
-            }
-            break;
-        }
-    }
-    
-    if (!mouse_present) {
-        return -1;
-    }
-    
-    // Включаем IRQ12
-    u8 status;
-    outb(0x64, 0x20);
-    status = inb(0x60);
+    u8 status = inb(0x60);
     status |= 0x02;
     outb(0x64, 0x60);
     outb(0x60, status);
     
-    // Сброс мыши
     mouse_write(0xFF);
     u8 response = mouse_read();
     if (response != 0xFA) {
@@ -94,11 +71,8 @@ int mouse_init(u32 width, u32 height, int is_graphic) {
         return -1;
     }
     
-    for (int i = 0; i < 10000; i++) {
-        __asm__ volatile ("nop");
-    }
+    mouse_read();
     
-    // Включаем передачу
     mouse_write(0xF4);
     response = mouse_read();
     if (response != 0xFA) {
@@ -106,6 +80,7 @@ int mouse_init(u32 width, u32 height, int is_graphic) {
         return -1;
     }
     
+    mouse_present = 1;
     return 0;
 }
 
@@ -220,6 +195,5 @@ int mouse_get_dy(void) {
     return mouse_state.y_delta;
 }
 
-// Для автоматической регистрации в kinit
-static const char __mouse_name[] __attribute__((section(".kinit.modules"))) = "mouse_init";
-static void* __mouse_func __attribute__((section(".kinit.modules"))) = mouse_init;
+static const char __mouse_name[] __attribute__((section(".module_name"))) = "mouse";
+static int (*__mouse_entry)(u32, u32, int) __attribute__((section(".module_entry"))) = mouse_init;
