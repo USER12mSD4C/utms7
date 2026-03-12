@@ -36,4 +36,12 @@ make iso
 
 ## What is that?
 
-thats ultra modular operating system, where you can change or add absolutely anything
+thats ultra modular operating system, where you can change or add absolutely anything you want
+
+## driver/.ko modules
+
+to make your own driver you need to add at the end of the file:
+```
+static const char __vesa_name[] __attribute__((section(".module_name"))) = "vesa";
+static int (*__vesa_entry)(void) __attribute__((section(".module_entry"))) = vesa_init;
+```
