@@ -64,10 +64,13 @@ void kernel_main(void *mb_info) {
     kinit_run_all();
     
     shell_init();
-    commands_init();      // help, mem, ticks, echo
-    fs_commands_init();   // ls, cd, pwd, mkdir, touch, cat, rm
+    
+    // Регистрируем команды
+    commands_init();
+    fs_commands_init();
     disk_commands_init();
-    vga_write("\ndam smoll modular kernel\n");
+    
+    vga_write("\nType 'help' for commands\n");
     shell_run();
     
     while(1) { __asm__ volatile ("hlt"); }
