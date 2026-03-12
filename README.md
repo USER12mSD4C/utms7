@@ -17,7 +17,7 @@ i dont reccomend use it, cause FS is tweaking rn and it cant load any kernel dri
 - `lib/` – standard library replacements
 - `usb/` – USB support (XHCI)
 - `commands/` – shell command implementations
-- `modules/' - compiled drivers into .ko
+- `modules/` - compiled drivers into .ko
 
 ## Requirements
 
