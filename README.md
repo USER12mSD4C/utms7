@@ -31,6 +31,7 @@ x86-64 operating system written in C and NASM assembly.
 make
 make run #with qemu
 make runD #with logs
+make kom #kernel objects/tools
 make iso
 ```
 
