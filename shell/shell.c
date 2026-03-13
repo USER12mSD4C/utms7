@@ -133,6 +133,9 @@ void shell_run(void) {
     char line[MAX_LINE_LEN];
     int pos = 0;
     
+    if (current_dir[0] != '/' || current_dir[1] != '\0') {
+        strcpy(current_dir, "/");
+    }
     while (1) {
         shell_print(current_dir);
         shell_print("> ");

@@ -11,6 +11,8 @@ int vga_init(void);
 void vga_clear(void);
 void vga_putchar(char c);
 void vga_write(const char* s);
+void vga_write_num(u32 num);
+void vga_write_hex(u32 num);
 void vga_setcolor(u8 fg, u8 bg);
 void vga_setpos(u8 x, u8 y);
 void vga_update_cursor(void);

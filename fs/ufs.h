@@ -4,14 +4,15 @@
 #include "../include/types.h"
 
 #define UFS_BLOCK_SIZE 512
-#define UFS_MAX_NAME 256
+#define UFS_MAX_NAME 32  // ← УМЕНЬШИЛ ВРЕМЕННО ДЛЯ ТЕСТА
 #define UFS_MAX_PATH 256
 
 typedef struct {
     char name[UFS_MAX_NAME];
     u32 size;
+    u32 first_block;
     u8 is_dir;
-} FSNode;
+} __attribute__((packed)) FSNode;  // ← Теперь 32+4+4+1 = 41 байт
 
 int ufs_mount(u32 start_lba);
 int ufs_format(u32 start_lba, u32 blocks);

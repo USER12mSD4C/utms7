@@ -83,7 +83,37 @@ void vga_putchar(char c) {
         vga_update_cursor();
     }
 }
+void vga_write_num(u32 num) {
+    char buf[16];
+    int i = 0;
+    
+    if (num == 0) {
+        vga_putchar('0');
+        return;
+    }
+    
+    while (num > 0) {
+        buf[i++] = '0' + (num % 10);
+        num /= 10;
+    }
+    
+    while (i > 0) {
+        vga_putchar(buf[--i]);
+    }
+}
 
+void vga_write_hex(u32 num) {
+    char hex[] = "0123456789ABCDEF";
+    vga_write("0x");
+    vga_putchar(hex[(num >> 28) & 0xF]);
+    vga_putchar(hex[(num >> 24) & 0xF]);
+    vga_putchar(hex[(num >> 20) & 0xF]);
+    vga_putchar(hex[(num >> 16) & 0xF]);
+    vga_putchar(hex[(num >> 12) & 0xF]);
+    vga_putchar(hex[(num >> 8) & 0xF]);
+    vga_putchar(hex[(num >> 4) & 0xF]);
+    vga_putchar(hex[num & 0xF]);
+}
 void vga_write(const char* s) {
     while (*s) vga_putchar(*s++);
 }

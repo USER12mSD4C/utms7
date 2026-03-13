@@ -42,7 +42,8 @@ static void build_path(const char* arg, char* result) {
     if (arg[0] == '/') {
         strcpy(temp, arg);
     } else if (strcmp(current_dir, "/") == 0) {
-        snprintf(temp, sizeof(temp), "/%s", arg);
+        temp[0] = '/';
+        strcpy(temp + 1, arg);
     } else {
         snprintf(temp, sizeof(temp), "%s/%s", current_dir, arg);
     }
@@ -71,14 +72,12 @@ static int cmd_ls(int argc, char** argv) {
     shell_print("\n");
     
     for (u32 i = 0; i < count; i++) {
-        // ВРЕМЕННО: показываем имена как есть
         shell_print("  ");
         if (entries[i].is_dir) shell_print("dir  ");
         else shell_print("file ");
         
         shell_print(entries[i].name);
         
-        // Выравнивание
         int len = strlen(entries[i].name);
         for (int j = len; j < 20; j++) shell_print(" ");
         
@@ -95,12 +94,13 @@ static int cmd_ls(int argc, char** argv) {
 }
 
 static int cmd_cd(int argc, char** argv) {
+    char path[256];
+    
     if (argc < 2) {
         strcpy(current_dir, "/");
         return 0;
     }
     
-    char path[256];
     build_path(argv[1], path);
     
     if (ufs_exists(path) && ufs_isdir(path)) {
@@ -212,7 +212,7 @@ static int cmd_rmdir(int argc, char** argv) {
         shell_print("Directory removed\n");
         return 0;
     } else {
-        shell_print("Remove failed (directory not empty or not found)\n");
+        shell_print("Remove failed\n");
         return -1;
     }
 }
@@ -296,7 +296,7 @@ static int cmd_mkfs_ufs(int argc, char** argv) {
             
             u64 sectors = disk_get_sectors(0x80 + disk_idx);
             if (sectors == 0) {
-                sectors = 5120 * 1024 * 1024 / 512;
+                sectors = 5120ULL * 1024 * 1024 / 512;
             }
             
             start_lba = 2048;
@@ -305,7 +305,6 @@ static int cmd_mkfs_ufs(int argc, char** argv) {
     }
     
     if (argc >= 3) {
-        char* end;
         total_blocks = 0;
         for (int i = 0; argv[2][i]; i++) {
             if (argv[2][i] >= '0' && argv[2][i] <= '9') {
@@ -358,8 +357,6 @@ static int cmd_mount(int argc, char** argv) {
 
 static int cmd_umount(int argc, char** argv) {
     (void)argc; (void)argv;
-    
-    // Пока ничего не делаем, UFS всегда смонтирована
     shell_print("UFS always mounted\n");
     return 0;
 }
@@ -370,7 +367,6 @@ static int cmd_chmod(int argc, char** argv) {
         return -1;
     }
     
-    char* end;
     u16 mode = 0;
     for (int i = 0; argv[1][i]; i++) {
         if (argv[1][i] >= '0' && argv[1][i] <= '7') {
@@ -396,7 +392,6 @@ static int cmd_chown(int argc, char** argv) {
         return -1;
     }
     
-    char* end;
     u16 uid = 0, gid = 0;
     for (int i = 0; argv[1][i]; i++) {
         if (argv[1][i] >= '0' && argv[1][i] <= '9') {
