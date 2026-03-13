@@ -4,6 +4,7 @@
 #include "../drivers/keyboard.h"
 #include "../kernel/kapi.h"
 #include "../kernel/memory.h"
+#include "../commands/fs.h"
 
 #define MAX_COMMANDS 64
 #define MAX_LINE_LEN 512
@@ -137,7 +138,7 @@ void shell_run(void) {
         strcpy(current_dir, "/");
     }
     while (1) {
-        shell_print(current_dir);
+        shell_print(fs_get_current_dir());
         shell_print("> ");
         
         pos = 0;

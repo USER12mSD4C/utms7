@@ -36,6 +36,7 @@ make
 make run #with qemu
 make runD #with logs
 make kom #kernel objects/tools
+make livecd #kernel with installing on disk with grub programm
 make iso
 ```
 

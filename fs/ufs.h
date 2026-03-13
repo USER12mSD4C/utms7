@@ -4,7 +4,7 @@
 #include "../include/types.h"
 
 #define UFS_BLOCK_SIZE 512
-#define UFS_MAX_NAME 32  // ← УМЕНЬШИЛ ВРЕМЕННО ДЛЯ ТЕСТА
+#define UFS_MAX_NAME 32
 #define UFS_MAX_PATH 256
 
 typedef struct {
@@ -12,7 +12,7 @@ typedef struct {
     u32 size;
     u32 first_block;
     u8 is_dir;
-} __attribute__((packed)) FSNode;  // ← Теперь 32+4+4+1 = 41 байт
+} __attribute__((packed)) FSNode;
 
 int ufs_mount(u32 start_lba);
 int ufs_format(u32 start_lba, u32 blocks);
@@ -21,6 +21,7 @@ int ufs_read(const char* path, u8** data, u32* size);
 int ufs_delete(const char* path);
 int ufs_mkdir(const char* path);
 int ufs_rmdir(const char* path);
+int ufs_rmdir_force(const char* path);  // НОВОЕ
 int ufs_readdir(const char* path, FSNode** entries, u32* count);
 int ufs_exists(const char* path);
 int ufs_isdir(const char* path);

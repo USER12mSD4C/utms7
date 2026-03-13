@@ -205,32 +205,38 @@ int ufs_read(const char* path, u8** data, u32* size) {
     if (get_parent(path, &parent, name) != 0) return -1;
     
     ufs_entry_t e;
-    if (find_in_dir(parent, name, &e) != 0) return -1;
+    if (find_in_dir(parent, name, &e) != 0) {
+        return -1;
+    }
     if (e.is_dir) return -1;
     
     *size = e.size;
+    if (e.size == 0) {
+        *data = kmalloc(1);
+        (*data)[0] = '\0';
+        return 0;
+    }
+    
     *data = kmalloc(e.size + 1);
     if (!*data) return -1;
     
-    if (e.size > 0) {
-        u32 block = e.first_block;
-        u32 left = e.size;
-        u32 pos = 0;
-        
-        while (left > 0) {
-            u8 buf[UFS_BLOCK_SIZE];
-            if (read_block(block, buf) != 0) {
-                kfree(*data);
-                return -1;
-            }
-            
-            u32 chunk = (left < UFS_BLOCK_SIZE) ? left : UFS_BLOCK_SIZE;
-            memcpy(*data + pos, buf, chunk);
-            
-            pos += chunk;
-            left -= chunk;
-            block++;
+    u32 block = e.first_block;
+    u32 left = e.size;
+    u32 pos = 0;
+    
+    while (left > 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(block, buf) != 0) {
+            kfree(*data);
+            return -1;
         }
+        
+        u32 chunk = (left < UFS_BLOCK_SIZE) ? left : UFS_BLOCK_SIZE;
+        memcpy(*data + pos, buf, chunk);
+        
+        pos += chunk;
+        left -= chunk;
+        block++;
     }
     
     (*data)[e.size] = '\0';
@@ -244,25 +250,48 @@ int ufs_write(const char* path, u8* data, u32 size) {
     u32 parent;
     if (get_parent(path, &parent, name) != 0) return -1;
     
+    // Проверяем родительскую директорию
     ufs_entry_t parent_check;
     if (find_in_dir(parent, ".", &parent_check) != 0) return -1;
     
-    ufs_entry_t old;
-    if (find_in_dir(parent, name, &old) == 0) {
-        if (old.is_dir) return -1;
-        
-        u32 block = old.first_block;
-        u32 blocks = (old.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
-        for (u32 i = 0; i < blocks; i++) {
-            u8 zero[UFS_BLOCK_SIZE] = {0};
-            write_block(block + i, zero);
-            sb.free_blocks++;
+    // ЧИТАЕМ РОДИТЕЛЬСКУЮ ДИРЕКТОРИЮ ДЛЯ ПОИСКА
+    u8 tmp[UFS_BLOCK_SIZE];
+    if (read_block(parent, tmp) != 0) return -1;
+    ufs_entry_t* tmp_e = (ufs_entry_t*)tmp;
+    int total = UFS_BLOCK_SIZE / sizeof(ufs_entry_t);
+    
+    // ИЩЕМ СУЩЕСТВУЮЩИЙ ФАЙЛ
+    int existing_idx = -1;
+    u32 existing_block = 0;
+    u32 existing_size = 0;
+    
+    for (int i = 2; i < total; i++) {
+        if (tmp_e[i].name[0] && strcmp(tmp_e[i].name, name) == 0) {
+            existing_idx = i;
+            existing_block = tmp_e[i].first_block;
+            existing_size = tmp_e[i].size;
+            break;
         }
-        
-        remove_from_dir(parent, name);
+    }
+    
+    // ЕСЛИ ФАЙЛ СУЩЕСТВУЕТ - УДАЛЯЕМ
+    if (existing_idx != -1) {
+        // Освобождаем блоки
+        if (existing_block != 0) {
+            u32 blocks = (existing_size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
+            for (u32 i = 0; i < blocks; i++) {
+                u8 zero[UFS_BLOCK_SIZE] = {0};
+                write_block(existing_block + i, zero);
+                sb.free_blocks++;
+            }
+        }
+        // Удаляем запись
+        memset(&tmp_e[existing_idx], 0, sizeof(ufs_entry_t));
+        if (write_block(parent, tmp) != 0) return -1;
         save_superblock();
     }
     
+    // ДАЛЬШЕ КАК БЫЛО
     if (size == 0) {
         ufs_entry_t ne;
         memset(&ne, 0, sizeof(ne));
@@ -313,7 +342,17 @@ int ufs_mkdir(const char* path) {
     u32 parent;
     if (get_parent(path, &parent, name) != 0) return -1;
     
-    if (find_in_dir(parent, name, NULL) >= 0) return -1;
+    // Проверяем, не существует ли уже
+    u8 tmp[UFS_BLOCK_SIZE];
+    if (read_block(parent, tmp) != 0) return -1;
+    ufs_entry_t* tmp_e = (ufs_entry_t*)tmp;
+    int total = UFS_BLOCK_SIZE / sizeof(ufs_entry_t);
+    
+    for (int i = 2; i < total; i++) {
+        if (tmp_e[i].name[0] && strcmp(tmp_e[i].name, name) == 0) {
+            return -1; // уже существует
+        }
+    }
     
     u32 nb = find_free_block();
     if (!nb) return -1;
@@ -362,7 +401,7 @@ int ufs_readdir(const char* path, FSNode** entries, u32* count) {
         u32 parent;
         if (get_parent(path, &parent, name) != 0) return -1;
         
-        // Ищем запись напрямую, без промежуточной структуры
+        // Ищем запись напрямую
         u8 tmp[UFS_BLOCK_SIZE];
         if (read_block(parent, tmp) != 0) return -1;
         ufs_entry_t* tmp_e = (ufs_entry_t*)tmp;
@@ -423,7 +462,17 @@ int ufs_exists(const char* path) {
     u32 parent;
     if (get_parent(path, &parent, name) != 0) return 0;
     
-    return find_in_dir(parent, name, NULL) >= 0;
+    u8 tmp[UFS_BLOCK_SIZE];
+    if (read_block(parent, tmp) != 0) return 0;
+    ufs_entry_t* tmp_e = (ufs_entry_t*)tmp;
+    int total = UFS_BLOCK_SIZE / sizeof(ufs_entry_t);
+    
+    for (int i = 2; i < total; i++) {
+        if (tmp_e[i].name[0] && strcmp(tmp_e[i].name, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int ufs_isdir(const char* path) {
@@ -434,10 +483,17 @@ int ufs_isdir(const char* path) {
     u32 parent;
     if (get_parent(path, &parent, name) != 0) return 0;
     
-    ufs_entry_t e;
-    if (find_in_dir(parent, name, &e) != 0) return 0;
+    u8 tmp[UFS_BLOCK_SIZE];
+    if (read_block(parent, tmp) != 0) return 0;
+    ufs_entry_t* tmp_e = (ufs_entry_t*)tmp;
+    int total = UFS_BLOCK_SIZE / sizeof(ufs_entry_t);
     
-    return e.is_dir;
+    for (int i = 2; i < total; i++) {
+        if (tmp_e[i].name[0] && strcmp(tmp_e[i].name, name) == 0) {
+            return tmp_e[i].is_dir;
+        }
+    }
+    return 0;
 }
 
 int ufs_rmdir(const char* path) {
@@ -488,7 +544,42 @@ int ufs_rmdir(const char* path) {
     
     return 0;
 }
+static int ufs_rmdir_recursive(const char* path) {
+    FSNode* entries;
+    u32 count;
+    
+    if (ufs_readdir(path, &entries, &count) != 0) {
+        return -1;
+    }
+    
+    // Сначала удаляем всё содержимое
+    for (u32 i = 0; i < count; i++) {
+        char full[256];
+        if (strcmp(path, "/") == 0) {
+            snprintf(full, sizeof(full), "/%s", entries[i].name);
+        } else {
+            snprintf(full, sizeof(full), "%s/%s", path, entries[i].name);
+        }
+        
+        if (entries[i].is_dir) {
+            ufs_rmdir_recursive(full);
+        } else {
+            ufs_delete(full);
+        }
+    }
+    
+    kfree(entries);
+    
+    // Теперь удаляем саму директорию
+    return ufs_rmdir(path);
+}
 
+int ufs_rmdir_force(const char* path) {
+    if (!mounted) return -1;
+    if (strcmp(path, "/") == 0) return -1; // Защита от удаления корня
+    
+    return ufs_rmdir_recursive(path);
+}
 int ufs_delete(const char* path) {
     if (!mounted) return -1;
     
@@ -502,22 +593,24 @@ int ufs_delete(const char* path) {
     ufs_entry_t* tmp_e = (ufs_entry_t*)tmp;
     int total = UFS_BLOCK_SIZE / sizeof(ufs_entry_t);
     
+    int found_idx = -1;
     u32 found_block = 0;
     u32 found_size = 0;
-    int found_idx = -1;
+    
     for (int i = 2; i < total; i++) {
         if (tmp_e[i].name[0] && strcmp(tmp_e[i].name, name) == 0) {
+            found_idx = i;
             found_block = tmp_e[i].first_block;
             found_size = tmp_e[i].size;
-            found_idx = i;
-            if (tmp_e[i].is_dir) return -1;
             break;
         }
     }
     
-    if (found_block == 0 || found_idx == -1) return -1;
+    if (found_idx == -1) {
+        return -1;
+    }
     
-    // Освобождаем блоки файла
+    // Освобождаем блоки если были
     if (found_block != 0) {
         u32 blocks = (found_size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
         for (u32 i = 0; i < blocks; i++) {
@@ -527,10 +620,12 @@ int ufs_delete(const char* path) {
         }
     }
     
-    // Удаляем запись из родителя
+    // Удаляем запись
     memset(&tmp_e[found_idx], 0, sizeof(ufs_entry_t));
+    if (write_block(parent, tmp) != 0) return -1;
+    
     save_superblock();
-    return write_block(parent, tmp);
+    return 0;
 }
 
 int ufs_stat(u32* total, u32* used, u32* free) {
