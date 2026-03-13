@@ -4,7 +4,8 @@
 
 x86-64 operating system written in C and NASM assembly.
 
-i dont reccomend use it, cause FS is tweaking rn and it cant load any kernel drivers
+i dont recommend use it, still untested
+( finally repaired UFS, yay :D )
 
 ## Project structure
 
