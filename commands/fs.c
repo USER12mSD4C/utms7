@@ -7,29 +7,36 @@
 
 static char current_dir[256] = "/";
 
+// НОРМАЛЬНАЯ normalize_path - копирует строки, а не хранит указатели
 static void normalize_path(const char* input, char* output) {
-    // Если путь пустой или "/" - сразу возвращаем "/"
-    if (!input || input[0] == '\0' || (input[0] == '/' && input[1] == '\0')) {
+    if (!input || input[0] == '\0') {
         strcpy(output, "/");
         return;
     }
     
+    // Временный буфер для разбора
     char temp[256];
     strcpy(temp, input);
     
-    char* parts[64];
+    // Массив для хранения компонентов пути (максимум 64 уровня)
+    char parts[64][256];
     int part_count = 0;
     
+    // Разбиваем по '/'
     char* token = strtok(temp, "/");
-    while (token) {
+    while (token && part_count < 64) {
         if (strcmp(token, "..") == 0) {
+            // Подняться на уровень вверх
             if (part_count > 0) part_count--;
         } else if (strcmp(token, ".") != 0 && token[0] != '\0') {
-            parts[part_count++] = token;
+            // Нормальный компонент - копируем
+            strcpy(parts[part_count], token);
+            part_count++;
         }
         token = strtok(NULL, "/");
     }
     
+    // Собираем результат
     if (part_count == 0) {
         strcpy(output, "/");
         return;
@@ -42,42 +49,41 @@ static void normalize_path(const char* input, char* output) {
     }
 }
 
+// build_path теперь надёжнее
 static void build_path(const char* arg, char* result) {
-    char temp[256];
-    
-    // Если аргумент пустой - используем текущую директорию
     if (!arg || arg[0] == '\0') {
         strcpy(result, current_dir);
         return;
     }
     
-    // Если абсолютный путь
+    char temp[512];  // Большой буфер
+    
     if (arg[0] == '/') {
         strcpy(temp, arg);
     }
-    // Если текущая директория - корень
     else if (strcmp(current_dir, "/") == 0) {
         temp[0] = '/';
-        strcpy(temp + 1, arg);
+        temp[1] = '\0';
+        strcat(temp, arg);
     }
-    // Обычный случай
     else {
-        snprintf(temp, sizeof(temp), "%s/%s", current_dir, arg);
+        strcpy(temp, current_dir);
+        strcat(temp, "/");
+        strcat(temp, arg);
     }
     
     normalize_path(temp, result);
 }
 
+// ========== LS ==========
 static int cmd_ls(int argc, char** argv) {
-    char path[256];
+    char path[256] = "/";
     int show_all = 0;
-    int long_format = 0;
     
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] == '-') {
             for (int j = 1; argv[i][j]; j++) {
                 if (argv[i][j] == 'a') show_all = 1;
-                else if (argv[i][j] == 'l') long_format = 1;
             }
         } else {
             build_path(argv[i], path);
@@ -88,42 +94,30 @@ static int cmd_ls(int argc, char** argv) {
         strcpy(path, current_dir);
     }
     
-    FSNode *entries;
-    u32 count;
+    FSNode *entries = NULL;
+    u32 count = 0;
     
     if (ufs_readdir(path, &entries, &count) != 0) {
-        shell_print("Failed to list directory\n");
+        shell_print("ls: cannot access '");
+        shell_print(path);
+        shell_print("': No such directory\n");
         return -1;
     }
-    
-    shell_print(path);
-    shell_print("\n");
     
     for (u32 i = 0; i < count; i++) {
         if (!show_all && entries[i].name[0] == '.') continue;
         
-        shell_print("  ");
-        if (entries[i].is_dir) shell_print("d");
-        else shell_print("-");
-        
-        if (long_format) {
-            shell_print("rwxr-xr-x ");
-            shell_print_num(entries[i].size);
-            shell_print(" ");
-        } else {
-            if (entries[i].is_dir) shell_print("dir  ");
-            else shell_print("file ");
-        }
+        if (entries[i].is_dir) shell_print("d ");
+        else shell_print("- ");
         
         shell_print(entries[i].name);
         
-        if (!long_format) {
-            int len = strlen(entries[i].name);
-            for (int j = len; j < 20; j++) shell_print(" ");
-            shell_print_num(entries[i].size);
-            shell_print(" bytes");
-        }
-        shell_print("\n");
+        // Выравнивание
+        int len = strlen(entries[i].name);
+        for (int j = len; j < 20; j++) shell_print(" ");
+        
+        shell_print_num(entries[i].size);
+        shell_print(" bytes\n");
     }
     
     shell_print("\nTotal: ");
@@ -134,7 +128,7 @@ static int cmd_ls(int argc, char** argv) {
     return 0;
 }
 
-// ИСПРАВЛЕННЫЙ cd
+// ========== CD ==========
 static int cmd_cd(int argc, char** argv) {
     char path[256];
     
@@ -145,18 +139,19 @@ static int cmd_cd(int argc, char** argv) {
     
     build_path(argv[1], path);
     
-    FSNode *entries;
-    u32 count;
-    if (ufs_readdir(path, &entries, &count) == 0) {
-        kfree(entries);
-        strcpy(current_dir, path);
-    } else {
-        shell_print("Directory not found\n");
+    // Проверяем что это директория
+    if (!ufs_isdir(path)) {
+        shell_print("cd: not a directory: ");
+        shell_print(path);
+        shell_print("\n");
         return -1;
     }
+    
+    strcpy(current_dir, path);
     return 0;
 }
 
+// ========== PWD ==========
 const char* fs_get_current_dir(void) {
     return current_dir;
 }
@@ -168,6 +163,7 @@ static int cmd_pwd(int argc, char** argv) {
     return 0;
 }
 
+// ========== MKDIR ==========
 static int cmd_mkdir(int argc, char** argv) {
     if (argc < 2) {
         shell_print("Usage: mkdir <dir>\n");
@@ -178,15 +174,16 @@ static int cmd_mkdir(int argc, char** argv) {
     build_path(argv[1], path);
     
     if (ufs_mkdir(path) == 0) {
-        shell_print("Directory created\n");
         return 0;
     } else {
-        shell_print("Creation failed\n");
+        shell_print("mkdir: failed to create '");
+        shell_print(path);
+        shell_print("'\n");
         return -1;
     }
 }
 
-// ИСПРАВЛЕННЫЙ rmdir с флагом -f
+// ========== RMDIR ==========
 static int cmd_rmdir(int argc, char** argv) {
     if (argc < 2) {
         shell_print("Usage: rmdir [-f] <dir>\n");
@@ -207,39 +204,40 @@ static int cmd_rmdir(int argc, char** argv) {
     }
     
     if (!target) {
-        shell_print("No directory specified\n");
+        shell_print("rmdir: no directory specified\n");
         return -1;
     }
     
     char path[256];
     build_path(target, path);
     
-    // Защита от удаления корня
     if (strcmp(path, "/") == 0) {
-        shell_print("Cannot remove root directory\n");
+        shell_print("rmdir: cannot remove root directory\n");
         return -1;
     }
     
+    int ret;
     if (force) {
-        // Рекурсивное удаление
-        if (ufs_rmdir_force(path) == 0) {
-            shell_print("Directory removed\n");
-            return 0;
-        } else {
-            shell_print("Remove failed\n");
-            return -1;
-        }
+        ret = ufs_rmdir_force(path);
     } else {
-        if (ufs_rmdir(path) == 0) {
-            shell_print("Directory removed\n");
-            return 0;
+        ret = ufs_rmdir(path);
+    }
+    
+    if (ret == 0) {
+        return 0;
+    } else {
+        if (!force) {
+            shell_print("rmdir: directory not empty (use -f)\n");
         } else {
-            shell_print("Remove failed (directory not empty, use -f)\n");
-            return -1;
+            shell_print("rmdir: failed to remove '");
+            shell_print(path);
+            shell_print("'\n");
         }
+        return -1;
     }
 }
 
+// ========== MK (create empty file) ==========
 static int cmd_mk(int argc, char** argv) {
     if (argc < 2) {
         shell_print("Usage: mk <file>\n");
@@ -249,15 +247,20 @@ static int cmd_mk(int argc, char** argv) {
     char path[256];
     build_path(argv[1], path);
     
+    if (ufs_exists(path)) {
+        shell_print("mk: file already exists\n");
+        return -1;
+    }
+    
     if (ufs_write(path, NULL, 0) == 0) {
-        shell_print("File created\n");
         return 0;
     } else {
-        shell_print("Creation failed\n");
+        shell_print("mk: failed to create file\n");
         return -1;
     }
 }
 
+// ========== ECHO ==========
 static int cmd_echo(int argc, char** argv) {
     if (argc < 2) {
         shell_print("\n");
@@ -284,43 +287,44 @@ static int cmd_echo(int argc, char** argv) {
     char output[1024] = {0};
     int pos = 0;
     for (int i = 1; i < argc; i++) {
-        for (int j = 0; argv[i][j]; j++) {
-            output[pos++] = argv[i][j];
+        char* s = argv[i];
+        while (*s) {
+            if (pos < 1023) output[pos++] = *s;
+            s++;
         }
-        if (i < argc - 1) output[pos++] = ' ';
+        if (i < argc - 1 && pos < 1023) output[pos++] = ' ';
     }
-    output[pos] = '\0';
     
     if (file) {
         char path[256];
         build_path(file, path);
         
         if (redirect == 2) {
-            u8* old_data;
-            u32 old_size;
-            if (ufs_read(path, &old_data, &old_size) == 0) {
-                u8* new_data = kmalloc(old_size + pos + 1);
+            // Append
+            u8* old_data = NULL;
+            u32 old_size = 0;
+            ufs_read(path, &old_data, &old_size);
+            
+            u8* new_data = kmalloc(old_size + pos + 2);
+            if (old_data && old_size > 0) {
                 memcpy(new_data, old_data, old_size);
-                memcpy(new_data + old_size, output, pos);
-                new_data[old_size + pos] = '\n';
-                ufs_write(path, new_data, old_size + pos + 1);
                 kfree(old_data);
-                kfree(new_data);
-            } else {
-                u8* new_data = kmalloc(pos + 1);
-                memcpy(new_data, output, pos);
-                new_data[pos] = '\n';
-                ufs_write(path, new_data, pos + 1);
-                kfree(new_data);
             }
+            memcpy(new_data + old_size, output, pos);
+            new_data[old_size + pos] = '\n';
+            ufs_write(path, new_data, old_size + pos + 1);
+            kfree(new_data);
         } else {
-            u8* new_data = kmalloc(pos + 1);
+            // Overwrite
+            u8* new_data = kmalloc(pos + 2);
             memcpy(new_data, output, pos);
             new_data[pos] = '\n';
+            new_data[pos + 1] = '\0';
             ufs_write(path, new_data, pos + 1);
             kfree(new_data);
         }
     } else {
+        output[pos] = '\0';
         shell_print(output);
         shell_print("\n");
     }
@@ -328,6 +332,7 @@ static int cmd_echo(int argc, char** argv) {
     return 0;
 }
 
+// ========== CAT ==========
 static int cmd_cat(int argc, char** argv) {
     if (argc < 2) {
         shell_print("Usage: cat <file>\n");
@@ -337,26 +342,13 @@ static int cmd_cat(int argc, char** argv) {
     char path[256];
     build_path(argv[1], path);
     
-    u8 *data;
-    u32 size;
+    u8 *data = NULL;
+    u32 size = 0;
     
     if (ufs_read(path, &data, &size) != 0) {
-        FSNode *entries;
-        u32 count;
-        if (ufs_readdir("/", &entries, &count) == 0) {
-            int found = 0;
-            for (u32 i = 0; i < count; i++) {
-                if (strcmp(entries[i].name, argv[1]) == 0 && !entries[i].is_dir) {
-                    found = 1;
-                    break;
-                }
-            }
-            kfree(entries);
-            if (found) {
-                return 0;
-            }
-        }
-        shell_print("File not found\n");
+        shell_print("cat: ");
+        shell_print(path);
+        shell_print(": No such file\n");
         return -1;
     }
     
@@ -367,10 +359,11 @@ static int cmd_cat(int argc, char** argv) {
         }
     }
     
-    kfree(data);
+    if (data) kfree(data);
     return 0;
 }
 
+// ========== RM ==========
 static int cmd_rm(int argc, char** argv) {
     if (argc < 2) {
         shell_print("Usage: rm [-r] <file/dir>\n");
@@ -391,44 +384,27 @@ static int cmd_rm(int argc, char** argv) {
     }
     
     if (!target) {
-        shell_print("No target specified\n");
+        shell_print("rm: missing operand\n");
         return -1;
     }
     
     char path[256];
     build_path(target, path);
     
-    FSNode *entries;
-    u32 count;
-    if (ufs_readdir(path, &entries, &count) == 0) {
-        kfree(entries);
+    if (ufs_isdir(path)) {
         if (!recursive) {
-            shell_print("Is a directory, use rm -r\n");
+            shell_print("rm: cannot remove '");
+            shell_print(path);
+            shell_print("': Is a directory\n");
             return -1;
         }
-        
-        if (ufs_rmdir_force(path) == 0) {
-            shell_print("Directory removed\n");
-            return 0;
-        } else {
-            shell_print("Remove failed\n");
-            return -1;
-        }
+        return ufs_rmdir_force(path);
     } else {
-        if (ufs_delete(path) == 0) {
-            shell_print("File deleted\n");
-            return 0;
-        } else {
-            if (ufs_exists(path)) {
-                shell_print("Delete failed\n");
-            } else {
-                shell_print("File not found\n");
-            }
-            return -1;
-        }
+        return ufs_delete(path);
     }
 }
 
+// ========== CP ==========
 static int cmd_cp(int argc, char** argv) {
     if (argc < 3) {
         shell_print("Usage: cp <source> <dest>\n");
@@ -440,14 +416,14 @@ static int cmd_cp(int argc, char** argv) {
     build_path(argv[2], dst);
     
     if (ufs_cp(src, dst) == 0) {
-        shell_print("Copied\n");
         return 0;
     } else {
-        shell_print("Copy failed\n");
+        shell_print("cp: failed to copy\n");
         return -1;
     }
 }
 
+// ========== MV ==========
 static int cmd_mv(int argc, char** argv) {
     if (argc < 3) {
         shell_print("Usage: mv <source> <dest>\n");
@@ -459,20 +435,20 @@ static int cmd_mv(int argc, char** argv) {
     build_path(argv[2], dst);
     
     if (ufs_mv(src, dst) == 0) {
-        shell_print("Moved\n");
         return 0;
     } else {
-        shell_print("Move failed\n");
+        shell_print("mv: failed to move\n");
         return -1;
     }
 }
 
+// ========== DF ==========
 static int cmd_df(int argc, char** argv) {
     (void)argc; (void)argv;
     
     u32 total, used, free;
     if (ufs_stat(&total, &used, &free) != 0) {
-        shell_print("Failed to get filesystem stats\n");
+        shell_print("df: failed to get filesystem stats\n");
         return -1;
     }
     
@@ -490,8 +466,9 @@ static int cmd_df(int argc, char** argv) {
     return 0;
 }
 
+// ========== MKFS.UFS ==========
 static int cmd_mkfs_ufs(int argc, char** argv) {
-    u32 start_lba = 0;
+    u32 start_lba = 2048;
     u32 total_blocks = 0;
     int disk_idx = 0;
     
@@ -501,32 +478,32 @@ static int cmd_mkfs_ufs(int argc, char** argv) {
         return -1;
     }
     
-    if (argv[1][0] == '/' && argv[1][1] == 'd' && argv[1][2] == 'e' && argv[1][3] == 'v' && argv[1][4] == '/') {
-        if (argv[1][5] == 's' && argv[1][6] == 'd' && argv[1][7] >= 'a' && argv[1][7] <= 'd') {
-            disk_idx = argv[1][7] - 'a';
+    if (argv[1][0] == '/' && argv[1][1] == 'd' && argv[1][2] == 'e' && 
+        argv[1][3] == 'v' && argv[1][4] == '/' && 
+        argv[1][5] == 's' && argv[1][6] == 'd') {
+        
+        int idx = argv[1][7] - 'a';
+        if (idx >= 0 && idx <= 3) {
+            disk_idx = idx;
             disk_set_disk(disk_idx);
             
             u64 sectors = disk_get_sectors(0x80 + disk_idx);
-            if (sectors == 0) {
-                sectors = 5120ULL * 1024 * 1024 / 512;
+            if (sectors > 0) {
+                total_blocks = sectors - 2048;
             }
-            
-            start_lba = 2048;
-            total_blocks = sectors - 2048;
         }
     }
     
     if (argc >= 3) {
+        // Парсим число
         total_blocks = 0;
-        for (int i = 0; argv[2][i]; i++) {
-            if (argv[2][i] >= '0' && argv[2][i] <= '9') {
-                total_blocks = total_blocks * 10 + (argv[2][i] - '0');
-            }
+        for (int i = 0; argv[2][i] && argv[2][i] >= '0' && argv[2][i] <= '9'; i++) {
+            total_blocks = total_blocks * 10 + (argv[2][i] - '0');
         }
     }
     
-    if (total_blocks == 0) {
-        shell_print("Invalid device or size\n");
+    if (total_blocks < 100) {
+        shell_print("mkfs.ufs: invalid device or size\n");
         return -1;
     }
     
@@ -538,143 +515,44 @@ static int cmd_mkfs_ufs(int argc, char** argv) {
     
     if (ufs_format(start_lba, total_blocks) == 0) {
         shell_print("OK\n");
+        return 0;
     } else {
         shell_print("FAILED\n");
+        return -1;
     }
-    
-    return 0;
 }
 
+// ========== MOUNT ==========
 static int cmd_mount(int argc, char** argv) {
     u32 start_lba = 2048;
     
     if (argc > 1) {
-        if (argv[1][0] == '/' && argv[1][1] == 'd' && argv[1][2] == 'e' && argv[1][3] == 'v' && argv[1][4] == '/') {
-            if (argv[1][5] == 's' && argv[1][6] == 'd') {
-                int idx = argv[1][7] - 'a';
-                disk_set_disk(idx);
-            }
+        if (argv[1][0] == '/' && argv[1][1] == 'd' && argv[1][2] == 'e' && 
+            argv[1][3] == 'v' && argv[1][4] == '/' && 
+            argv[1][5] == 's' && argv[1][6] == 'd') {
+            int idx = argv[1][7] - 'a';
+            disk_set_disk(idx);
         }
     }
     
     if (ufs_mount(start_lba) == 0) {
-        shell_print("Mounted\n");
         strcpy(current_dir, "/");
+        shell_print("Mounted\n");
+        return 0;
     } else {
         shell_print("Mount failed\n");
+        return -1;
     }
-    
-    return 0;
 }
 
+// ========== UMOUNT ==========
 static int cmd_umount(int argc, char** argv) {
     (void)argc; (void)argv;
-    shell_print("UFS always mounted\n");
-    return 0;
+    shell_print("umount: not implemented\n");
+    return -1;
 }
 
-static int cmd_chmod(int argc, char** argv) {
-    if (argc < 3) {
-        shell_print("Usage: chmod <mode> <file>\n");
-        return -1;
-    }
-    
-    u16 mode = 0;
-    for (int i = 0; argv[1][i]; i++) {
-        if (argv[1][i] >= '0' && argv[1][i] <= '7') {
-            mode = mode * 8 + (argv[1][i] - '0');
-        }
-    }
-    
-    char path[256];
-    build_path(argv[2], path);
-    
-    if (ufs_chmod(path, mode) == 0) {
-        shell_print("OK\n");
-        return 0;
-    } else {
-        shell_print("Failed\n");
-        return -1;
-    }
-}
-
-static int cmd_chown(int argc, char** argv) {
-    if (argc < 4) {
-        shell_print("Usage: chown <uid> <gid> <file>\n");
-        return -1;
-    }
-    
-    u16 uid = 0, gid = 0;
-    for (int i = 0; argv[1][i]; i++) {
-        if (argv[1][i] >= '0' && argv[1][i] <= '9') {
-            uid = uid * 10 + (argv[1][i] - '0');
-        }
-    }
-    for (int i = 0; argv[2][i]; i++) {
-        if (argv[2][i] >= '0' && argv[2][i] <= '9') {
-            gid = gid * 10 + (argv[2][i] - '0');
-        }
-    }
-    
-    char path[256];
-    build_path(argv[3], path);
-    
-    if (ufs_chown(path, uid, gid) == 0) {
-        shell_print("OK\n");
-        return 0;
-    } else {
-        shell_print("Failed\n");
-        return -1;
-    }
-}
-
-static void find_callback(const char* path) {
-    shell_print(path);
-    shell_print("\n");
-}
-
-static int cmd_find(int argc, char** argv) {
-    if (argc < 2) {
-        shell_print("Usage: find <name> [start_path]\n");
-        return -1;
-    }
-    
-    char start[256] = "/";
-    if (argc > 2) {
-        build_path(argv[2], start);
-    }
-    
-    shell_print("Searching for '");
-    shell_print(argv[1]);
-    shell_print("' in ");
-    shell_print(start);
-    shell_print("\n");
-    
-    ufs_find(start, argv[1], find_callback);
-    
-    return 0;
-}
-
-static void grep_callback(const char* line, u32 line_num) {
-    shell_print("Line ");
-    shell_print_num(line_num);
-    shell_print(": ");
-    shell_print(line);
-    shell_print("\n");
-}
-
-static int cmd_grep(int argc, char** argv) {
-    if (argc < 3) {
-        shell_print("Usage: grep <pattern> <file>\n");
-        return -1;
-    }
-    
-    char path[256];
-    build_path(argv[2], path);
-    
-    return ufs_grep(path, argv[1], grep_callback);
-}
-
+// ========== INIT ==========
 void fs_commands_init(void) {
     shell_register_command("ls", cmd_ls, "List directory");
     shell_register_command("cd", cmd_cd, "Change directory");
@@ -691,8 +569,4 @@ void fs_commands_init(void) {
     shell_register_command("mkfs.ufs", cmd_mkfs_ufs, "Create UFS filesystem");
     shell_register_command("mount", cmd_mount, "Mount UFS");
     shell_register_command("umount", cmd_umount, "Unmount UFS");
-    shell_register_command("chmod", cmd_chmod, "Change file mode");
-    shell_register_command("chown", cmd_chown, "Change file owner");
-    shell_register_command("find", cmd_find, "Find files");
-    shell_register_command("grep", cmd_grep, "Search in file");
 }

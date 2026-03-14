@@ -4,6 +4,7 @@
 #include "../drivers/vesa.h"
 #include "../kernel/kapi.h"
 #include "../kernel/memory.h"
+#include "../apps/uwr.h"
 
 // Встроенные команды
 
@@ -49,10 +50,27 @@ static int cmd_ticks(int argc, char** argv) {
     return 0;
 }
 
+static int cmd_uwr(int argc, char** argv) {
+    const char* filename = NULL;
+    int use_vesa = 0;
+    
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--vesa") == 0 || strcmp(argv[i], "-v") == 0) {
+            use_vesa = 1;
+        } else {
+            filename = argv[i];
+        }
+    }
+    
+    uwr_main(filename, use_vesa);
+    return 0;
+}
+
 void commands_init(void) {
     shell_register_command("help", cmd_help, "Show this help");
     shell_register_command("clear", cmd_clear, "Clear screen");
     shell_register_command("mem", cmd_mem, "Show memory usage");
     shell_register_command("echo", cmd_echo, "Echo arguments");
     shell_register_command("ticks", cmd_ticks, "Show system ticks");
+    shell_register_command("uwr", cmd_uwr, "UWR text editor [--vesa]");
 }

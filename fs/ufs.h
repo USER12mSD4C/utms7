@@ -11,6 +11,7 @@ typedef struct {
     char name[UFS_MAX_NAME];
     u32 size;
     u32 first_block;
+    u32 next_block;
     u8 is_dir;
 } __attribute__((packed)) FSNode;
 
@@ -21,16 +22,12 @@ int ufs_read(const char* path, u8** data, u32* size);
 int ufs_delete(const char* path);
 int ufs_mkdir(const char* path);
 int ufs_rmdir(const char* path);
-int ufs_rmdir_force(const char* path);  // НОВОЕ
+int ufs_rmdir_force(const char* path);
 int ufs_readdir(const char* path, FSNode** entries, u32* count);
 int ufs_exists(const char* path);
 int ufs_isdir(const char* path);
 int ufs_stat(u32* total, u32* used, u32* free);
 int ufs_cp(const char* src, const char* dst);
 int ufs_mv(const char* src, const char* dst);
-int ufs_grep(const char* path, const char* pattern, void (*callback)(const char* line, u32 line_num));
-int ufs_find(const char* start, const char* name, void (*callback)(const char* path));
-int ufs_chmod(const char* path, u16 mode);
-int ufs_chown(const char* path, u16 uid, u16 gid);
 
 #endif

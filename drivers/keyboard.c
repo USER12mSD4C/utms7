@@ -41,11 +41,13 @@ void keyboard_handler_c(void) {
     
     u8 scancode = inb(KEYBOARD_DATA_PORT);
     
+    // Extended key (0xE0)
     if (scancode == 0xE0) {
         extended = 1;
         return;
     }
     
+    // Key release
     if (scancode & 0x80) {
         u8 release = scancode & 0x7F;
         if (release == 0x2A || release == 0x36) shift = 0;
@@ -54,6 +56,7 @@ void keyboard_handler_c(void) {
         return;
     }
     
+    // Modifiers
     if (scancode == 0x2A || scancode == 0x36) {
         shift = 1;
         extended = 0;
@@ -65,21 +68,37 @@ void keyboard_handler_c(void) {
         return;
     }
     
+    u8 ascii = 0;
+    
     if (extended) {
+        // Extended keys (стрелки и т.д.)
+        switch(scancode) {
+            case 0x48: ascii = 0xE0; break; // Up
+            case 0x50: ascii = 0xE1; break; // Down
+            case 0x4B: ascii = 0xE2; break; // Left
+            case 0x4D: ascii = 0xE3; break; // Right
+            case 0x47: ascii = 0xE4; break; // Home
+            case 0x4F: ascii = 0xE5; break; // End
+            case 0x49: ascii = 0xE6; break; // PageUp
+            case 0x51: ascii = 0xE7; break; // PageDown
+            default: ascii = 0;
+        }
         extended = 0;
-        return;
+    } else {
+        // Normal keys
+        if (scancode < sizeof(normal_keys)) {
+            ascii = shift ? shift_keys[scancode] : normal_keys[scancode];
+            if (ctrl && ascii >= 'a' && ascii <= 'z') {
+                ascii = ascii - 'a' + 1;
+            }
+        }
     }
     
-    if (scancode < sizeof(normal_keys)) {
-        u8 ascii = shift ? shift_keys[scancode] : normal_keys[scancode];
-        if (ctrl && ascii >= 'a' && ascii <= 'z') ascii = ascii - 'a' + 1;
-        
-        if (ascii) {
-            int next = (buffer_head + 1) % KEY_BUFFER_SIZE;
-            if (next != buffer_tail) {
-                key_buffer[buffer_head] = ascii;
-                buffer_head = next;
-            }
+    if (ascii) {
+        int next = (buffer_head + 1) % KEY_BUFFER_SIZE;
+        if (next != buffer_tail) {
+            key_buffer[buffer_head] = ascii;
+            buffer_head = next;
         }
     }
 }

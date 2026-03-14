@@ -48,7 +48,8 @@ LIVECD_OBJS = $(CORE_OBJS) \
               commands/builtin.o \
               commands/disk.o \
               commands/fs.o \
-              apps/installer.o
+              apps/installer.o \
+              apps/uwr.o
 
 # ========== ОСНОВНЫЕ ЦЕЛИ ==========
 
