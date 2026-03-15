@@ -22,10 +22,10 @@ i dont recommend use it, still untested
 
 ## last huge update
 
-working UWR (utms write-reader)
-working mbr/gpt
-udisk instead of straight gpt
-livecd install (in work)
+- working UWR (utms write-reader)
+- working mbr/gpt
+- udisk instead of straight gpt
+- livecd install (in work)
 
 ## Requirements
 
