@@ -22,6 +22,7 @@ typedef struct {
     u64 rsp;
     u64 rbp;
     u64 *kstack;
+    u64 cr3;
     u32 time_slice;
     u64 sleep_until;
 } process_t;
@@ -33,5 +34,7 @@ void sched_yield(void);
 void sched_sleep(u32 ticks);
 process_t *sched_current(void);
 void sched_tick(void);
+int sched_get_processes(process_t** buf, int max);
+int sched_kill(int pid);
 
 #endif

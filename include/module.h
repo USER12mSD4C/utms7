@@ -36,7 +36,20 @@ typedef struct module_header {
     u32 dep_count;
     module_dependency_t deps[8];
     u32 crc32;
+    // Дополнительные поля для таблицы символов
+    u32 symtab_offset;      // смещение до таблицы символов
+    u32 symtab_count;       // количество символов
+    u32 strtab_offset;      // смещение до таблицы строк
+    u32 strtab_size;        // размер таблицы строк
 } module_header_t;
+
+typedef struct module_sym {
+    u32 name_offset;         // смещение в strtab
+    u32 value_offset;        // смещение в коде/данных
+    u8 type;                 // 1 = global defined, 2 = global undefined
+    u8 bind;
+    u16 shndx;
+} module_sym_t;
 
 typedef struct loaded_module {
     char name[32];
@@ -52,6 +65,9 @@ typedef struct loaded_module {
     u32 bss_size;
     int (*entry)(void);
     struct loaded_module* next;
+    u32 symtab_count;
+    module_sym_t* symtab;
+    char* strtab;
 } loaded_module_t;
 
 // Ядро: загрузка модулей

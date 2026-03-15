@@ -28,11 +28,17 @@
 #define KEY_F11     0xF4
 #define KEY_F12     0xF5
 
+// Модификаторы
+#define KEY_MOD_SHIFT   1
+#define KEY_MOD_CTRL    2
+#define KEY_MOD_ALT     4
+
 int keyboard_init(void);
 u8 keyboard_getc(void);
 int keyboard_data_ready(void);
 void keyboard_handler_c(void);
 u8 keyboard_get_scancode(void);
 int keyboard_scancode_ready(void);
+int keyboard_get_modifiers(void);      // НОВОЕ: получить состояние модификаторов
 
 #endif

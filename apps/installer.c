@@ -1,150 +1,98 @@
-#include "../include/types.h"
 #include "../include/string.h"
 #include "../drivers/vga.h"
 #include "../drivers/disk.h"
-#include "../drivers/keyboard.h"    // ЭТО ДОБАВИТЬ
+#include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
-#include "../kernel/memory.h"       // ЭТО ДОБАВИТЬ (для kfree)
-#include "../kernel/kapi.h"
+#include "../include/part.h"
+#include "../kernel/memory.h"
+#include "../include/shell_api.h"
 
 static void create_directories(void) {
-    vga_write("Creating directories...\n");
-    
     ufs_mkdir("/boot");
+    ufs_mkdir("/boot/grub");
     ufs_mkdir("/modules");
     ufs_mkdir("/bin");
-    ufs_mkdir("/docs");
     ufs_mkdir("/etc");
-    
-    vga_write("  /boot\n");
-    vga_write("  /modules\n");
-    vga_write("  /bin\n");
-    vga_write("  /docs\n");
-    vga_write("  /etc\n");
+    ufs_mkdir("/home");
+    ufs_mkdir("/usr");
 }
 
-static void copy_modules(void) {
-    vga_write("Copying modules...\n");
-    
-    // Читаем список модулей из livecd
-    FSNode* entries;
-    u32 count;
-    
-    if (ufs_readdir("/modules", &entries, &count) != 0) {
-        vga_write("  No modules found\n");
-        return;
-    }
-    
-    int copied = 0;
-    for (u32 i = 0; i < count; i++) {
-        if (!entries[i].is_dir) {
-            char src[256];
-            char dst[256];
-            
-            strcpy(src, "/modules/");
-            strcat(src, entries[i].name);
-            
-            strcpy(dst, "/modules/");
-            strcat(dst, entries[i].name);
-            
-            u8* data;
-            u32 size;
-            if (ufs_read(src, &data, &size) == 0) {
-                if (ufs_write(dst, data, size) == 0) {
-                    copied++;
-                }
-                kfree(data);
-            }
-        }
-    }
-    
-    kfree(entries);
-    vga_write("  Copied ");
-    vga_write_num(copied);
-    vga_write(" modules\n");
+static void copy_file(const char* src, const char* dst) {
+    u8* data;
+    u32 size;
+    if (ufs_read(src, &data, &size) != 0) return;
+    ufs_write(dst, data, size);
+    kfree(data);
 }
 
 static void copy_kernel(void) {
-    vga_write("Copying kernel...\n");
-    
-    u8* data;
-    u32 size;
-    
-    if (ufs_read("/boot/kernel.bin", &data, &size) == 0) {
-        if (ufs_write("/boot/kernel.bin", data, size) == 0) {
-            vga_write("  Kernel copied\n");
-        }
-        kfree(data);
-    } else {
-        vga_write("  Kernel not found in livecd\n");
-    }
+    copy_file("/boot/kernel.bin", "/boot/kernel.bin");
 }
 
-int install_auto_main(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
+static void copy_modules(void) {
+    FSNode* entries;
+    u32 count;
+    if (ufs_readdir("/modules", &entries, &count) != 0) return;
     
-    vga_write("\nUTMS Auto Installer\n");
-    vga_write("==================\n\n");
+    for (u32 i = 0; i < count; i++) {
+        if (entries[i].is_dir) continue;
+        char src[256], dst[256];
+        snprintf(src, sizeof(src), "/modules/%s", entries[i].name);
+        snprintf(dst, sizeof(dst), "/modules/%s", entries[i].name);
+        copy_file(src, dst);
+    }
+    kfree(entries);
+}
+
+static void create_grub_cfg(void) {
+    char* cfg = "set timeout=5\n"
+                "set default=0\n"
+                "menuentry \"UTMS\" {\n"
+                "    multiboot2 /boot/kernel.bin\n"
+                "    boot\n"
+                "}\n";
+    ufs_write("/boot/grub/grub.cfg", (u8*)cfg, strlen(cfg));
+}
+
+int install_main(int argc, char** argv) {
+    (void)argc; (void)argv;
     
-    // Определяем целевой диск
-    int target_disk = 0; // /dev/sda
+    shell_print("\nUTMS Installer\n");
+    shell_print("==============\n\n");
     
-    // Ищем первый доступный диск
-    for (int i = 0; i < 4; i++) {
-        if (disk_get_sectors(0x80 + i) > 0) {
-            target_disk = i;
-            break;
-        }
+    if (!ufs_ismounted()) {
+        shell_print("ERROR: No partition mounted\n");
+        shell_print("1. part create /dev/sdX <size>\n");
+        shell_print("2. mkfs.ufs /dev/sdX1\n");
+        shell_print("3. mount /dev/sdX1\n");
+        return -1;
     }
     
-    vga_write("Target disk: /dev/sd");
-    vga_putchar('a' + target_disk);
-    vga_write("\n\n");
+    shell_print("Target: ");
+    shell_print(ufs_get_device());
+    shell_print("\n\n");
+    shell_print("Continue? (y/n): ");
     
-    vga_write("WARNING: This will erase ALL data on disk!\n");
-    vga_write("Press 'y' to continue: ");
-    
-    // Ждём подтверждения
     while (!keyboard_data_ready());
     char c = keyboard_getc();
-    vga_putchar(c);
-    vga_write("\n\n");
+    shell_print("\n\n");
+    if (c != 'y' && c != 'Y') return 0;
     
-    if (c != 'y' && c != 'Y') {
-        vga_write("Installation aborted.\n");
-        return 0;
-    }
-    
-    // Устанавливаем целевой диск
-    disk_set_disk(target_disk);
-    
-    // Форматируем в UFS
-    vga_write("Formatting UFS... ");
-    u64 sectors = disk_get_sectors(0x80 + target_disk);
-    if (ufs_format(2048, sectors - 2048) != 0) {
-        vga_write("FAILED\n");
-        return -1;
-    }
-    vga_write("OK\n");
-    
-    // Монтируем
-    if (ufs_mount(2048) != 0) {
-        vga_write("Mount failed\n");
-        return -1;
-    }
-    
-    // Создаём директории
+    shell_print("Creating directories...\n");
     create_directories();
     
-    // Копируем модули (из livecd /modules в целевой /modules)
-    copy_modules();
-    
-    // Копируем ядро
+    shell_print("Copying kernel...\n");
     copy_kernel();
     
-    vga_write("\nInstallation complete!\n");
-    vga_write("You can now reboot and boot from this disk.\n");
+    shell_print("Copying modules...\n");
+    copy_modules();
+    
+    shell_print("Configuring boot...\n");
+    create_grub_cfg();
+    
+    shell_print("\nDone. Installed to ");
+    shell_print(ufs_get_device());
+    shell_print("\n");
     
     return 0;
 }

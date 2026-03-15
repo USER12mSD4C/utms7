@@ -4,13 +4,14 @@
 #include "../drivers/keyboard.h"
 #include "../kernel/kapi.h"
 #include "../kernel/memory.h"
+#include "../kernel/sched.h"
 #include "../commands/fs.h"
 
 #define MAX_COMMANDS 64
 #define MAX_LINE_LEN 512
 
-static shell_command_t commands[MAX_COMMANDS];
-static int cmd_count = 0;
+shell_command_t commands[MAX_COMMANDS];
+int cmd_count = 0;
 static char current_dir[256] = "/";
 
 void shell_init(void) {
@@ -107,6 +108,17 @@ void shell_print_hex(u32 num) {
     vga_putchar(hex[num & 0xF]);
 }
 
+static int execute_with_ops(char* line) {
+    char* semicolon = strchr(line, ';');
+    if (semicolon) {
+        *semicolon = 0;
+        shell_execute(line);
+        return shell_execute(semicolon + 1);
+    }
+    
+    return shell_execute(line);
+}
+
 int shell_execute(const char* cmd_line) {
     if (!cmd_line || !cmd_line[0]) return 0;
     
@@ -124,7 +136,7 @@ int shell_execute(const char* cmd_line) {
         }
     }
     
-    shell_print("Unknown command: ");
+    shell_print("unknown command: ");
     shell_print(argv[0]);
     shell_print("\n");
     return -1;
@@ -134,9 +146,6 @@ void shell_run(void) {
     char line[MAX_LINE_LEN];
     int pos = 0;
     
-    if (current_dir[0] != '/' || current_dir[1] != '\0') {
-        strcpy(current_dir, "/");
-    }
     while (1) {
         shell_print(fs_get_current_dir());
         shell_print("> ");
@@ -150,7 +159,7 @@ void shell_run(void) {
                     line[pos] = '\0';
                     shell_print("\n");
                     if (pos > 0) {
-                        shell_execute(line);
+                        execute_with_ops(line);
                     }
                     break;
                 } else if (c == '\b') {
@@ -160,12 +169,10 @@ void shell_run(void) {
                     }
                 } else {
                     line[pos++] = c;
-                    // Печатаем ТОЛЬКО один символ
                     char str[2] = {c, '\0'};
                     shell_print(str);
                 }
                 
-                // Маленькая задержка чтоб не плодить символы
                 for (int i = 0; i < 1000; i++) asm volatile ("nop");
             }
         }

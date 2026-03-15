@@ -2,13 +2,26 @@
 #include "../include/string.h"
 #include "disk.h"
 #include "../drivers/vga.h"
+#include "../kernel/memory.h"
+
+// Статические GUID
+static const u8 EMPTY_GUID[16] =     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
+static const u8 UFS_GUID[16] =       {0xE2,0x13,0xB5,0xE6,0x5A,0x3A,0x49,0x4F,0x92,0xAF,0x72,0x0F,0x12,0x1F,0x6F,0x3A};
+static const u8 EFI_GUID[16] =       {0x28,0x73,0x2A,0xC1,0x1F,0xF8,0xD2,0x11,0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B};
+static const u8 LINUX_GUID[16] =     {0x0F,0xC6,0x3A,0xAF,0x83,0x84,0x72,0x47,0x8E,0x79,0x3D,0x69,0xD8,0x47,0x7D,0xE4};
+
+// Функции доступа к GUID
+const u8* gpt_get_empty_guid(void) { return EMPTY_GUID; }
+const u8* gpt_get_ufs_guid(void) { return UFS_GUID; }
+const u8* gpt_get_efi_guid(void) { return EFI_GUID; }
+const u8* gpt_get_linux_guid(void) { return LINUX_GUID; }
 
 static gpt_header_t gpt_header;
 static gpt_entry_t gpt_entries[128];
 static int gpt_valid = 0;
+static int gpt_entry_count = 0;
 static u8 current_drive = 0;
 
-// CRC32 таблица
 static u32 crc32_table[256];
 
 static void init_crc32(void) {
@@ -37,18 +50,13 @@ int gpt_detect(u8 drive) {
     u8 sector[512];
     current_drive = drive;
     
-    // Используем disk_set_disk вместо disk_set_drive
     int disk_num = drive - 0x80;
     if (disk_num < 0 || disk_num >= 4) return 0;
     disk_set_disk(disk_num);
     
-    // Читаем защитный MBR (LBA 0)
     if (disk_read(0, sector) != 0) return 0;
-    
-    // Проверяем сигнатуру MBR
     if (sector[510] != 0x55 || sector[511] != 0xAA) return 0;
     
-    // Проверяем, есть ли раздел типа 0xEE (GPT protective)
     int gpt_protective = 0;
     for (int i = 0; i < 4; i++) {
         if (sector[446 + i*16 + 4] == 0xEE) {
@@ -58,13 +66,9 @@ int gpt_detect(u8 drive) {
     }
     if (!gpt_protective) return 0;
     
-    // Читаем GPT заголовок (LBA 1)
     if (disk_read(1, (u8*)&gpt_header) != 0) return 0;
-    
-    // Проверяем сигнатуру "EFI PART"
     if (gpt_header.signature != 0x5452415020494645ULL) return 0;
     
-    // Проверяем CRC
     u32 saved_crc = gpt_header.header_crc32;
     gpt_header.header_crc32 = 0;
     
@@ -84,9 +88,10 @@ int gpt_read_partitions(u8 drive) {
     if (disk_num < 0 || disk_num >= 4) return -1;
     disk_set_disk(disk_num);
     
-    // Читаем таблицу разделов
     u32 entries_per_sector = 512 / gpt_header.partition_entry_size;
     u32 sectors_needed = (gpt_header.num_partition_entries + entries_per_sector - 1) / entries_per_sector;
+    
+    gpt_entry_count = 0;
     
     for (u32 i = 0; i < sectors_needed; i++) {
         u64 lba = gpt_header.partition_entry_lba + i;
@@ -98,12 +103,26 @@ int gpt_read_partitions(u8 drive) {
             (gpt_header.num_partition_entries - i * entries_per_sector) : entries_per_sector;
         
         for (u32 j = 0; j < entries_in_sector; j++) {
+            if (gpt_entry_count >= 128) break;
+            
             gpt_entry_t* entry = (gpt_entry_t*)(sector + j * gpt_header.partition_entry_size);
-            memcpy(&gpt_entries[i * entries_per_sector + j], entry, sizeof(gpt_entry_t));
+            
+            if (memcmp(entry->partition_guid, gpt_get_empty_guid(), 16) == 0) {
+                continue;
+            }
+            
+            memcpy(&gpt_entries[gpt_entry_count], entry, sizeof(gpt_entry_t));
+            gpt_entry_count++;
         }
     }
     
-    return gpt_header.num_partition_entries;
+    return gpt_entry_count;
+}
+
+int gpt_get_entry(int index, gpt_entry_t* entry) {
+    if (index < 0 || index >= gpt_entry_count) return -1;
+    memcpy(entry, &gpt_entries[index], sizeof(gpt_entry_t));
+    return 0;
 }
 
 int gpt_create_table(u8 drive) {
@@ -118,12 +137,10 @@ int gpt_create_table(u8 drive) {
     if (disk_num < 0 || disk_num >= 4) return -1;
     disk_set_disk(disk_num);
     
-    // Защитный MBR
     memset(sector, 0, 512);
     sector[510] = 0x55;
     sector[511] = 0xAA;
     
-    // Единственный раздел типа 0xEE на весь диск
     sector[446] = 0x00;
     sector[447] = 0x00;
     sector[448] = 0x02;
@@ -133,13 +150,11 @@ int gpt_create_table(u8 drive) {
     sector[452] = 0xFF;
     sector[453] = 0xFF;
     
-    // LBA start (1)
     sector[454] = 0x01;
     sector[455] = 0x00;
     sector[456] = 0x00;
     sector[457] = 0x00;
     
-    // Size (весь диск - 1 сектор)
     u32 size = total_sectors - 1;
     sector[458] = size & 0xFF;
     sector[459] = (size >> 8) & 0xFF;
@@ -148,7 +163,6 @@ int gpt_create_table(u8 drive) {
     
     if (disk_write(0, sector) != 0) return -1;
     
-    // GPT Header (LBA 1)
     gpt_header_t header;
     memset(&header, 0, sizeof(header));
     header.signature = 0x5452415020494645ULL;
@@ -162,12 +176,10 @@ int gpt_create_table(u8 drive) {
     header.num_partition_entries = 128;
     header.partition_entry_size = 128;
     
-    // Генерируем GUID диска
     for (int i = 0; i < 16; i++) {
         header.disk_guid[i] = (i * 0x11) ^ (total_sectors >> (i % 8));
     }
     
-    // Вычисляем CRC
     init_crc32();
     header.partition_entries_crc32 = calculate_crc32((u8*)gpt_entries, 128 * 128);
     header.header_crc32 = 0;
@@ -175,13 +187,11 @@ int gpt_create_table(u8 drive) {
     
     if (disk_write(1, (u8*)&header) != 0) return -1;
     
-    // Очищаем таблицу разделов
     memset(sector, 0, 512);
     for (u64 lba = 2; lba < 34; lba++) {
         if (disk_write(lba, sector) != 0) return -1;
     }
     
-    // Backup GPT в конце диска
     header.my_lba = total_sectors - 1;
     header.alternate_lba = 1;
     header.partition_entry_lba = total_sectors - 33;
@@ -192,16 +202,22 @@ int gpt_create_table(u8 drive) {
         if (disk_write(lba, sector) != 0) return -1;
     }
     
+    gpt_entry_count = 0;
+    gpt_valid = 1;
     return 0;
 }
 
-int gpt_add_partition(u8 drive, u64 start, u64 size, u8* guid) {
+int gpt_add_partition(u8 drive, u64 start, u64 size, const u8* guid) {
     if (!gpt_valid && !gpt_detect(drive)) return -1;
     
-    // Находим свободную запись
     int free_entry = -1;
     for (int i = 0; i < gpt_header.num_partition_entries; i++) {
-        if (gpt_entries[i].first_lba == 0 && gpt_entries[i].last_lba == 0) {
+        if (i >= gpt_entry_count) {
+            free_entry = i;
+            break;
+        }
+        
+        if (memcmp(gpt_entries[i].partition_guid, gpt_get_empty_guid(), 16) == 0) {
             free_entry = i;
             break;
         }
@@ -209,30 +225,33 @@ int gpt_add_partition(u8 drive, u64 start, u64 size, u8* guid) {
     
     if (free_entry == -1) return -1;
     
-    // Заполняем запись
-    memset(&gpt_entries[free_entry], 0, sizeof(gpt_entry_t));
-    memcpy(gpt_entries[free_entry].partition_guid, guid, 16);
+    gpt_entry_t new_entry;
+    memset(&new_entry, 0, sizeof(gpt_entry_t));
+    memcpy(new_entry.partition_guid, guid, 16);
     
-    // Генерируем уникальный GUID
     for (int i = 0; i < 16; i++) {
-        gpt_entries[free_entry].unique_guid[i] = free_entry + i + start;
+        new_entry.unique_guid[i] = free_entry + i + start;
     }
     
-    gpt_entries[free_entry].first_lba = start;
-    gpt_entries[free_entry].last_lba = start + size - 1;
+    new_entry.first_lba = start;
+    new_entry.last_lba = start + size - 1;
     
-    // UTF-16 name
     char name[] = "UTMS";
     for (int i = 0; i < 4; i++) {
-        gpt_entries[free_entry].name[i] = name[i];
+        new_entry.name[i] = name[i];
     }
     
-    // Обновляем CRC
+    if (free_entry >= gpt_entry_count) {
+        memcpy(&gpt_entries[free_entry], &new_entry, sizeof(gpt_entry_t));
+        gpt_entry_count = free_entry + 1;
+    } else {
+        memcpy(&gpt_entries[free_entry], &new_entry, sizeof(gpt_entry_t));
+    }
+    
     u32 entries_crc = calculate_crc32((u8*)gpt_entries, 
         gpt_header.num_partition_entries * gpt_header.partition_entry_size);
     gpt_header.partition_entries_crc32 = entries_crc;
     
-    // Записываем таблицу
     u32 entries_per_sector = 512 / gpt_header.partition_entry_size;
     u32 sectors_needed = (gpt_header.num_partition_entries + entries_per_sector - 1) / entries_per_sector;
     
@@ -246,21 +265,22 @@ int gpt_add_partition(u8 drive, u64 start, u64 size, u8* guid) {
             (gpt_header.num_partition_entries - i * entries_per_sector) : entries_per_sector;
         
         for (u32 j = 0; j < entries_in_sector; j++) {
-            memcpy(sector + j * gpt_header.partition_entry_size,
-                   &gpt_entries[i * entries_per_sector + j],
-                   gpt_header.partition_entry_size);
+            u32 idx = i * entries_per_sector + j;
+            if (idx < gpt_entry_count) {
+                memcpy(sector + j * gpt_header.partition_entry_size,
+                       &gpt_entries[idx],
+                       gpt_header.partition_entry_size);
+            }
         }
         
         if (disk_write(gpt_header.partition_entry_lba + i, sector) != 0) return -1;
         if (disk_write(gpt_header.alternate_lba - sectors_needed + i, sector) != 0) return -1;
     }
     
-    // Обновляем заголовки
     gpt_header.header_crc32 = 0;
     gpt_header.header_crc32 = calculate_crc32((u8*)&gpt_header, 92);
     if (disk_write(gpt_header.my_lba, (u8*)&gpt_header) != 0) return -1;
     
-    // Обновляем backup
     gpt_header_t backup;
     if (disk_read(gpt_header.alternate_lba, (u8*)&backup) != 0) return -1;
     backup.partition_entries_crc32 = entries_crc;
@@ -271,6 +291,8 @@ int gpt_add_partition(u8 drive, u64 start, u64 size, u8* guid) {
     return 0;
 }
 
-// Для автоматической регистрации в kinit
-static const char __gpt_name[] __attribute__((section(".kinit.modules"))) = "gpt_detect";
-static void* __gpt_func __attribute__((section(".kinit.modules"))) = gpt_detect;
+int gpt_init(void) {
+    gpt_valid = 0;
+    gpt_entry_count = 0;
+    return 0;
+}

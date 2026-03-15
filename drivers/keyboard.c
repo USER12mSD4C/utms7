@@ -27,12 +27,22 @@ static const u8 shift_keys[] = {
 
 static u8 shift = 0;
 static u8 ctrl = 0;
+static u8 alt = 0;
 static u8 extended = 0;
 
 int keyboard_init(void) {
     buffer_head = buffer_tail = 0;
-    shift = ctrl = extended = 0;
+    shift = ctrl = alt = extended = 0;
     return 0;
+}
+
+// НОВОЕ: получить состояние модификаторов
+int keyboard_get_modifiers(void) {
+    int mods = 0;
+    if (shift) mods |= KEY_MOD_SHIFT;
+    if (ctrl) mods |= KEY_MOD_CTRL;
+    if (alt) mods |= KEY_MOD_ALT;
+    return mods;
 }
 
 void keyboard_handler_c(void) {
@@ -52,6 +62,7 @@ void keyboard_handler_c(void) {
         u8 release = scancode & 0x7F;
         if (release == 0x2A || release == 0x36) shift = 0;
         if (release == 0x1D) ctrl = 0;
+        if (release == 0x38) alt = 0;
         extended = 0;
         return;
     }
@@ -64,6 +75,11 @@ void keyboard_handler_c(void) {
     }
     if (scancode == 0x1D) {
         ctrl = 1;
+        extended = 0;
+        return;
+    }
+    if (scancode == 0x38) {
+        alt = 1;
         extended = 0;
         return;
     }
@@ -81,6 +97,8 @@ void keyboard_handler_c(void) {
             case 0x4F: ascii = 0xE5; break; // End
             case 0x49: ascii = 0xE6; break; // PageUp
             case 0x51: ascii = 0xE7; break; // PageDown
+            case 0x52: ascii = 0xE8; break; // Insert
+            case 0x53: ascii = 0xE9; break; // Delete
             default: ascii = 0;
         }
         extended = 0;
@@ -88,8 +106,12 @@ void keyboard_handler_c(void) {
         // Normal keys
         if (scancode < sizeof(normal_keys)) {
             ascii = shift ? shift_keys[scancode] : normal_keys[scancode];
+            
+            // Для Ctrl+буква отправляем специальные коды (1-26)
             if (ctrl && ascii >= 'a' && ascii <= 'z') {
                 ascii = ascii - 'a' + 1;
+            } else if (ctrl && ascii >= 'A' && ascii <= 'Z') {
+                ascii = ascii - 'A' + 1;
             }
         }
     }

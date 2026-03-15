@@ -1,4 +1,5 @@
 #include "../include/string.h"
+#include "../include/path.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
@@ -8,6 +9,8 @@
 
 #define TAB_SIZE 4
 #define CHUNK_SIZE 1024
+#define MAX_LINES 1024
+#define MAX_LINE_LEN 4096
 
 typedef struct Line {
     char *text;
@@ -22,12 +25,21 @@ typedef struct {
     Line *last;
     Line *current;
     int cursor_x;
+    int cursor_y;
+    int top_line;
     int lines_count;
     int modified;
-    char filename[256];
+    char filename[256];      // Оригинальное имя для отображения
+    char fullpath[256];      // Полный путь для сохранения
+    int running;
 } UWR;
 
 static UWR e;
+
+// Прототип функции из fs/ufs.c (она уже есть в проекте)
+void build_path(const char* arg, char* result);
+
+// ========== РАБОТА СО СТРОКАМИ ==========
 
 static Line* line_new(void) {
     Line *l = kmalloc(sizeof(Line));
@@ -40,7 +52,7 @@ static Line* line_new(void) {
         return NULL;
     }
     
-    l->text[0] = 0;
+    l->text[0] = '\0';
     l->len = 0;
     l->next = NULL;
     l->prev = NULL;
@@ -53,11 +65,11 @@ static void line_free(Line *l) {
     kfree(l);
 }
 
-static void line_insert_char(Line *l, int pos, char c) {
+static void line_ensure_capacity(Line *l, int needed) {
     if (!l || !l->text) return;
     
-    if (l->len + 2 >= l->alloc) {
-        int new_alloc = l->alloc + CHUNK_SIZE;
+    if (l->len + needed + 2 >= l->alloc) {
+        int new_alloc = l->alloc + (needed + CHUNK_SIZE);
         char *new_text = kmalloc(new_alloc);
         if (!new_text) return;
         
@@ -66,6 +78,12 @@ static void line_insert_char(Line *l, int pos, char c) {
         l->text = new_text;
         l->alloc = new_alloc;
     }
+}
+
+static void line_insert_char(Line *l, int pos, char c) {
+    if (!l || !l->text || pos < 0 || pos > l->len) return;
+    
+    line_ensure_capacity(l, 1);
     
     for (int i = l->len; i >= pos; i--) {
         l->text[i+1] = l->text[i];
@@ -75,7 +93,7 @@ static void line_insert_char(Line *l, int pos, char c) {
 }
 
 static void line_delete_char(Line *l, int pos) {
-    if (!l || !l->text || pos >= l->len) return;
+    if (!l || !l->text || pos < 0 || pos >= l->len) return;
     
     for (int i = pos; i < l->len; i++) {
         l->text[i] = l->text[i+1];
@@ -87,29 +105,26 @@ static void line_append(Line *l, const char *s) {
     if (!l || !s) return;
     
     int add_len = strlen(s);
-    if (l->len + add_len + 1 >= l->alloc) {
-        int new_alloc = l->alloc + add_len + CHUNK_SIZE;
-        char *new_text = kmalloc(new_alloc);
-        if (!new_text) return;
-        
-        memcpy(new_text, l->text, l->len + 1);
-        kfree(l->text);
-        l->text = new_text;
-        l->alloc = new_alloc;
-    }
+    if (add_len == 0) return;
     
-    strcpy(l->text + l->len, s);
+    line_ensure_capacity(l, add_len);
+    
+    memcpy(l->text + l->len, s, add_len);
     l->len += add_len;
+    l->text[l->len] = '\0';
 }
+
+// ========== ИНИЦИАЛИЗАЦИЯ ==========
 
 static void e_init(void) {
     e.first = e.last = e.current = NULL;
     e.cursor_x = 0;
+    e.cursor_y = 0;
+    e.top_line = 0;
     e.lines_count = 0;
     e.modified = 0;
-    e.filename[0] = 0;
+    e.running = 1;
     
-    // Создаём пустую строку
     Line *l = line_new();
     if (l) {
         e.first = e.last = e.current = l;
@@ -128,133 +143,101 @@ static void e_free(void) {
     e.lines_count = 0;
 }
 
-int uwr_open(const char *filename) {
-    e_free();
-    e_init();
+// ========== НАВИГАЦИЯ ==========
+
+static void e_move_up(void) {
+    if (!e.current || !e.current->prev) return;
     
-    char path[256];
-    if (filename[0] == '/') {
-        strcpy(path, filename);
-    } else {
-        const char *cwd = fs_get_current_dir();
-        if (!cwd || strcmp(cwd, "/") == 0) {
-            snprintf(path, sizeof(path), "/%s", filename);
-        } else {
-            snprintf(path, sizeof(path), "%s/%s", cwd, filename);
-        }
+    e.current = e.current->prev;
+    e.cursor_y--;
+    
+    if (e.cursor_x > e.current->len) {
+        e.cursor_x = e.current->len;
     }
     
-    u8 *data;
-    u32 size;
-    
-    if (ufs_read(path, &data, &size) != 0) {
-        strcpy(e.filename, filename);
-        return 0;
+    if (e.cursor_y < e.top_line) {
+        e.top_line = e.cursor_y;
     }
-    
-    e_free();
-    e.first = e.last = e.current = NULL;
-    e.lines_count = 0;
-    
-    char *p = (char*)data;
-    Line *current = NULL;
-    
-    while (*p) {
-        Line *l = line_new();
-        if (!l) break;
-        
-        char line_buf[1024];
-        int i = 0;
-        while (*p && *p != '\n' && *p != '\r' && i < 1023) {
-            line_buf[i++] = *p++;
-        }
-        line_buf[i] = 0;
-        
-        l->len = i;
-        if (l->alloc <= i) {
-            kfree(l->text);
-            l->alloc = i + 1;
-            l->text = kmalloc(l->alloc);
-            if (!l->text) {
-                kfree(l);
-                break;
-            }
-        }
-        memcpy(l->text, line_buf, i + 1);
-        
-        if (!e.first) {
-            e.first = e.last = l;
-        } else {
-            e.last->next = l;
-            l->prev = e.last;
-            e.last = l;
-        }
-        e.lines_count++;
-        
-        if (*p == '\r') p++;
-        if (*p == '\n') p++;
-    }
-    
-    kfree(data);
-    strcpy(e.filename, filename);
-    
-    if (e.lines_count == 0) {
-        e_init();
-    }
-    
-    e.current = e.first;
-    e.cursor_x = 0;
-    e.modified = 0;
-    return 0;
 }
 
-int uwr_save(void) {
-    if (e.filename[0] == 0) return -1;
+static void e_move_down(void) {
+    if (!e.current || !e.current->next) return;
     
-    char path[256];
-    if (e.filename[0] == '/') {
-        strcpy(path, e.filename);
-    } else {
-        const char *cwd = fs_get_current_dir();
-        if (!cwd || strcmp(cwd, "/") == 0) {
-            snprintf(path, sizeof(path), "/%s", e.filename);
-        } else {
-            snprintf(path, sizeof(path), "%s/%s", cwd, e.filename);
-        }
+    e.current = e.current->next;
+    e.cursor_y++;
+    
+    if (e.cursor_x > e.current->len) {
+        e.cursor_x = e.current->len;
     }
     
-    // Считаем размер
-    int total_size = 0;
-    Line *l = e.first;
-    while (l) {
-        total_size += l->len + 1; // +1 для \n
-        l = l->next;
+    if (e.cursor_y >= e.top_line + 23) {
+        e.top_line = e.cursor_y - 22;
     }
-    
-    if (total_size <= 0) return -1;
-    
-    u8 *data = kmalloc(total_size + 1);
-    if (!data) return -1;
-    
-    u8 *p = data;
-    l = e.first;
-    while (l) {
-        if (l->len > 0) {
-            memcpy(p, l->text, l->len);
-            p += l->len;
-        }
-        *p++ = '\n';
-        l = l->next;
-    }
-    
-    int result = ufs_write(path, data, total_size);
-    kfree(data);
-    
-    if (result == 0) {
-        e.modified = 0;
-    }
-    return result;
 }
+
+static void e_move_left(void) {
+    if (!e.current) return;
+    
+    if (e.cursor_x > 0) {
+        e.cursor_x--;
+    } else if (e.current->prev) {
+        e.current = e.current->prev;
+        e.cursor_y--;
+        e.cursor_x = e.current->len;
+        
+        if (e.cursor_y < e.top_line) {
+            e.top_line = e.cursor_y;
+        }
+    }
+}
+
+static void e_move_right(void) {
+    if (!e.current) return;
+    
+    if (e.cursor_x < e.current->len) {
+        e.cursor_x++;
+    } else if (e.current->next) {
+        e.current = e.current->next;
+        e.cursor_y++;
+        e.cursor_x = 0;
+        
+        if (e.cursor_y >= e.top_line + 23) {
+            e.top_line = e.cursor_y - 22;
+        }
+    }
+}
+
+static void e_move_home(void) {
+    e.cursor_x = 0;
+}
+
+static void e_move_end(void) {
+    if (e.current) {
+        e.cursor_x = e.current->len;
+    }
+}
+
+static void e_page_up(void) {
+    for (int i = 0; i < 20; i++) {
+        if (e.current && e.current->prev) {
+            e_move_up();
+        } else {
+            break;
+        }
+    }
+}
+
+static void e_page_down(void) {
+    for (int i = 0; i < 20; i++) {
+        if (e.current && e.current->next) {
+            e_move_down();
+        } else {
+            break;
+        }
+    }
+}
+
+// ========== РЕДАКТИРОВАНИЕ ==========
 
 static void e_insert_char(char c) {
     if (!e.current) return;
@@ -270,26 +253,16 @@ static void e_newline(void) {
     Line *new_line = line_new();
     if (!new_line) return;
     
-    // Копируем остаток строки
     if (e.cursor_x < e.current->len) {
         int rest_len = e.current->len - e.cursor_x;
-        if (new_line->alloc <= rest_len) {
-            kfree(new_line->text);
-            new_line->alloc = rest_len + 1;
-            new_line->text = kmalloc(new_line->alloc);
-            if (!new_line->text) {
-                kfree(new_line);
-                return;
-            }
-        }
+        line_ensure_capacity(new_line, rest_len);
         memcpy(new_line->text, e.current->text + e.cursor_x, rest_len);
-        new_line->text[rest_len] = 0;
+        new_line->text[rest_len] = '\0';
         new_line->len = rest_len;
-        e.current->text[e.cursor_x] = 0;
+        e.current->text[e.cursor_x] = '\0';
         e.current->len = e.cursor_x;
     }
     
-    // Вставляем в список
     new_line->prev = e.current;
     new_line->next = e.current->next;
     
@@ -301,9 +274,14 @@ static void e_newline(void) {
     e.current->next = new_line;
     
     e.current = new_line;
+    e.cursor_y++;
     e.cursor_x = 0;
     e.lines_count++;
     e.modified = 1;
+    
+    if (e.cursor_y >= e.top_line + 23) {
+        e.top_line = e.cursor_y - 22;
+    }
 }
 
 static void e_backspace(void) {
@@ -318,10 +296,8 @@ static void e_backspace(void) {
         Line *prev = e.current->prev;
         int prev_len = prev->len;
         
-        // Присоединяем текущую строку к предыдущей
         line_append(prev, e.current->text);
         
-        // Удаляем текущую
         if (e.current->next) {
             e.current->next->prev = prev;
         } else {
@@ -331,7 +307,37 @@ static void e_backspace(void) {
         
         line_free(e.current);
         e.current = prev;
+        e.cursor_y--;
         e.cursor_x = prev_len;
+        e.lines_count--;
+        e.modified = 1;
+        
+        if (e.top_line > e.cursor_y) {
+            e.top_line = e.cursor_y;
+        }
+    }
+}
+
+static void e_delete(void) {
+    if (!e.current) return;
+    
+    if (e.cursor_x < e.current->len) {
+        line_delete_char(e.current, e.cursor_x);
+        e.modified = 1;
+    }
+    else if (e.current->next) {
+        Line *next = e.current->next;
+        
+        line_append(e.current, next->text);
+        
+        e.current->next = next->next;
+        if (next->next) {
+            next->next->prev = e.current;
+        } else {
+            e.last = e.current;
+        }
+        
+        line_free(next);
         e.lines_count--;
         e.modified = 1;
     }
@@ -343,210 +349,363 @@ static void e_tab(void) {
     }
 }
 
-static void e_draw(void) {
-    vga_clear();
+// ========== ФАЙЛОВЫЕ ОПЕРАЦИИ ==========
+
+int uwr_open(const char *filename) {
+    // Сохраняем имя для отображения
+    if (filename && filename[0]) {
+        strcpy(e.filename, filename);
+        
+        // Используем готовую build_path из UFS
+        build_path(filename, e.fullpath);
+    } else {
+        strcpy(e.filename, "untitled");
+        e.fullpath[0] = '\0';
+    }
     
-    // Статус сверху
+    // Очищаем старый документ
+    e_free();
+    
+    // Создаём новый пустой документ
+    e.first = e.last = e.current = NULL;
+    e.cursor_x = 0;
+    e.cursor_y = 0;
+    e.top_line = 0;
+    e.lines_count = 0;
+    e.modified = 0;
+    e.running = 1;
+    
+    Line *l = line_new();
+    if (l) {
+        e.first = e.last = e.current = l;
+        e.lines_count = 1;
+    }
+    
+    // Если файл не существует - выходим
+    if (e.fullpath[0] == '\0' || !ufs_exists(e.fullpath) || ufs_isdir(e.fullpath)) {
+        return 0;
+    }
+    
+    // Читаем файл
+    u8 *data;
+    u32 size;
+    if (ufs_read(e.fullpath, &data, &size) != 0) {
+        return 0;
+    }
+    
+    // Очищаем пустой документ
+    e_free();
+    e.first = e.last = e.current = NULL;
+    e.lines_count = 0;
+    
+    // Разбираем строки
+    char *p = (char*)data;
+    while (*p) {
+        Line *l = line_new();
+        if (!l) break;
+        
+        char line_buf[MAX_LINE_LEN];
+        int i = 0;
+        while (*p && *p != '\n' && i < MAX_LINE_LEN - 1) {
+            line_buf[i++] = *p++;
+        }
+        line_buf[i] = '\0';
+        if (*p == '\n') p++;
+        
+        line_ensure_capacity(l, i);
+        memcpy(l->text, line_buf, i);
+        l->text[i] = '\0';
+        l->len = i;
+        
+        if (!e.first) {
+            e.first = e.last = l;
+        } else {
+            e.last->next = l;
+            l->prev = e.last;
+            e.last = l;
+        }
+        e.lines_count++;
+    }
+    
+    kfree(data);
+    
+    // Если файл был пуст
+    if (e.lines_count == 0) {
+        Line *l = line_new();
+        if (l) {
+            e.first = e.last = e.current = l;
+            e.lines_count = 1;
+        }
+    }
+    
+    e.current = e.first;
+    e.cursor_x = 0;
+    e.cursor_y = 0;
+    e.top_line = 0;
+    e.modified = 0;
+    
+    return 0;
+}
+
+int uwr_save(void) {
+    if (e.fullpath[0] == '\0') {
+        return -1;
+    }
+    
+    int total_size = 0;
+    Line *l = e.first;
+    while (l) {
+        total_size += l->len + 1;
+        l = l->next;
+    }
+    
+    if (total_size <= 0) {
+        int result = ufs_write(e.fullpath, NULL, 0);
+        if (result == 0) e.modified = 0;
+        return result;
+    }
+    
+    u8 *data = kmalloc(total_size + 1);
+    if (!data) return -1;
+    
+    u8 *p = data;
+    l = e.first;
+    while (l) {
+        if (l->len > 0) {
+            memcpy(p, l->text, l->len);
+            p += l->len;
+        }
+        *p++ = '\n';
+        l = l->next;
+    }
+    
+    int result = ufs_rewrite(e.fullpath, data, total_size);
+    kfree(data);
+    
+    if (result == 0) e.modified = 0;
+    
+    return result;
+}
+
+// ========== ОТОБРАЖЕНИЕ ==========
+
+static void e_draw_status(void) {
     vga_setcolor(0x0F, 0);
     vga_setpos(0, 0);
+    
     vga_write("UWR ");
-    vga_write(e.filename[0] ? e.filename : "untitled");
-    if (e.modified) vga_write(" [modified]");
+    if (e.filename[0]) {
+        vga_write(e.filename);
+    } else {
+        vga_write("untitled");
+    }
     
-    // Очистка строки статуса
-    for (int i = 0; i < 80; i++) vga_putchar(' ');
-    vga_setpos(0, 0);
+    if (e.modified) {
+        vga_write(" [modified]");
+    }
     
-    // Находим позицию текущей строки на экране
-    int current_row = -1;
-    Line *l = e.first;
-    int row = 0;
+    vga_setpos(50, 0);
+    vga_write("Line ");
+    vga_write_num(e.cursor_y + 1);
+    vga_write("/");
+    vga_write_num(e.lines_count);
+    vga_write(" Col ");
+    vga_write_num(e.cursor_x + 1);
     
-    // Основной текст
+    for (int i = 70; i < 80; i++) {
+        vga_putchar(' ');
+    }
+    
+    // Отладка путей
+    vga_setcolor(0x08, 0);
+    vga_setpos(0, 24);
+    vga_write("file='");
+    vga_write(e.filename);
+    vga_write("' path='");
+    vga_write(e.fullpath);
+    vga_write("'        ");
     vga_setcolor(0x07, 0);
-    l = e.first;
-    row = 0;
+}
+
+static void e_draw_text(void) {
+    if (!e.current) return;
     
-    while (l && row < 23) {
-        vga_setpos(5, row + 1);
-        
-        // Номер строки
-        vga_setcolor(0x08, 0);
+    Line *l = e.first;
+    int line_num = 0;
+    
+    for (int i = 0; i < e.top_line && l; i++) {
+        l = l->next;
+        line_num++;
+    }
+    
+    for (int row = 0; row < 23 && l; row++) {
         vga_setpos(0, row + 1);
-        int n = row + 1;
-        char num[5];
-        num[0] = ' ';
-        num[1] = ' ';
-        num[2] = ' ';
-        num[3] = ' ';
-        num[4] = ' ';
         
-        if (n >= 1000) { num[0] = '0' + (n/1000); n %= 1000; }
-        if (n >= 100)  { num[1] = '0' + (n/100);  n %= 100;  }
-        if (n >= 10)   { num[2] = '0' + (n/10);   n %= 10;   }
-        num[3] = '0' + n;
+        vga_setcolor(0x08, 0);
+        int n = line_num + 1;
         
-        for (int j = 0; j < 5; j++) vga_putchar(num[j]);
+        if (n < 10) {
+            vga_putchar(' ');
+            vga_putchar(' ');
+            vga_putchar(' ');
+            vga_write_num(n);
+        } else if (n < 100) {
+            vga_putchar(' ');
+            vga_putchar(' ');
+            vga_write_num(n);
+        } else if (n < 1000) {
+            vga_putchar(' ');
+            vga_write_num(n);
+        } else {
+            vga_write_num(n);
+        }
+        vga_putchar(' ');
         
-        // Текст строки
         vga_setcolor(0x07, 0);
         if (l->text) {
             vga_write(l->text);
         }
         
-        // Очистка остатка
-        int len = l->text ? l->len : 0;
-        for (int i = len + 5; i < 80; i++) {
+        int text_len = l->text ? l->len : 0;
+        for (int i = text_len + 5; i < 80; i++) {
             vga_putchar(' ');
         }
         
-        // Если это текущая строка - запоминаем позицию
-        if (l == e.current) {
-            current_row = row + 1;
-        }
-        
         l = l->next;
-        row++;
-    }
-    
-    // Статус снизу
-    vga_setcolor(0x0F, 0);
-    vga_setpos(0, 24);
-    
-    vga_write("Line: ");
-    int line_num = 1;
-    Line *tmp = e.first;
-    while (tmp && tmp != e.current) {
         line_num++;
-        tmp = tmp->next;
     }
     
-    if (line_num >= 1000) vga_putchar('0' + (line_num/1000));
-    if (line_num >= 100) vga_putchar('0' + ((line_num/100)%10));
-    if (line_num >= 10) vga_putchar('0' + ((line_num/10)%10));
-    vga_putchar('0' + (line_num%10));
+    for (int row = line_num - e.top_line; row < 23; row++) {
+        vga_setpos(0, row + 1);
+        for (int i = 0; i < 80; i++) {
+            vga_putchar(' ');
+        }
+    }
+}
+
+static void e_draw_cursor(void) {
+    if (!e.current) return;
     
-    vga_write("/");
-    if (e.lines_count >= 1000) vga_putchar('0' + (e.lines_count/1000));
-    if (e.lines_count >= 100) vga_putchar('0' + ((e.lines_count/100)%10));
-    if (e.lines_count >= 10) vga_putchar('0' + ((e.lines_count/10)%10));
-    vga_putchar('0' + (e.lines_count%10));
+    int screen_y = e.cursor_y - e.top_line + 1;
+    if (screen_y >= 1 && screen_y <= 23) {
+        vga_setpos(e.cursor_x + 5, screen_y);
+        vga_update_cursor();
+    }
+}
+
+static void e_draw(void) {
+    vga_clear();
+    e_draw_status();
+    e_draw_text();
+    e_draw_cursor();
+}
+
+static void e_show_message(const char *msg, int color) {
+    vga_setcolor(color, 0);
+    vga_setpos(40, 24);
     
-    vga_write(" Col: ");
-    int col = e.cursor_x + 1;
-    if (col >= 100) vga_putchar('0' + (col/100));
-    if (col >= 10) vga_putchar('0' + ((col/10)%10));
-    vga_putchar('0' + (col%10));
-    
-    // Очистка остатка
-    for (int i = 20; i < 80; i++) {
+    for (int i = 0; i < 40; i++) {
         vga_putchar(' ');
     }
     
-    // Курсор - ЕСЛИ строка видна на экране
-    if (current_row >= 1 && current_row <= 23) {
-        vga_setpos(e.cursor_x + 5, current_row);
-    } else {
-        vga_setpos(79, 24);
-    }
-    vga_update_cursor();
+    vga_setpos(40, 24);
+    vga_write(msg);
+    vga_setcolor(0x07, 0);
 }
+
+// ========== ОСНОВНОЙ ЦИКЛ ==========
 
 void uwr_main(const char *filename, int vesa) {
     (void)vesa;
     
-    if (filename && filename[0]) {
-        uwr_open(filename);
-    } else {
-        e_init();
-        strcpy(e.filename, "untitled");
-    }
-    
+    uwr_open(filename);
     e_draw();
     
-    while (1) {
+    while (e.running) {
         if (!keyboard_data_ready()) continue;
         
         u8 k = keyboard_getc();
+        int mods = keyboard_get_modifiers();
         
-        if (k == 0x13) { // Ctrl+S
-            if (uwr_save() == 0) {
-                vga_setcolor(0x0A, 0);
-                vga_setpos(40, 24);
-                vga_write("Saved");
-                vga_setcolor(0x07, 0);
+        // Ctrl+S (19) - сохранить
+        if (k == 19) {
+            if (e.fullpath[0] == '\0') {
+                e_show_message("No filename!", 0x0C);
+            } else {
+                e_show_message("Saving...", 0x0F);
+                e_draw();
+                
+                for (int i = 0; i < 500000; i++) asm volatile ("nop");
+                
+                if (uwr_save() == 0) {
+                    e_show_message("Saved", 0x0A);
+                } else {
+                    e_show_message("Save failed!", 0x0C);
+                }
             }
+            
+            for (int i = 0; i < 2000000; i++) asm volatile ("nop");
             e_draw();
             continue;
         }
         
-        if (k == 0x11) { // Ctrl+Q
-            if (!e.modified) break;
-            vga_setcolor(0x0C, 0);
-            vga_setpos(40, 24);
-            vga_write("Not saved!");
-            vga_setcolor(0x07, 0);
-            e_draw();
+        // Ctrl+Q (17) - выход
+        if (k == 17) {
+            if (e.modified) {
+                e_show_message("Not saved! (S)ave (Q)uit", 0x0C);
+                
+                while (1) {
+                    if (!keyboard_data_ready()) continue;
+                    u8 c = keyboard_getc();
+                    
+                    if (c == 's' || c == 'S') {
+                        if (uwr_save() == 0) {
+                            e.running = 0;
+                            break;
+                        }
+                    } else if (c == 'q' || c == 'Q') {
+                        e.running = 0;
+                        break;
+                    }
+                }
+            } else {
+                e.running = 0;
+            }
+            if (e.running) e_draw();
             continue;
         }
         
-        // Стрелки
-        if (k == 0xE0 && e.current && e.current->prev) {
-            e.current = e.current->prev;
-            e.cursor_x = 0;
-            e_draw();
-            continue;
-        }
-        if (k == 0xE1 && e.current && e.current->next) {
-            e.current = e.current->next;
-            e.cursor_x = 0;
-            e_draw();
-            continue;
-        }
-        if (k == 0xE2) {
-            if (e.cursor_x > 0) {
-                e.cursor_x--;
-            } else if (e.current && e.current->prev) {
-                e.current = e.current->prev;
-                e.cursor_x = e.current->len;
-            }
-            e_draw();
-            continue;
-        }
-        if (k == 0xE3) {
-            if (e.current && e.cursor_x < e.current->len) {
-                e.cursor_x++;
-            } else if (e.current && e.current->next) {
-                e.current = e.current->next;
-                e.cursor_x = 0;
-            }
-            e_draw();
-            continue;
-        }
-        if (k == 0xE4) { // HOME
-            e.cursor_x = 0;
-            e_draw();
-            continue;
-        }
-        if (k == 0xE5) { // END
-            if (e.current) {
-                e.cursor_x = e.current->len;
+        // Специальные клавиши
+        if (k >= 0xE0 && k <= 0xE9) {
+            switch (k) {
+                case 0xE0: e_page_up(); break;
+                case 0xE1: e_page_down(); break;
+                case 0xE2: e_move_left(); break;
+                case 0xE3: e_move_right(); break;
+                case 0xE4: e_move_home(); break;
+                case 0xE5: e_move_end(); break;
+                case 0xE6: e_page_up(); break;
+                case 0xE7: e_page_down(); break;
+                case 0xE8: break;
+                case 0xE9: e_delete(); break;
             }
             e_draw();
             continue;
         }
         
         // Обычные клавиши
-        switch (k) {
-            case '\b': e_backspace(); e_draw(); break;
-            case '\n': e_newline(); e_draw(); break;
-            case '\t': e_tab(); e_draw(); break;
-            default:
-                if (k >= 32 && k <= 126) {
-                    e_insert_char(k);
-                    e_draw();
-                }
-                break;
+        if (!(mods & KEY_MOD_CTRL)) {
+            switch (k) {
+                case '\b': e_backspace(); e_draw(); break;
+                case '\n': e_newline(); e_draw(); break;
+                case '\t': e_tab(); e_draw(); break;
+                default:
+                    if (k >= 32 && k <= 126) {
+                        e_insert_char(k);
+                        e_draw();
+                    }
+                    break;
+            }
         }
     }
     

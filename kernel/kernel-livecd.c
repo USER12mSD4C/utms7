@@ -12,6 +12,7 @@
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 #include "../commands/disk.h"
+#include "../apps/installer.h"
 
 void kernel_main(void *mb_info) {
     (void)mb_info;
@@ -20,63 +21,62 @@ void kernel_main(void *mb_info) {
     
     vga_init();
     vga_clear();
-    vga_write("UTMS v0.2\n");
+    vga_write("UTMS LiveCD\n");
     
-    vga_write("[1/8] GDT... ");
+    vga_write("[1/7] GDT... ");
     gdt_init();
     vga_write("OK\n");
     
-    vga_write("[2/8] IDT... ");
+    vga_write("[2/7] IDT... ");
     idt_init();
     vga_write("OK\n");
     
-    vga_write("[3/8] Memory... ");
+    vga_write("[3/7] Memory... ");
     memory_init(0x100000, 32 * 1024 * 1024);
     vga_write("OK\n");
     
-    vga_write("[4/8] Paging... ");
+    vga_write("[4/7] Paging... ");
     if (paging_init() != 0) {
         vga_write("FAILED\n");
         while(1);
     }
     vga_write("OK\n");
     
-    vga_write("[5/8] Timer... ");
+    vga_write("[5/7] Timer... ");
     timer_init();
     vga_write("OK\n");
     
-    vga_write("[6/8] Scheduler... ");
+    vga_write("[6/7] Scheduler... ");
     sched_init();
     vga_write("OK\n");
     
-    vga_write("[7/8] Disk... ");
+    vga_write("[7/7] Disk... ");
     disk_init();
     vga_write("OK\n");
     
-    vga_write("[8/8] Keyboard... ");
+    vga_write("[8/7] Keyboard... ");
     keyboard_init();
     vga_write("OK\n");
     
     __asm__ volatile ("sti");
     
-    vga_write("Mounting UFS... ");
-    if (ufs_mount(2048, 0) == 0) {  // по умолчанию первый диск
+    vga_write("Mounting UFS (live)... ");
+    if (ufs_mount(2048, 0) == 0) {  // livecd всегда на первом диске
         vga_write("OK\n");
     } else {
-        vga_write("FAILED (no UFS partition)\n");
+        vga_write("FAILED\n");
     }
     
     kinit_run_all();
     
-    vga_write("\nshell init... ");
     shell_init();
     commands_init();
     fs_commands_init();
     disk_commands_init();
-    vga_write("OK\n");
     
-    vga_write("\n\nwelcome to UTMS!\n");
-    vga_write("Type 'help' for commands\n");
+    shell_register_command("install", install_main, "install system to disk");
+    
+    vga_write("\nType 'install' after mounting target disk\n");
     shell_run();
     
     while(1) { __asm__ volatile ("hlt"); }

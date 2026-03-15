@@ -4,14 +4,39 @@
 #include "../drivers/vesa.h"
 #include "../kernel/kapi.h"
 #include "../kernel/memory.h"
+#include "../kernel/sched.h"
 #include "../apps/uwr.h"
-
-// Встроенные команды
 
 static int cmd_help(int argc, char** argv) {
     (void)argc; (void)argv;
-    shell_print("\nAvailable commands:\n");
-    // TODO: вывести список всех команд
+    
+    shell_print("\nUTMS Shell Commands\n");
+    shell_print("==================\n\n");
+    
+    extern shell_command_t commands[];
+    extern int cmd_count;
+    
+    int max_len = 0;
+    for (int i = 0; i < cmd_count; i++) {
+        int len = strlen(commands[i].name);
+        if (len > max_len) max_len = len;
+    }
+    
+    for (int i = 0; i < cmd_count; i++) {
+        shell_print("  ");
+        shell_print(commands[i].name);
+        
+        int len = strlen(commands[i].name);
+        for (int j = len; j < max_len + 2; j++) shell_print(" ");
+        
+        shell_print("- ");
+        shell_print(commands[i].desc);
+        shell_print("\n");
+    }
+    
+    shell_print("\nTotal: ");
+    shell_print_num(cmd_count);
+    shell_print("\n");
     return 0;
 }
 
@@ -24,12 +49,11 @@ static int cmd_clear(int argc, char** argv) {
 
 static int cmd_mem(int argc, char** argv) {
     (void)argc; (void)argv;
-    shell_print("Memory used: ");
+    shell_print("used: ");
     shell_print_num(kapi_memory_used());
-    shell_print(" bytes\n");
-    shell_print("Memory free: ");
+    shell_print(" free: ");
     shell_print_num(kapi_memory_free());
-    shell_print(" bytes\n");
+    shell_print("\n");
     return 0;
 }
 
@@ -44,7 +68,6 @@ static int cmd_echo(int argc, char** argv) {
 
 static int cmd_ticks(int argc, char** argv) {
     (void)argc; (void)argv;
-    shell_print("System ticks: ");
     shell_print_num(kapi_get_ticks());
     shell_print("\n");
     return 0;
@@ -55,7 +78,7 @@ static int cmd_uwr(int argc, char** argv) {
     int use_vesa = 0;
     
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--vesa") == 0 || strcmp(argv[i], "-v") == 0) {
+        if (strcmp(argv[i], "-v") == 0) {
             use_vesa = 1;
         } else {
             filename = argv[i];
@@ -66,11 +89,74 @@ static int cmd_uwr(int argc, char** argv) {
     return 0;
 }
 
+static int cmd_ps(int argc, char** argv) {
+    (void)argc; (void)argv;
+    
+    int count = sched_get_processes(NULL, 0);
+    if (count == 0) {
+        shell_print("no processes\n");
+        return 0;
+    }
+    
+    process_t* procs[count];
+    sched_get_processes(procs, count);
+    
+    shell_print("PID  PPID  STATE  NAME\n");
+    for (int i = 0; i < count; i++) {
+        shell_print_num(procs[i]->pid);
+        shell_print("   ");
+        shell_print_num(procs[i]->ppid);
+        shell_print("   ");
+        
+        switch(procs[i]->state) {
+            case PROCESS_READY: shell_print("R     "); break;
+            case PROCESS_RUNNING: shell_print("RUN   "); break;
+            case PROCESS_WAITING: shell_print("W     "); break;
+            case PROCESS_ZOMBIE: shell_print("Z     "); break;
+            default: shell_print("?     "); break;
+        }
+        
+        shell_print(procs[i]->name);
+        shell_print("\n");
+    }
+    return 0;
+}
+
+static int cmd_kill(int argc, char** argv) {
+    if (argc < 2) {
+        shell_print("usage: kill <pid>\n");
+        return -1;
+    }
+    
+    int pid = 0;
+    char* p = argv[1];
+    while (*p) {
+        if (*p < '0' || *p > '9') {
+            shell_print("invalid pid\n");
+            return -1;
+        }
+        pid = pid * 10 + (*p - '0');
+        p++;
+    }
+    
+    if (sched_kill(pid) == 0) {
+        shell_print("killed ");
+        shell_print_num(pid);
+        shell_print("\n");
+        return 0;
+    } else {
+        shell_print("kill failed\n");
+        return -1;
+    }
+}
+
 void commands_init(void) {
-    shell_register_command("help", cmd_help, "Show this help");
-    shell_register_command("clear", cmd_clear, "Clear screen");
-    shell_register_command("mem", cmd_mem, "Show memory usage");
-    shell_register_command("echo", cmd_echo, "Echo arguments");
-    shell_register_command("ticks", cmd_ticks, "Show system ticks");
-    shell_register_command("uwr", cmd_uwr, "UWR text editor [--vesa]");
+    shell_register_command("help", cmd_help, "show help");
+    shell_register_command("clear", cmd_clear, "clear screen");
+    shell_register_command("mem", cmd_mem, "show memory");
+    shell_register_command("echo", cmd_echo, "echo args");
+    shell_register_command("ticks", cmd_ticks, "system ticks");
+    shell_register_command("uwr", cmd_uwr, "text editor");
+    shell_register_command("ps", cmd_ps, "list processes");
+    shell_register_command("kill", cmd_kill, "kill process");
 }

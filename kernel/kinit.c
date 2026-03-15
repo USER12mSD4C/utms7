@@ -3,103 +3,148 @@
 #include "../fs/ufs.h"
 #include "memory.h"
 #include "../include/io.h"
+#include "../include/module.h"
 
-#define MODULE_MAGIC 0x4B4F4D55
-
-typedef struct {
-    u32 magic;
-    char name[32];
-    u32 class;
-    u32 version;
-    u32 text_offset;
-    u32 data_offset;
-    u32 rodata_offset;
-    u32 bss_size;
-    u32 text_size;
-    u32 data_size;
-    u32 rodata_size;
-    u32 entry_point;
-    u32 symtab_offset;
-    u32 symtab_count;
-    u32 strtab_offset;
-    u32 strtab_size;
-} module_header_t;
-
-typedef struct {
-    u32 name_offset;
-    u32 value_offset;
-    u8 type;
-    u8 bind;
-    u16 shndx;
-} module_sym_t;
-
-typedef struct loaded_module {
-    char name[32];
-    void* base;
-    int (*entry)(void);
-    struct loaded_module* next;
-    u32 symtab_count;
-    module_sym_t* symtab;
-    char* strtab;
-} loaded_module_t;
+// Внешние функции диска
+extern int disk_read(u32 lba, u8* buffer);
+extern int disk_write(u32 lba, u8* buffer);
+extern int disk_set_disk(int n);
+extern u64 disk_get_sectors(u8 drive);
 
 static loaded_module_t* module_list = NULL;
 
-// Поиск символа во всех загруженных модулях
-static void* find_any_symbol(const char* name) {
-    loaded_module_t* mod = module_list;
+// Таблица символов ядра (экспортируемые функции)
+typedef struct {
+    const char* name;
+    void* addr;
+} kernel_sym_t;
+
+// Ядерные символы, доступные модулям
+static kernel_sym_t kernel_syms[] = {
+    // Память
+    {"kmalloc", kmalloc},
+    {"kfree", kfree},
+    {"memory_used", memory_used},
+    {"memory_free", memory_free},
     
+    // Видео
+    {"vga_write", vga_write},
+    {"vga_putchar", vga_putchar},
+    {"vga_clear", vga_clear},
+    {"vga_setcolor", vga_setcolor},
+    {"vga_setpos", vga_setpos},
+    {"vga_update_cursor", vga_update_cursor},
+    
+    // Диск
+    {"disk_read", disk_read},
+    {"disk_write", disk_write},
+    {"disk_set_disk", disk_set_disk},
+    {"disk_get_sectors", disk_get_sectors},
+    
+    // ФС
+    {"ufs_read", ufs_read},
+    {"ufs_write", ufs_write},
+    {"ufs_mkdir", ufs_mkdir},
+    {"ufs_exists", ufs_exists},
+    {"ufs_isdir", ufs_isdir},
+    {"ufs_readdir", ufs_readdir},
+    {"ufs_delete", ufs_delete},
+    {"ufs_rmdir", ufs_rmdir},
+    {"ufs_rmdir_force", ufs_rmdir_force},
+    
+    // Строки
+    {"strcpy", strcpy},
+    {"strncpy", strncpy},
+    {"strcmp", strcmp},
+    {"strncmp", strncmp},
+    {"strlen", strlen},
+    {"strchr", strchr},
+    {"strrchr", strrchr},
+    {"strstr", strstr},
+    {"strcat", strcat},
+    {"memcpy", memcpy},
+    {"memset", memset},
+    {"memcmp", memcmp},
+    {"sprintf", sprintf},
+    {"snprintf", snprintf},
+    
+    {NULL, NULL}
+};
+
+// Поиск символа в ядре и загруженных модулях
+static void* resolve_symbol(const char* name) {
+    // Ищем в ядре
+    for (kernel_sym_t* ks = kernel_syms; ks->name != NULL; ks++) {
+        if (strcmp(ks->name, name) == 0) {
+            return ks->addr;
+        }
+    }
+    
+    // Ищем в загруженных модулях
+    loaded_module_t* mod = module_list;
     while (mod) {
-        for (u32 i = 0; i < mod->symtab_count; i++) {
-            char* sym_name = mod->strtab + mod->symtab[i].name_offset;
-            if (strcmp(sym_name, name) == 0) {
-                return mod->base + mod->symtab[i].value_offset;
+        if (mod->symtab && mod->strtab) {
+            for (u32 i = 0; i < mod->symtab_count; i++) {
+                char* sym_name = mod->strtab + mod->symtab[i].name_offset;
+                if (strcmp(sym_name, name) == 0) {
+                    // Глобальные определенные символы
+                    if (mod->symtab[i].type == 1) {
+                        return mod->text_base + mod->symtab[i].value_offset;
+                    }
+                }
             }
         }
         mod = mod->next;
     }
+    
     return NULL;
 }
 
-// Разрешение символов модуля
-static void resolve_module_syms(loaded_module_t* mod) {
+// Разрешение всех неопределенных символов в модуле
+static int resolve_module_symbols(loaded_module_t* mod) {
+    if (!mod->symtab || !mod->strtab) return 0;
+    
+    int resolved = 0;
+    int unresolved = 0;
+    
     for (u32 i = 0; i < mod->symtab_count; i++) {
-        if (mod->symtab[i].shndx == 0) { // UNDEF - внешний символ
+        // UNDEF (type == 2) - символ должен быть определен где-то еще
+        if (mod->symtab[i].type == 2) {
             char* sym_name = mod->strtab + mod->symtab[i].name_offset;
-            void* addr = find_any_symbol(sym_name);
+            void* addr = resolve_symbol(sym_name);
             
             if (addr) {
-                u64* target = mod->base + mod->symtab[i].value_offset;
+                // Записываем адрес в нужное место
+                u64* target = (u64*)(mod->text_base + mod->symtab[i].value_offset);
                 *target = (u64)addr;
-            }
-        }
-    }
-}
-
-// Сканирование памяти в поисках функций
-static void scan_memory_for_symbols(void) {
-    u8* start = (u8*)0x100000;
-    u8* end = (u8*)0x200000;
-    
-    for (u64 addr = (u64)start; addr < (u64)end - 8; addr++) {
-        u8* p = (u8*)addr;
-        
-        if (p[0] == 0x55 && p[1] == 0x48 && p[2] == 0x89 && p[3] == 0xE5) {
-            for (int i = 4; i < 100 && addr + i < (u64)end; i++) {
-                if (p[i] == 0xC3) {
-                    // TODO: добавить найденную функцию в таблицу символов
-                    break;
+                resolved++;
+            } else {
+                // Пропускаем специальные символы
+                if (sym_name[0] != '_' && strcmp(sym_name, "_GLOBAL_OFFSET_TABLE_") != 0) {
+                    vga_write("  unresolved: ");
+                    vga_write(sym_name);
+                    vga_write("\n");
+                    unresolved++;
                 }
             }
         }
     }
+    
+    if (unresolved > 0) {
+        return -1;
+    }
+    
+    return 0;
 }
 
-static int module_load(const char* path) {
+// Загрузка модуля из файла
+int module_load(const char* path) {
     u8* data;
     u32 size;
     
-    if (ufs_read(path, &data, &size) != 0) return -1;
+    if (ufs_read(path, &data, &size) != 0) {
+        return -1;
+    }
     
     module_header_t* hdr = (module_header_t*)data;
     if (hdr->magic != MODULE_MAGIC) {
@@ -107,6 +152,23 @@ static int module_load(const char* path) {
         return -1;
     }
     
+    // Проверяем размер
+    if (size < sizeof(module_header_t)) {
+        kfree(data);
+        return -1;
+    }
+    
+    // Проверяем, не загружен ли уже
+    loaded_module_t* existing = module_list;
+    while (existing) {
+        if (strcmp(existing->name, hdr->name) == 0) {
+            kfree(data);
+            return -1;
+        }
+        existing = existing->next;
+    }
+    
+    // Выделяем память под сегменты модуля
     u32 total = hdr->text_size + hdr->data_size + hdr->rodata_size + hdr->bss_size;
     u8* base = kmalloc(total);
     if (!base) {
@@ -114,71 +176,167 @@ static int module_load(const char* path) {
         return -1;
     }
     
-    memcpy(base, data + hdr->text_offset, hdr->text_size);
-    memcpy(base + hdr->text_size, data + hdr->data_offset, hdr->data_size);
-    memcpy(base + hdr->text_size + hdr->data_size, data + hdr->rodata_offset, hdr->rodata_size);
-    memset(base + hdr->text_size + hdr->data_size + hdr->rodata_size, 0, hdr->bss_size);
+    // Копируем сегменты
+    if (hdr->text_size > 0) {
+        memcpy(base, data + hdr->text_offset, hdr->text_size);
+    }
+    if (hdr->data_size > 0) {
+        memcpy(base + hdr->text_size, data + hdr->data_offset, hdr->data_size);
+    }
+    if (hdr->rodata_size > 0) {
+        memcpy(base + hdr->text_size + hdr->data_size, data + hdr->rodata_offset, hdr->rodata_size);
+    }
+    if (hdr->bss_size > 0) {
+        memset(base + hdr->text_size + hdr->data_size + hdr->rodata_size, 0, hdr->bss_size);
+    }
     
+    // Загружаем таблицу символов
     module_sym_t* symtab = NULL;
     char* strtab = NULL;
     
-    if (hdr->symtab_count > 0) {
+    if (hdr->symtab_count > 0 && hdr->symtab_offset > 0 && hdr->strtab_offset > 0) {
         symtab = kmalloc(hdr->symtab_count * sizeof(module_sym_t));
-        memcpy(symtab, data + hdr->symtab_offset, hdr->symtab_count * sizeof(module_sym_t));
+        if (symtab) {
+            memcpy(symtab, data + hdr->symtab_offset, hdr->symtab_count * sizeof(module_sym_t));
+        }
         
         strtab = kmalloc(hdr->strtab_size);
-        memcpy(strtab, data + hdr->strtab_offset, hdr->strtab_size);
+        if (strtab) {
+            memcpy(strtab, data + hdr->strtab_offset, hdr->strtab_size);
+        }
     }
     
+    // Создаём запись о модуле
     loaded_module_t* mod = kmalloc(sizeof(loaded_module_t));
+    if (!mod) {
+        kfree(base);
+        kfree(data);
+        if (symtab) kfree(symtab);
+        if (strtab) kfree(strtab);
+        return -1;
+    }
+    
     strcpy(mod->name, hdr->name);
-    mod->base = base;
+    mod->class = hdr->class;
+    mod->version = hdr->version;
+    mod->text_base = base;
+    mod->data_base = base + hdr->text_size;
+    mod->rodata_base = base + hdr->text_size + hdr->data_size;
+    mod->bss_base = base + hdr->text_size + hdr->data_size + hdr->rodata_size;
+    mod->text_size = hdr->text_size;
+    mod->data_size = hdr->data_size;
+    mod->rodata_size = hdr->rodata_size;
+    mod->bss_size = hdr->bss_size;
     mod->entry = (int (*)(void))(base + hdr->entry_point);
-    mod->next = module_list;
     mod->symtab_count = hdr->symtab_count;
     mod->symtab = symtab;
     mod->strtab = strtab;
+    mod->next = module_list;
+    
     module_list = mod;
     
     kfree(data);
     
-    resolve_module_syms(mod);
-    
-    vga_write("  ");
-    vga_write(hdr->name);
-    int len = strlen(hdr->name);
-    for (int j = len; j < 16; j++) vga_putchar(' ');
-    
-    int result = mod->entry();
-    if (result == 0) {
-        vga_setcolor(0x0A, 0x00);
-        vga_write("OK\n");
-    } else {
-        vga_setcolor(0x0C, 0x00);
-        vga_write("FAILED\n");
+    // Разрешаем внешние символы
+    if (resolve_module_symbols(mod) != 0) {
+        return -1;
     }
-    vga_setcolor(0x07, 0x00);
     
-    return result;
+    return 0;
 }
 
+// Поиск символа по имени во всех модулях
+void* module_sym(const char* name, const char* module) {
+    if (module) {
+        // Ищем в конкретном модуле
+        loaded_module_t* mod = module_list;
+        while (mod) {
+            if (strcmp(mod->name, module) == 0) {
+                if (mod->symtab && mod->strtab) {
+                    for (u32 i = 0; i < mod->symtab_count; i++) {
+                        char* sym_name = mod->strtab + mod->symtab[i].name_offset;
+                        if (strcmp(sym_name, name) == 0) {
+                            return mod->text_base + mod->symtab[i].value_offset;
+                        }
+                    }
+                }
+                return NULL;
+            }
+            mod = mod->next;
+        }
+    } else {
+        // Ищем везде
+        return resolve_symbol(name);
+    }
+    return NULL;
+}
+
+// Выгрузка модуля
+int module_unload(const char* name) {
+    loaded_module_t* prev = NULL;
+    loaded_module_t* mod = module_list;
+    
+    while (mod) {
+        if (strcmp(mod->name, name) == 0) {
+            if (prev) {
+                prev->next = mod->next;
+            } else {
+                module_list = mod->next;
+            }
+            
+            // Освобождаем память
+            if (mod->text_base) kfree(mod->text_base);
+            if (mod->symtab) kfree(mod->symtab);
+            if (mod->strtab) kfree(mod->strtab);
+            kfree(mod);
+            
+            return 0;
+        }
+        prev = mod;
+        mod = mod->next;
+    }
+    return -1;
+}
+
+// Загружает ВСЕ модули из папки /modules, сортируя по приоритету
 void kinit_run_all(void) {
-    vga_write("\nKinit: scanning memory for built-in drivers...\n");
-    
-    // Сначала сканируем память для встроенных функций
-    scan_memory_for_symbols();
-    
-    vga_write("Kinit: loading modules from /modules/\n");
+    vga_write("\nKinit: scanning /modules/\n");
     
     FSNode* entries;
     u32 count;
     
     if (ufs_readdir("/modules", &entries, &count) != 0) {
-        vga_write("No /modules/ directory\n");
+        vga_write("  No /modules/ directory found\n");
         return;
     }
     
+    // Сначала считаем сколько .ko файлов
+    int module_count = 0;
+    for (u32 i = 0; i < count; i++) {
+        if (entries[i].is_dir) continue;
+        
+        int len = strlen(entries[i].name);
+        if (len > 3 && strcmp(entries[i].name + len - 3, ".ko") == 0) {
+            module_count++;
+        }
+    }
+    
+    if (module_count == 0) {
+        vga_write("  No .ko modules found\n");
+        kfree(entries);
+        return;
+    }
+    
+    vga_write("  Found ");
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", module_count);
+    vga_write(buf);
+    vga_write(" modules\n\n");
+    
+    // Загружаем все модули
     int loaded = 0;
+    int failed = 0;
+    
     for (u32 i = 0; i < count; i++) {
         if (entries[i].is_dir) continue;
         
@@ -187,15 +345,69 @@ void kinit_run_all(void) {
             char path[256];
             snprintf(path, sizeof(path), "/modules/%s", entries[i].name);
             
-            if (module_load(path) == 0) loaded++;
+            vga_write("  Loading ");
+            vga_write(entries[i].name);
+            vga_write("... ");
+            
+            int result = module_load(path);
+            
+            if (result == 0) {
+                vga_setcolor(0x0A, 0x00);
+                vga_write("OK\n");
+                loaded++;
+            } else {
+                vga_setcolor(0x0C, 0x00);
+                vga_write("FAILED\n");
+                failed++;
+            }
+            vga_setcolor(0x07, 0x00);
         }
     }
     
     kfree(entries);
     
     vga_write("\nKinit: ");
-    char buf[16];
     snprintf(buf, sizeof(buf), "%d", loaded);
     vga_write(buf);
-    vga_write(" modules loaded\n");
+    vga_write(" loaded, ");
+    snprintf(buf, sizeof(buf), "%d", failed);
+    vga_write(buf);
+    vga_write(" failed\n");
+    
+    // Вызываем entry() для всех успешно загруженных модулей
+    vga_write("\nKinit: initializing modules\n");
+    
+    loaded_module_t* mod = module_list;
+    int init_ok = 0;
+    int init_failed = 0;
+    
+    while (mod) {
+        if (mod->entry) {
+            vga_write("  ");
+            vga_write(mod->name);
+            int len = strlen(mod->name);
+            for (int j = len; j < 16; j++) vga_putchar(' ');
+            
+            int result = mod->entry();
+            if (result == 0) {
+                vga_setcolor(0x0A, 0x00);
+                vga_write("OK\n");
+                init_ok++;
+            } else {
+                vga_setcolor(0x0C, 0x00);
+                vga_write("FAILED\n");
+                init_failed++;
+            }
+            vga_setcolor(0x07, 0x00);
+        }
+        mod = mod->next;
+    }
+    
+    vga_write("\nKinit: ");
+    snprintf(buf, sizeof(buf), "%d", init_ok);
+    vga_write(buf);
+    vga_write(" initialized, ");
+    snprintf(buf, sizeof(buf), "%d", init_failed);
+    vga_write(buf);
+    vga_write(" failed\n");
 }

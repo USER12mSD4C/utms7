@@ -15,8 +15,8 @@ typedef struct {
     u8 is_dir;
 } __attribute__((packed)) FSNode;
 
-int ufs_mount(u32 start_lba);
-int ufs_format(u32 start_lba, u32 blocks);
+int ufs_mount(u32 start_lba, int disk);
+int ufs_format(u32 start_lba, u32 blocks, int disk);
 int ufs_write(const char* path, u8* data, u32 size);
 int ufs_read(const char* path, u8** data, u32* size);
 int ufs_delete(const char* path);
@@ -29,5 +29,9 @@ int ufs_isdir(const char* path);
 int ufs_stat(u32* total, u32* used, u32* free);
 int ufs_cp(const char* src, const char* dst);
 int ufs_mv(const char* src, const char* dst);
+int ufs_rewrite(const char* path, u8* data, u32 size);
+int ufs_ismounted(void);
+const char* ufs_get_device(void);
+int ufs_umount(void);
 
 #endif
