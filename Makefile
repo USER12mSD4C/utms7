@@ -36,17 +36,36 @@ NORMAL_OBJS = $(CORE_OBJS) \
               shell/shell.o \
               shell/uss.o \
               commands/builtin.o \
-              commands/disk.o \
               commands/fs.o \
               apps/uwr.o
 
-LIVECD_OBJS = $(CORE_OBJS) \
+LIVECD_OBJS = kernel/entry.o \
+              kernel/kernel-livecd.o \
+              kernel/kinit.o \
+              kernel/idt.o \
+              kernel/idt_irq.o \
+              kernel/memory.o \
+              kernel/paging.o \
+              kernel/kapi.o \
+              kernel/gdt.o \
+              kernel/panic.o \
+              kernel/sched.o \
+              kernel/sched_asm.o \
+              drivers/vga.o \
+              drivers/vesa.o \
+              drivers/keyboard.o \
+              drivers/mouse.o \
+              drivers/disk.o \
+              drivers/gpt.o \
+              drivers/udisk.o \
+              lib/string.o \
+              lib/font.o \
+              lib/path.o \
               fs/ufs.o \
               fs/fat.o \
               shell/shell.o \
               shell/uss.o \
               commands/builtin.o \
-              commands/disk.o \
               commands/fs.o \
               apps/installer.o \
               apps/uwr.o
@@ -76,9 +95,11 @@ iso: kernel.bin kom
 	grub-mkrescue -o utms.iso iso/
 
 livecd: kernel-livecd.bin kom
-	@mkdir -p livecd/boot/grub livecd/modules
+	@mkdir -p livecd/boot/grub livecd/modules livecd/system/boot livecd/system/modules
 	cp kernel-livecd.bin livecd/boot/kernel.bin
+	cp kernel.bin livecd/system/boot/kernel.bin 2>/dev/null || true
 	cp modules/*.ko livecd/modules/ 2>/dev/null || true
+	cp modules/*.ko livecd/system/modules/ 2>/dev/null || true
 	echo 'set timeout=5' > livecd/boot/grub/grub.cfg
 	echo 'menuentry "UTMS LiveCD" {' >> livecd/boot/grub/grub.cfg
 	echo '    multiboot2 /boot/kernel.bin' >> livecd/boot/grub/grub.cfg

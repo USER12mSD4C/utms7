@@ -11,7 +11,6 @@
 #include "../drivers/disk.h"
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
-#include "../commands/disk.h"
 
 void kernel_main(void *mb_info) {
     (void)mb_info;
@@ -60,7 +59,7 @@ void kernel_main(void *mb_info) {
     __asm__ volatile ("sti");
     
     vga_write("Mounting UFS... ");
-    if (ufs_mount(2048, 0) == 0) {  // по умолчанию первый диск
+    if (ufs_mount(2048, 0) == 0) {
         vga_write("OK\n");
     } else {
         vga_write("FAILED (no UFS partition)\n");
@@ -68,14 +67,14 @@ void kernel_main(void *mb_info) {
     
     kinit_run_all();
     
-    vga_write("\nshell init... ");
+    vga_write("shell init... ");
     shell_init();
     commands_init();
     fs_commands_init();
-    disk_commands_init();
+    // disk_commands_init() убрали
     vga_write("OK\n");
     
-    vga_write("\n\nwelcome to UTMS!\n");
+    vga_write("welcome to UTMS!\n");
     vga_write("Type 'help' for commands\n");
     shell_run();
     

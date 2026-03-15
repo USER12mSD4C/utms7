@@ -11,8 +11,10 @@
 #include "../drivers/disk.h"
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
-#include "../commands/disk.h"
 #include "../apps/installer.h"
+
+// Внешняя функция из drivers/udisk.c
+void disk_commands_init(void);
 
 void kernel_main(void *mb_info) {
     (void)mb_info;
@@ -23,45 +25,45 @@ void kernel_main(void *mb_info) {
     vga_clear();
     vga_write("UTMS LiveCD\n");
     
-    vga_write("[1/7] GDT... ");
+    vga_write("[1/8] GDT... ");
     gdt_init();
     vga_write("OK\n");
     
-    vga_write("[2/7] IDT... ");
+    vga_write("[2/8] IDT... ");
     idt_init();
     vga_write("OK\n");
     
-    vga_write("[3/7] Memory... ");
+    vga_write("[3/8] Memory... ");
     memory_init(0x100000, 32 * 1024 * 1024);
     vga_write("OK\n");
     
-    vga_write("[4/7] Paging... ");
+    vga_write("[4/8] Paging... ");
     if (paging_init() != 0) {
         vga_write("FAILED\n");
         while(1);
     }
     vga_write("OK\n");
     
-    vga_write("[5/7] Timer... ");
+    vga_write("[5/8] Timer... ");
     timer_init();
     vga_write("OK\n");
     
-    vga_write("[6/7] Scheduler... ");
+    vga_write("[6/8] Scheduler... ");
     sched_init();
     vga_write("OK\n");
     
-    vga_write("[7/7] Disk... ");
+    vga_write("[7/8] Disk... ");
     disk_init();
     vga_write("OK\n");
     
-    vga_write("[8/7] Keyboard... ");
+    vga_write("[8/8] Keyboard... ");
     keyboard_init();
     vga_write("OK\n");
     
     __asm__ volatile ("sti");
     
     vga_write("Mounting UFS (live)... ");
-    if (ufs_mount(2048, 0) == 0) {  // livecd всегда на первом диске
+    if (ufs_mount(2048, 0) == 0) {
         vga_write("OK\n");
     } else {
         vga_write("FAILED\n");
@@ -69,10 +71,12 @@ void kernel_main(void *mb_info) {
     
     kinit_run_all();
     
+    vga_write("shell init... ");
     shell_init();
     commands_init();
     fs_commands_init();
-    disk_commands_init();
+    disk_commands_init();  // ← добавляем
+    vga_write("OK\n");
     
     shell_register_command("install", install_main, "install system to disk");
     

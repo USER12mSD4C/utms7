@@ -20,6 +20,13 @@ i dont recommend use it, still untested
 - `commands/` – shell command implementations
 - `modules/` - compiled drivers into .ko
 
+## last huge update
+
+working UWR (utms write-reader)
+working mbr/gpt
+udisk instead of straight gpt
+livecd install (in work)
+
 ## Requirements
 
 - x86-64 machine or emulator (QEMU)

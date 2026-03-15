@@ -13,6 +13,7 @@
 
 #ifdef UFS_DEBUG
 #include "../include/stdarg.h"
+
 static void ufs_log(const char* fmt, ...) {
     char buf[256];
     char* p = buf;
@@ -407,6 +408,7 @@ int ufs_ismounted(void) {
 }
 
 const char* ufs_get_device(void) {
+    if (!mounted) return "";
     return mounted_device;
 }
 
@@ -433,11 +435,13 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     strcpy(e[0].name, ".");
     e[0].first_block = ROOTDIR_BLOCK;
     e[0].is_dir = 1;
+    e[0].size = 0;
     e[0].next_block = 0;
     
     strcpy(e[1].name, "..");
     e[1].first_block = ROOTDIR_BLOCK;
     e[1].is_dir = 1;
+    e[1].size = 0;
     e[1].next_block = 0;
     
     if (disk_write(start_lba + ROOTDIR_BLOCK, buf) != 0) return -1;
