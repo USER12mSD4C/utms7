@@ -6,6 +6,7 @@
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
 #include "../commands/fs.h"
+#include "../fs/ufs.h"
 
 #define MAX_COMMANDS 64
 #define MAX_LINE_LEN 512
@@ -133,6 +134,7 @@ void shell_print_hex(u32 num) {
     vga_putchar(hex[num & 0xF]);
 }
 
+// Дополнение команд
 static int complete_command(const char* prefix, char* buffer, int bufsize) {
     int matches = 0;
     int first_match = -1;
@@ -141,14 +143,13 @@ static int complete_command(const char* prefix, char* buffer, int bufsize) {
         if (strncmp(commands[i].name, prefix, strlen(prefix)) == 0) {
             if (matches == 0) {
                 first_match = i;
+                strcpy(buffer, commands[i].name);
             }
             matches++;
         }
     }
     
-    if (matches == 1 && first_match >= 0) {
-        strncpy(buffer, commands[first_match].name, bufsize - 1);
-        buffer[bufsize - 1] = '\0';
+    if (matches == 1) {
         return 1;
     }
     
@@ -163,6 +164,53 @@ static int complete_command(const char* prefix, char* buffer, int bufsize) {
         }
     }
     
+    return matches;
+}
+
+// Дополнение имён файлов
+static int complete_filename(const char* prefix, char* buffer, int bufsize) {
+    FSNode* entries;
+    u32 count;
+    int matches = 0;
+    int first_match = -1;
+    
+    if (ufs_readdir(current_dir, &entries, &count) != 0) {
+        return 0;
+    }
+    
+    for (u32 i = 0; i < count; i++) {
+        if (strncmp(entries[i].name, prefix, strlen(prefix)) == 0) {
+            if (matches == 0) {
+                first_match = i;
+                strcpy(buffer, entries[i].name);
+            }
+            matches++;
+        }
+    }
+    
+    if (matches == 1) {
+        kfree(entries);
+        return 1;
+    }
+    
+    if (matches > 1) {
+        vga_putchar('\n');
+        for (u32 i = 0; i < count; i++) {
+            if (strncmp(entries[i].name, prefix, strlen(prefix)) == 0) {
+                if (entries[i].is_dir) {
+                    shell_print("  ");
+                    shell_print(entries[i].name);
+                    shell_print("/\n");
+                } else {
+                    shell_print("  ");
+                    shell_print(entries[i].name);
+                    vga_putchar('\n');
+                }
+            }
+        }
+    }
+    
+    kfree(entries);
     return matches;
 }
 
@@ -194,6 +242,21 @@ static void print_prompt(void) {
     shell_print("> ");
 }
 
+static void redraw_line(const char* line, int pos, u8 input_x, u8 input_y, u8* cursor_x) {
+    vga_setpos(input_x, input_y);
+    for (int i = 0; i < 80 - input_x; i++) {
+        vga_putchar(' ');
+    }
+    
+    vga_setpos(input_x, input_y);
+    for (int i = 0; i < pos; i++) {
+        vga_putchar(line[i]);
+    }
+    
+    *cursor_x = input_x + pos;
+    vga_setpos(*cursor_x, input_y);
+}
+
 void shell_run(void) {
     char line[MAX_LINE_LEN];
     int pos = 0;
@@ -201,10 +264,8 @@ void shell_run(void) {
     u8 cursor_y = 0;
     
     while (1) {
-        // Печатаем промпт
         print_prompt();
         
-        // Получаем позицию после промпта
         vga_getpos(&cursor_x, &cursor_y);
         u8 input_x = cursor_x;
         u8 input_y = cursor_y;
@@ -239,21 +300,7 @@ void shell_run(void) {
                     history_pos++;
                     strcpy(line, history[history_pos]);
                     pos = strlen(line);
-                    
-                    // Очищаем строку ввода
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < 80 - input_x; i++) {
-                        vga_putchar(' ');
-                    }
-                    
-                    // Печатаем новую строку
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) {
-                        vga_putchar(line[i]);
-                    }
-                    
-                    cursor_x = input_x + pos;
-                    vga_setpos(cursor_x, input_y);
+                    redraw_line(line, pos, input_x, input_y, &cursor_x);
                 }
                 continue;
             }
@@ -266,19 +313,7 @@ void shell_run(void) {
                         line[0] = '\0';
                     }
                     pos = strlen(line);
-                    
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < 80 - input_x; i++) {
-                        vga_putchar(' ');
-                    }
-                    
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) {
-                        vga_putchar(line[i]);
-                    }
-                    
-                    cursor_x = input_x + pos;
-                    vga_setpos(cursor_x, input_y);
+                    redraw_line(line, pos, input_x, input_y, &cursor_x);
                 }
                 continue;
             }
@@ -287,32 +322,34 @@ void shell_run(void) {
             if (k == '\t') {
                 if (pos > 0) {
                     char completion[256];
-                    int result = complete_command(line, completion, sizeof(completion));
+                    int result;
+                    
+                    // Определяем, что дополнять
+                    int is_first_word = 1;
+                    for (int i = 0; i < pos; i++) {
+                        if (line[i] == ' ') {
+                            is_first_word = 0;
+                            break;
+                        }
+                    }
+                    
+                    if (is_first_word) {
+                        result = complete_command(line, completion, sizeof(completion));
+                    } else {
+                        result = complete_filename(line, completion, sizeof(completion));
+                    }
                     
                     if (result == 1) {
                         strcpy(line, completion);
                         pos = strlen(line);
-                        
-                        vga_setpos(input_x, input_y);
-                        for (int i = 0; i < 80 - input_x; i++) {
-                            vga_putchar(' ');
-                        }
-                        
-                        vga_setpos(input_x, input_y);
-                        for (int i = 0; i < pos; i++) {
-                            vga_putchar(line[i]);
-                        }
-                        
-                        cursor_x = input_x + pos;
-                        vga_setpos(cursor_x, input_y);
+                        redraw_line(line, pos, input_x, input_y, &cursor_x);
                     } else if (result > 1) {
-                        // Список команд уже выведен, печатаем промпт и текущую строку заново
+                        // Список уже выведен, печатаем промпт и текущую строку заново
                         vga_setpos(0, input_y + 1);
                         print_prompt();
                         for (int i = 0; i < pos; i++) {
                             vga_putchar(line[i]);
                         }
-                        // Обновляем позиции
                         vga_getpos(&cursor_x, &cursor_y);
                         input_x = cursor_x - pos;
                         input_y = cursor_y;
@@ -326,25 +363,13 @@ void shell_run(void) {
                 if (cursor_x > input_x) {
                     int idx = cursor_x - input_x - 1;
                     
-                    // Сдвигаем строку
                     for (int i = idx; i < pos; i++) {
                         line[i] = line[i+1];
                     }
                     pos--;
                     cursor_x--;
                     
-                    // Перерисовываем
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < 80 - input_x; i++) {
-                        vga_putchar(' ');
-                    }
-                    
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) {
-                        vga_putchar(line[i]);
-                    }
-                    
-                    vga_setpos(cursor_x, input_y);
+                    redraw_line(line, pos, input_x, input_y, &cursor_x);
                 }
                 continue;
             }
@@ -365,7 +390,6 @@ void shell_run(void) {
                 if (pos < MAX_LINE_LEN - 1) {
                     int idx = cursor_x - input_x;
                     
-                    // Сдвигаем правую часть
                     for (int i = pos; i > idx; i--) {
                         line[i] = line[i-1];
                     }
@@ -373,13 +397,12 @@ void shell_run(void) {
                     pos++;
                     cursor_x++;
                     
-                    // Печатаем от позиции вставки до конца
+                    // Перерисовываем от позиции вставки
                     vga_setpos(cursor_x - 1, input_y);
                     for (int i = idx; i < pos; i++) {
                         vga_putchar(line[i]);
                     }
                     
-                    // Возвращаем курсор
                     vga_setpos(cursor_x, input_y);
                 }
                 continue;
