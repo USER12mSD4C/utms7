@@ -1,10 +1,10 @@
 #include "../include/string.h"
-#include "../include/path.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
 #include "../kernel/memory.h"
 #include "../commands/fs.h"
+#include "../include/path.h"
 #include "uwr.h"
 
 #define TAB_SIZE 4
@@ -29,17 +29,48 @@ typedef struct {
     int top_line;
     int lines_count;
     int modified;
-    char filename[256];      // Оригинальное имя для отображения
-    char fullpath[256];      // Полный путь для сохранения
+    char filename[256];
+    char fullpath[256];
     int running;
 } UWR;
 
 static UWR e;
 
-// Прототип функции из fs/ufs.c (она уже есть в проекте)
-void build_path(const char* arg, char* result);
+// ========== ПРОТОТИПЫ ==========
+static Line* line_new(void);
+static void line_free(Line *l);
+static void line_ensure_capacity(Line *l, int needed);
+static void line_insert_char(Line *l, int pos, char c);
+static void line_delete_char(Line *l, int pos);
+static void line_append(Line *l, const char *s);
 
-// ========== РАБОТА СО СТРОКАМИ ==========
+static void e_init(void);
+static void e_free(void);
+
+static void e_move_up(void);
+static void e_move_down(void);
+static void e_move_left(void);
+static void e_move_right(void);
+static void e_move_home(void);
+static void e_move_end(void);
+static void e_page_up(void);
+static void e_page_down(void);
+
+static void e_insert_char(char c);
+static void e_newline(void);
+static void e_backspace(void);
+static void e_delete(void);
+static void e_tab(void);
+
+static void e_draw_status(void);
+static void e_draw_text(void);
+static void e_draw_cursor(void);
+static void e_draw(void);
+
+static void e_show_message(const char *msg, int color);
+static void e_clear_message(void);
+
+// ========== РЕАЛИЗАЦИИ ==========
 
 static Line* line_new(void) {
     Line *l = kmalloc(sizeof(Line));
@@ -114,8 +145,6 @@ static void line_append(Line *l, const char *s) {
     l->text[l->len] = '\0';
 }
 
-// ========== ИНИЦИАЛИЗАЦИЯ ==========
-
 static void e_init(void) {
     e.first = e.last = e.current = NULL;
     e.cursor_x = 0;
@@ -123,6 +152,8 @@ static void e_init(void) {
     e.top_line = 0;
     e.lines_count = 0;
     e.modified = 0;
+    e.filename[0] = '\0';
+    e.fullpath[0] = '\0';
     e.running = 1;
     
     Line *l = line_new();
@@ -352,84 +383,94 @@ static void e_tab(void) {
 // ========== ФАЙЛОВЫЕ ОПЕРАЦИИ ==========
 
 int uwr_open(const char *filename) {
-    // Сохраняем имя для отображения
     if (filename && filename[0]) {
         strcpy(e.filename, filename);
-        
-        // Используем готовую build_path из UFS
         build_path(filename, e.fullpath);
     } else {
         strcpy(e.filename, "untitled");
         e.fullpath[0] = '\0';
     }
     
-    // Очищаем старый документ
     e_free();
+    e_init();
     
-    // Создаём новый пустой документ
-    e.first = e.last = e.current = NULL;
-    e.cursor_x = 0;
-    e.cursor_y = 0;
-    e.top_line = 0;
-    e.lines_count = 0;
-    e.modified = 0;
-    e.running = 1;
-    
-    Line *l = line_new();
-    if (l) {
-        e.first = e.last = e.current = l;
-        e.lines_count = 1;
-    }
-    
-    // Если файл не существует - выходим
     if (e.fullpath[0] == '\0' || !ufs_exists(e.fullpath) || ufs_isdir(e.fullpath)) {
         return 0;
     }
     
-    // Читаем файл
     u8 *data;
     u32 size;
     if (ufs_read(e.fullpath, &data, &size) != 0) {
         return 0;
     }
     
-    // Очищаем пустой документ
     e_free();
     e.first = e.last = e.current = NULL;
     e.lines_count = 0;
     
-    // Разбираем строки
     char *p = (char*)data;
-    while (*p) {
+    char line_buf[MAX_LINE_LEN];
+    int line_pos = 0;
+    
+    while (p < (char*)data + size) {
+        if (*p == '\r') {
+            p++;
+            continue;
+        }
+        
+        if (*p == '\n') {
+            line_buf[line_pos] = '\0';
+            
+            Line *l = line_new();
+            if (l) {
+                line_ensure_capacity(l, line_pos);
+                memcpy(l->text, line_buf, line_pos);
+                l->text[line_pos] = '\0';
+                l->len = line_pos;
+                
+                if (!e.first) {
+                    e.first = e.last = l;
+                } else {
+                    e.last->next = l;
+                    l->prev = e.last;
+                    e.last = l;
+                }
+                e.lines_count++;
+            }
+            
+            line_pos = 0;
+            p++;
+            continue;
+        }
+        
+        if (line_pos < MAX_LINE_LEN - 1) {
+            line_buf[line_pos++] = *p;
+        }
+        p++;
+    }
+    
+    if (line_pos > 0) {
+        line_buf[line_pos] = '\0';
         Line *l = line_new();
-        if (!l) break;
-        
-        char line_buf[MAX_LINE_LEN];
-        int i = 0;
-        while (*p && *p != '\n' && i < MAX_LINE_LEN - 1) {
-            line_buf[i++] = *p++;
+        if (l) {
+            line_ensure_capacity(l, line_pos);
+            memcpy(l->text, line_buf, line_pos);
+            l->text[line_pos] = '\0';
+            l->len = line_pos;
+            
+            if (!e.first) {
+                e.first = e.last = l;
+            } else {
+                e.last->next = l;
+                l->prev = e.last;
+                e.last = l;
+            }
+            e.lines_count++;
         }
-        line_buf[i] = '\0';
-        if (*p == '\n') p++;
-        
-        line_ensure_capacity(l, i);
-        memcpy(l->text, line_buf, i);
-        l->text[i] = '\0';
-        l->len = i;
-        
-        if (!e.first) {
-            e.first = e.last = l;
-        } else {
-            e.last->next = l;
-            l->prev = e.last;
-            e.last = l;
-        }
-        e.lines_count++;
     }
     
     kfree(data);
     
-    // Если файл был пуст
     if (e.lines_count == 0) {
         Line *l = line_new();
         if (l) {
@@ -460,7 +501,7 @@ int uwr_save(void) {
     }
     
     if (total_size <= 0) {
-        int result = ufs_write(e.fullpath, NULL, 0);
+        int result = ufs_rewrite(e.fullpath, NULL, 0);
         if (result == 0) e.modified = 0;
         return result;
     }
@@ -489,6 +530,20 @@ int uwr_save(void) {
 
 // ========== ОТОБРАЖЕНИЕ ==========
 
+static void e_show_message(const char *msg, int color) {
+    vga_setcolor(color, 0);
+    vga_setpos(40, 24);
+    for (int i = 0; i < 40; i++) vga_putchar(' ');
+    vga_setpos(40, 24);
+    vga_write(msg);
+    vga_setcolor(0x07, 0);
+}
+
+static void e_clear_message(void) {
+    vga_setpos(40, 24);
+    for (int i = 0; i < 40; i++) vga_putchar(' ');
+}
+
 static void e_draw_status(void) {
     vga_setcolor(0x0F, 0);
     vga_setpos(0, 0);
@@ -515,16 +570,6 @@ static void e_draw_status(void) {
     for (int i = 70; i < 80; i++) {
         vga_putchar(' ');
     }
-    
-    // Отладка путей
-    vga_setcolor(0x08, 0);
-    vga_setpos(0, 24);
-    vga_write("file='");
-    vga_write(e.filename);
-    vga_write("' path='");
-    vga_write(e.fullpath);
-    vga_write("'        ");
-    vga_setcolor(0x07, 0);
 }
 
 static void e_draw_text(void) {
@@ -600,25 +645,13 @@ static void e_draw(void) {
     e_draw_cursor();
 }
 
-static void e_show_message(const char *msg, int color) {
-    vga_setcolor(color, 0);
-    vga_setpos(40, 24);
-    
-    for (int i = 0; i < 40; i++) {
-        vga_putchar(' ');
-    }
-    
-    vga_setpos(40, 24);
-    vga_write(msg);
-    vga_setcolor(0x07, 0);
-}
-
 // ========== ОСНОВНОЙ ЦИКЛ ==========
 
 void uwr_main(const char *filename, int vesa) {
     (void)vesa;
     
     uwr_open(filename);
+    e.running = 1;
     e_draw();
     
     while (e.running) {
@@ -629,22 +662,11 @@ void uwr_main(const char *filename, int vesa) {
         
         // Ctrl+S (19) - сохранить
         if (k == 19) {
-            if (e.fullpath[0] == '\0') {
-                e_show_message("No filename!", 0x0C);
+            if (uwr_save() == 0) {
+                e_show_message("Saved", 0x0A);
             } else {
-                e_show_message("Saving...", 0x0F);
-                e_draw();
-                
-                for (int i = 0; i < 500000; i++) asm volatile ("nop");
-                
-                if (uwr_save() == 0) {
-                    e_show_message("Saved", 0x0A);
-                } else {
-                    e_show_message("Save failed!", 0x0C);
-                }
+                e_show_message("Save failed!", 0x0C);
             }
-            
-            for (int i = 0; i < 2000000; i++) asm volatile ("nop");
             e_draw();
             continue;
         }
@@ -660,10 +682,12 @@ void uwr_main(const char *filename, int vesa) {
                     
                     if (c == 's' || c == 'S') {
                         if (uwr_save() == 0) {
+                            e_clear_message();
                             e.running = 0;
                             break;
                         }
                     } else if (c == 'q' || c == 'Q') {
+                        e_clear_message();
                         e.running = 0;
                         break;
                     }

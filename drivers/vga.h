@@ -15,6 +15,7 @@ void vga_write_num(u32 num);
 void vga_write_hex(u32 num);
 void vga_setcolor(u8 fg, u8 bg);
 void vga_setpos(u8 x, u8 y);
+void vga_getpos(u8* x, u8* y);
 void vga_update_cursor(void);
 void vga_scroll_lines(i8 lines);
 

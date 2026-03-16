@@ -114,6 +114,11 @@ void vga_write_hex(u32 num) {
     vga_putchar(hex[(num >> 4) & 0xF]);
     vga_putchar(hex[num & 0xF]);
 }
+
+void vga_getpos(u8* x, u8* y) {
+    if (x) *x = cursor_x;
+    if (y) *y = cursor_y;
+}
 void vga_write(const char* s) {
     while (*s) vga_putchar(*s++);
 }

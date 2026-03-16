@@ -9,10 +9,16 @@
 
 #define MAX_COMMANDS 64
 #define MAX_LINE_LEN 512
+#define MAX_HISTORY 16
 
 shell_command_t commands[MAX_COMMANDS];
 int cmd_count = 0;
 static char current_dir[256] = "/";
+
+// История команд
+static char history[MAX_HISTORY][MAX_LINE_LEN];
+static int history_count = 0;
+static int history_pos = -1;
 
 void shell_init(void) {
     cmd_count = 0;
@@ -20,6 +26,25 @@ void shell_init(void) {
         commands[i].name[0] = '\0';
         commands[i].func = NULL;
     }
+    
+    for (int i = 0; i < MAX_HISTORY; i++) {
+        history[i][0] = '\0';
+    }
+    history_count = 0;
+    history_pos = -1;
+}
+
+static void add_to_history(const char* line) {
+    if (!line || line[0] == '\0') return;
+    
+    if (history_count > 0 && strcmp(history[0], line) == 0) return;
+    
+    for (int i = MAX_HISTORY - 1; i > 0; i--) {
+        strcpy(history[i], history[i-1]);
+    }
+    
+    strcpy(history[0], line);
+    if (history_count < MAX_HISTORY) history_count++;
 }
 
 int shell_register_command(const char* name, int (*func)(int argc, char** argv), const char* desc) {
@@ -108,15 +133,37 @@ void shell_print_hex(u32 num) {
     vga_putchar(hex[num & 0xF]);
 }
 
-static int execute_with_ops(char* line) {
-    char* semicolon = strchr(line, ';');
-    if (semicolon) {
-        *semicolon = 0;
-        shell_execute(line);
-        return shell_execute(semicolon + 1);
+static int complete_command(const char* prefix, char* buffer, int bufsize) {
+    int matches = 0;
+    int first_match = -1;
+    
+    for (int i = 0; i < cmd_count; i++) {
+        if (strncmp(commands[i].name, prefix, strlen(prefix)) == 0) {
+            if (matches == 0) {
+                first_match = i;
+            }
+            matches++;
+        }
     }
     
-    return shell_execute(line);
+    if (matches == 1 && first_match >= 0) {
+        strncpy(buffer, commands[first_match].name, bufsize - 1);
+        buffer[bufsize - 1] = '\0';
+        return 1;
+    }
+    
+    if (matches > 1) {
+        vga_putchar('\n');
+        for (int i = 0; i < cmd_count; i++) {
+            if (strncmp(commands[i].name, prefix, strlen(prefix)) == 0) {
+                shell_print("  ");
+                shell_print(commands[i].name);
+                vga_putchar('\n');
+            }
+        }
+    }
+    
+    return matches;
 }
 
 int shell_execute(const char* cmd_line) {
@@ -138,42 +185,204 @@ int shell_execute(const char* cmd_line) {
     
     shell_print("unknown command: ");
     shell_print(argv[0]);
-    shell_print("\n");
+    vga_putchar('\n');
     return -1;
+}
+
+static void print_prompt(void) {
+    shell_print(fs_get_current_dir());
+    shell_print("> ");
 }
 
 void shell_run(void) {
     char line[MAX_LINE_LEN];
     int pos = 0;
+    u8 cursor_x = 0;
+    u8 cursor_y = 0;
     
     while (1) {
-        shell_print(fs_get_current_dir());
-        shell_print("> ");
+        // Печатаем промпт
+        print_prompt();
+        
+        // Получаем позицию после промпта
+        vga_getpos(&cursor_x, &cursor_y);
+        u8 input_x = cursor_x;
+        u8 input_y = cursor_y;
         
         pos = 0;
+        history_pos = -1;
+        line[0] = '\0';
+        
         while (1) {
-            if (keyboard_data_ready()) {
-                char c = keyboard_getc();
-                
-                if (c == '\n') {
-                    line[pos] = '\0';
-                    shell_print("\n");
-                    if (pos > 0) {
-                        execute_with_ops(line);
-                    }
-                    break;
-                } else if (c == '\b') {
-                    if (pos > 0) {
-                        pos--;
-                        shell_print("\b \b");
-                    }
-                } else {
-                    line[pos++] = c;
-                    char str[2] = {c, '\0'};
-                    shell_print(str);
+            if (!keyboard_data_ready()) continue;
+            
+            u8 k = keyboard_getc();
+            int mods = keyboard_get_modifiers();
+            
+            // Стрелки
+            if (k == 0xE2) { // Left
+                if (cursor_x > input_x) {
+                    cursor_x--;
+                    vga_setpos(cursor_x, input_y);
                 }
-                
-                for (int i = 0; i < 1000; i++) asm volatile ("nop");
+                continue;
+            }
+            if (k == 0xE3) { // Right
+                if (cursor_x - input_x < pos) {
+                    cursor_x++;
+                    vga_setpos(cursor_x, input_y);
+                }
+                continue;
+            }
+            if (k == 0xE0) { // Up
+                if (history_pos < history_count - 1) {
+                    history_pos++;
+                    strcpy(line, history[history_pos]);
+                    pos = strlen(line);
+                    
+                    // Очищаем строку ввода
+                    vga_setpos(input_x, input_y);
+                    for (int i = 0; i < 80 - input_x; i++) {
+                        vga_putchar(' ');
+                    }
+                    
+                    // Печатаем новую строку
+                    vga_setpos(input_x, input_y);
+                    for (int i = 0; i < pos; i++) {
+                        vga_putchar(line[i]);
+                    }
+                    
+                    cursor_x = input_x + pos;
+                    vga_setpos(cursor_x, input_y);
+                }
+                continue;
+            }
+            if (k == 0xE1) { // Down
+                if (history_pos >= 0) {
+                    history_pos--;
+                    if (history_pos >= 0) {
+                        strcpy(line, history[history_pos]);
+                    } else {
+                        line[0] = '\0';
+                    }
+                    pos = strlen(line);
+                    
+                    vga_setpos(input_x, input_y);
+                    for (int i = 0; i < 80 - input_x; i++) {
+                        vga_putchar(' ');
+                    }
+                    
+                    vga_setpos(input_x, input_y);
+                    for (int i = 0; i < pos; i++) {
+                        vga_putchar(line[i]);
+                    }
+                    
+                    cursor_x = input_x + pos;
+                    vga_setpos(cursor_x, input_y);
+                }
+                continue;
+            }
+            
+            // Tab
+            if (k == '\t') {
+                if (pos > 0) {
+                    char completion[256];
+                    int result = complete_command(line, completion, sizeof(completion));
+                    
+                    if (result == 1) {
+                        strcpy(line, completion);
+                        pos = strlen(line);
+                        
+                        vga_setpos(input_x, input_y);
+                        for (int i = 0; i < 80 - input_x; i++) {
+                            vga_putchar(' ');
+                        }
+                        
+                        vga_setpos(input_x, input_y);
+                        for (int i = 0; i < pos; i++) {
+                            vga_putchar(line[i]);
+                        }
+                        
+                        cursor_x = input_x + pos;
+                        vga_setpos(cursor_x, input_y);
+                    } else if (result > 1) {
+                        // Список команд уже выведен, печатаем промпт и текущую строку заново
+                        vga_setpos(0, input_y + 1);
+                        print_prompt();
+                        for (int i = 0; i < pos; i++) {
+                            vga_putchar(line[i]);
+                        }
+                        // Обновляем позиции
+                        vga_getpos(&cursor_x, &cursor_y);
+                        input_x = cursor_x - pos;
+                        input_y = cursor_y;
+                    }
+                }
+                continue;
+            }
+            
+            // Backspace
+            if (k == '\b') {
+                if (cursor_x > input_x) {
+                    int idx = cursor_x - input_x - 1;
+                    
+                    // Сдвигаем строку
+                    for (int i = idx; i < pos; i++) {
+                        line[i] = line[i+1];
+                    }
+                    pos--;
+                    cursor_x--;
+                    
+                    // Перерисовываем
+                    vga_setpos(input_x, input_y);
+                    for (int i = 0; i < 80 - input_x; i++) {
+                        vga_putchar(' ');
+                    }
+                    
+                    vga_setpos(input_x, input_y);
+                    for (int i = 0; i < pos; i++) {
+                        vga_putchar(line[i]);
+                    }
+                    
+                    vga_setpos(cursor_x, input_y);
+                }
+                continue;
+            }
+            
+            // Enter
+            if (k == '\n') {
+                line[pos] = '\0';
+                vga_putchar('\n');
+                if (pos > 0) {
+                    add_to_history(line);
+                    shell_execute(line);
+                }
+                break;
+            }
+            
+            // Обычные символы
+            if (k >= 32 && k <= 126 && !(mods & KEY_MOD_CTRL)) {
+                if (pos < MAX_LINE_LEN - 1) {
+                    int idx = cursor_x - input_x;
+                    
+                    // Сдвигаем правую часть
+                    for (int i = pos; i > idx; i--) {
+                        line[i] = line[i-1];
+                    }
+                    line[idx] = k;
+                    pos++;
+                    cursor_x++;
+                    
+                    // Печатаем от позиции вставки до конца
+                    vga_setpos(cursor_x - 1, input_y);
+                    for (int i = idx; i < pos; i++) {
+                        vga_putchar(line[i]);
+                    }
+                    
+                    // Возвращаем курсор
+                    vga_setpos(cursor_x, input_y);
+                }
+                continue;
             }
         }
     }
