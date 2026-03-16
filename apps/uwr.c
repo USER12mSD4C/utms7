@@ -3,362 +3,519 @@
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
 #include "../kernel/memory.h"
-#include "../commands/fs.h"
 #include "../include/path.h"
-#include "uwr.h"
 
-#define TAB_SIZE 4
-#define CHUNK_SIZE 1024
-#define MAX_LINES 1024
-#define MAX_LINE_LEN 4096
-
-typedef struct Line {
+typedef struct line {
     char *text;
     int len;
-    int alloc;
-    struct Line *next;
-    struct Line *prev;
-} Line;
+    struct line *next;
+    struct line *prev;
+} line_t;
 
 typedef struct {
-    Line *first;
-    Line *last;
-    Line *current;
-    int cursor_x;
-    int cursor_y;
-    int top_line;
-    int lines_count;
+    line_t *first;
+    line_t *last;
+    line_t *cur;
+    int cx;
+    int cy;
+    int top;
+    int left;
+    int count;
     int modified;
-    char filename[256];
-    char fullpath[256];
-    int running;
-} UWR;
+    char name[256];
+    char path[256];
+    int run;
+    int mode;
+    char buf[256];
+    int pos;
+    char pat[256];
+    int ppos;
+    int pdir;
+    char *yank;
+    int ylen;
+} ed_t;
 
-static UWR e;
+enum {
+    NORMAL,
+    INSERT,
+    COMMAND,
+    SEARCH
+};
 
-static Line* line_new(void) {
-    Line *l = kmalloc(sizeof(Line));
-    if (!l) return NULL;
-    l->alloc = CHUNK_SIZE;
-    l->text = kmalloc(l->alloc);
-    if (!l->text) { kfree(l); return NULL; }
-    l->text[0] = '\0';
+static ed_t e;
+
+static line_t *line_alloc(void) {
+    line_t *l = kmalloc(sizeof(line_t));
+    l->text = kmalloc(1);
+    l->text[0] = 0;
     l->len = 0;
-    l->next = NULL;
-    l->prev = NULL;
+    l->next = 0;
+    l->prev = 0;
     return l;
 }
 
-static void line_free(Line *l) {
+static void line_free(line_t *l) {
     if (!l) return;
     if (l->text) kfree(l->text);
     kfree(l);
 }
 
-static void line_ensure_capacity(Line *l, int needed) {
-    if (!l || !l->text) return;
-    if (l->len + needed + 2 >= l->alloc) {
-        int new_alloc = l->alloc + (needed + CHUNK_SIZE);
-        char *new_text = kmalloc(new_alloc);
-        if (!new_text) return;
-        memcpy(new_text, l->text, l->len + 1);
-        kfree(l->text);
-        l->text = new_text;
-        l->alloc = new_alloc;
-    }
-}
-
-static void line_insert_char(Line *l, int pos, char c) {
-    if (!l || !l->text || pos < 0 || pos > l->len) return;
-    line_ensure_capacity(l, 1);
-    for (int i = l->len; i >= pos; i--) l->text[i+1] = l->text[i];
-    l->text[pos] = c;
+static void line_insert(line_t *l, int p, char c) {
+    char *new = kmalloc(l->len + 2);
+    int i;
+    for (i = 0; i < p; i++) new[i] = l->text[i];
+    new[p] = c;
+    for (i = p; i < l->len; i++) new[i+1] = l->text[i];
+    new[l->len+1] = 0;
+    kfree(l->text);
+    l->text = new;
     l->len++;
 }
 
-static void line_delete_char(Line *l, int pos) {
-    if (!l || !l->text || pos < 0 || pos >= l->len) return;
-    for (int i = pos; i < l->len; i++) l->text[i] = l->text[i+1];
+static void line_delete(line_t *l, int p) {
+    char *new = kmalloc(l->len);
+    int i;
+    for (i = 0; i < p; i++) new[i] = l->text[i];
+    for (i = p+1; i < l->len; i++) new[i-1] = l->text[i];
+    new[l->len-1] = 0;
+    kfree(l->text);
+    l->text = new;
     l->len--;
 }
 
-static void line_append(Line *l, const char *s) {
-    if (!l || !s) return;
-    int add_len = strlen(s);
-    if (add_len == 0) return;
-    line_ensure_capacity(l, add_len);
-    memcpy(l->text + l->len, s, add_len);
-    l->len += add_len;
-    l->text[l->len] = '\0';
+static void line_append(line_t *l, const char *s) {
+    int sl = strlen(s);
+    char *new = kmalloc(l->len + sl + 1);
+    int i;
+    for (i = 0; i < l->len; i++) new[i] = l->text[i];
+    for (i = 0; i < sl; i++) new[l->len + i] = s[i];
+    new[l->len + sl] = 0;
+    kfree(l->text);
+    l->text = new;
+    l->len += sl;
 }
 
-static void e_init(void) {
-    e.first = e.last = e.current = NULL;
-    e.cursor_x = 0;
-    e.cursor_y = 0;
-    e.top_line = 0;
-    e.lines_count = 0;
+static void line_cut(line_t *l, int p) {
+    char *new = kmalloc(p + 1);
+    int i;
+    for (i = 0; i < p; i++) new[i] = l->text[i];
+    new[p] = 0;
+    kfree(l->text);
+    l->text = new;
+    l->len = p;
+}
+
+static void ed_init(void) {
+    e.first = e.last = e.cur = 0;
+    e.cx = 0;
+    e.cy = 0;
+    e.top = 0;
+    e.left = 0;
+    e.count = 0;
     e.modified = 0;
-    e.filename[0] = '\0';
-    e.fullpath[0] = '\0';
-    e.running = 1;
+    e.name[0] = 0;
+    e.path[0] = 0;
+    e.run = 1;
+    e.mode = NORMAL;
+    e.pos = 0;
+    e.buf[0] = 0;
+    e.ppos = 0;
+    e.pat[0] = 0;
+    e.pdir = 1;
+    e.yank = 0;
+    e.ylen = 0;
 }
 
-static void e_free(void) {
-    Line *l = e.first;
+static void ed_free(void) {
+    line_t *l = e.first;
     while (l) {
-        Line *next = l->next;
+        line_t *n = l->next;
         line_free(l);
-        l = next;
-    }
-    e.first = e.last = e.current = NULL;
-    e.lines_count = 0;
-}
-
-static void e_move_up(void) {
-    if (!e.current || !e.current->prev) return;
-    e.current = e.current->prev;
-    e.cursor_y--;
-    if (e.cursor_x > e.current->len) e.cursor_x = e.current->len;
-    if (e.cursor_y < e.top_line) e.top_line = e.cursor_y;
-}
-
-static void e_move_down(void) {
-    if (!e.current || !e.current->next) return;
-    e.current = e.current->next;
-    e.cursor_y++;
-    if (e.cursor_x > e.current->len) e.cursor_x = e.current->len;
-    if (e.cursor_y >= e.top_line + 23) e.top_line = e.cursor_y - 22;
-}
-
-static void e_move_left(void) {
-    if (!e.current) return;
-    if (e.cursor_x > 0) e.cursor_x--;
-    else if (e.current->prev) {
-        e.current = e.current->prev;
-        e.cursor_y--;
-        e.cursor_x = e.current->len;
-        if (e.cursor_y < e.top_line) e.top_line = e.cursor_y;
+        l = n;
     }
 }
 
-static void e_move_right(void) {
-    if (!e.current) return;
-    if (e.cursor_x < e.current->len) e.cursor_x++;
-    else if (e.current->next) {
-        e.current = e.current->next;
-        e.cursor_y++;
-        e.cursor_x = 0;
-        if (e.cursor_y >= e.top_line + 23) e.top_line = e.cursor_y - 22;
+static void ed_goto(int n) {
+    if (n < 0) n = 0;
+    if (n >= e.count) n = e.count - 1;
+    if (n < 0) return;
+    line_t *l = e.first;
+    int i;
+    for (i = 0; i < n && l; i++) l = l->next;
+    if (!l) return;
+    e.cur = l;
+    e.cy = n;
+    if (e.cx > e.cur->len) e.cx = e.cur->len;
+    if (e.cy < e.top) e.top = e.cy;
+    if (e.cy >= e.top + 23) e.top = e.cy - 22;
+}
+
+static void ed_line_open(void) {
+    line_t *l = line_alloc();
+    l->prev = e.cur;
+    l->next = e.cur->next;
+    if (e.cur->next) e.cur->next->prev = l;
+    else e.last = l;
+    e.cur->next = l;
+    e.cur = l;
+    e.cy++;
+    e.cx = 0;
+    e.count++;
+    if (e.cy >= e.top + 23) e.top = e.cy - 22;
+}
+
+static void ed_line_kill(void) {
+    if (e.count <= 1) {
+        e.cur->len = 0;
+        char *new = kmalloc(1);
+        new[0] = 0;
+        kfree(e.cur->text);
+        e.cur->text = new;
+        e.cx = 0;
+        return;
+    }
+    line_t *old = e.cur;
+    if (old->prev) {
+        e.cur = old->prev;
+        e.cy--;
+    } else if (old->next) {
+        e.cur = old->next;
+        e.cy = 0;
+    }
+    if (old->prev) old->prev->next = old->next;
+    else e.first = old->next;
+    if (old->next) old->next->prev = old->prev;
+    else e.last = old->prev;
+    line_free(old);
+    e.count--;
+    if (e.cx > e.cur->len) e.cx = e.cur->len;
+    if (e.cy < e.top) e.top = e.cy;
+}
+
+static void ed_line_join(void) {
+    if (!e.cur || !e.cur->next) return;
+    line_t *n = e.cur->next;
+    int old = e.cur->len;
+    line_append(e.cur, n->text);
+    e.cur->next = n->next;
+    if (n->next) n->next->prev = e.cur;
+    else e.last = e.cur;
+    line_free(n);
+    e.count--;
+    if (e.cx > old) e.cx = old;
+}
+
+static void ed_up(void) {
+    if (!e.cur || !e.cur->prev) return;
+    e.cur = e.cur->prev;
+    e.cy--;
+    if (e.cx > e.cur->len) e.cx = e.cur->len;
+    if (e.cy < e.top) e.top = e.cy;
+}
+
+static void ed_down(void) {
+    if (!e.cur || !e.cur->next) return;
+    e.cur = e.cur->next;
+    e.cy++;
+    if (e.cx > e.cur->len) e.cx = e.cur->len;
+    if (e.cy >= e.top + 23) e.top = e.cy - 22;
+}
+
+static void ed_left(void) {
+    if (!e.cur) return;
+    if (e.cx > 0) e.cx--;
+    else if (e.cur->prev) {
+        e.cur = e.cur->prev;
+        e.cy--;
+        e.cx = e.cur->len;
+        if (e.cy < e.top) e.top = e.cy;
     }
 }
 
-static void e_move_home(void) { e.cursor_x = 0; }
-static void e_move_end(void) { if (e.current) e.cursor_x = e.current->len; }
-
-static void e_page_up(void) {
-    for (int i = 0; i < 20 && e.current && e.current->prev; i++) e_move_up();
+static void ed_right(void) {
+    if (!e.cur) return;
+    if (e.cx < e.cur->len) e.cx++;
+    else if (e.cur->next) {
+        e.cur = e.cur->next;
+        e.cy++;
+        e.cx = 0;
+        if (e.cy >= e.top + 23) e.top = e.cy - 22;
+    }
 }
 
-static void e_page_down(void) {
-    for (int i = 0; i < 20 && e.current && e.current->next; i++) e_move_down();
+static void ed_word(void) {
+    if (!e.cur) return;
+    while (e.cx < e.cur->len && e.cur->text[e.cx] == ' ') e.cx++;
+    while (e.cx < e.cur->len && e.cur->text[e.cx] != ' ') e.cx++;
+    if (e.cx >= e.cur->len && e.cur->next) {
+        e.cur = e.cur->next;
+        e.cy++;
+        e.cx = 0;
+        if (e.cy >= e.top + 23) e.top = e.cy - 22;
+    }
 }
 
-static void e_insert_char(char c) {
-    if (!e.current) return;
-    line_insert_char(e.current, e.cursor_x, c);
-    e.cursor_x++;
+static void ed_bword(void) {
+    if (!e.cur) return;
+    if (e.cx > 0) {
+        e.cx--;
+        while (e.cx > 0 && e.cur->text[e.cx] == ' ') e.cx--;
+        while (e.cx > 0 && e.cur->text[e.cx-1] != ' ') e.cx--;
+    } else if (e.cur->prev) {
+        e.cur = e.cur->prev;
+        e.cy--;
+        e.cx = e.cur->len;
+        if (e.cy < e.top) e.top = e.cy;
+        while (e.cx > 0 && e.cur->text[e.cx-1] == ' ') e.cx--;
+        while (e.cx > 0 && e.cur->text[e.cx-1] != ' ') e.cx--;
+    }
+}
+
+static void ed_home(void) { e.cx = 0; }
+static void ed_end(void) { if (e.cur) e.cx = e.cur->len; }
+static void ed_pgup(void) { int i; for (i = 0; i < 20 && e.cur && e.cur->prev; i++) ed_up(); }
+static void ed_pgdn(void) { int i; for (i = 0; i < 20 && e.cur && e.cur->next; i++) ed_down(); }
+static void ed_top(void) { ed_goto(0); }
+static void ed_bot(void) { ed_goto(e.count - 1); }
+
+static void ed_put(char c) {
+    if (!e.cur) return;
+    line_insert(e.cur, e.cx, c);
+    e.cx++;
     e.modified = 1;
 }
 
-static void e_newline(void) {
-    if (!e.current) return;
-    Line *new_line = line_new();
-    if (!new_line) return;
-    
-    if (e.cursor_x < e.current->len) {
-        int rest_len = e.current->len - e.cursor_x;
-        line_ensure_capacity(new_line, rest_len);
-        memcpy(new_line->text, e.current->text + e.cursor_x, rest_len);
-        new_line->text[rest_len] = '\0';
-        new_line->len = rest_len;
-        e.current->text[e.cursor_x] = '\0';
-        e.current->len = e.cursor_x;
+static void ed_nl(void) {
+    if (!e.cur) return;
+    line_t *l = line_alloc();
+    if (e.cx < e.cur->len) {
+        line_append(l, e.cur->text + e.cx);
+        line_cut(e.cur, e.cx);
     }
-    
-    new_line->prev = e.current;
-    new_line->next = e.current->next;
-    if (e.current->next) e.current->next->prev = new_line;
-    else e.last = new_line;
-    e.current->next = new_line;
-    
-    e.current = new_line;
-    e.cursor_y++;
-    e.cursor_x = 0;
-    e.lines_count++;
+    l->prev = e.cur;
+    l->next = e.cur->next;
+    if (e.cur->next) e.cur->next->prev = l;
+    else e.last = l;
+    e.cur->next = l;
+    e.cur = l;
+    e.cy++;
+    e.cx = 0;
+    e.count++;
     e.modified = 1;
-    if (e.cursor_y >= e.top_line + 23) e.top_line = e.cursor_y - 22;
+    if (e.cy >= e.top + 23) e.top = e.cy - 22;
 }
 
-static void e_backspace(void) {
-    if (!e.current) return;
-    if (e.cursor_x > 0) {
-        line_delete_char(e.current, e.cursor_x - 1);
-        e.cursor_x--;
+static void ed_bs(void) {
+    if (!e.cur) return;
+    if (e.cx > 0) {
+        line_delete(e.cur, e.cx - 1);
+        e.cx--;
         e.modified = 1;
-    }
-    else if (e.current->prev) {
-        Line *prev = e.current->prev;
-        int prev_len = prev->len;
-        line_append(prev, e.current->text);
-        if (e.current->next) e.current->next->prev = prev;
-        else e.last = prev;
-        prev->next = e.current->next;
-        line_free(e.current);
-        e.current = prev;
-        e.cursor_y--;
-        e.cursor_x = prev_len;
-        e.lines_count--;
+    } else if (e.cur->prev) {
+        line_t *p = e.cur->prev;
+        int old = p->len;
+        line_append(p, e.cur->text);
+        p->next = e.cur->next;
+        if (e.cur->next) e.cur->next->prev = p;
+        else e.last = p;
+        line_free(e.cur);
+        e.cur = p;
+        e.cy--;
+        e.cx = old;
+        e.count--;
         e.modified = 1;
-        if (e.top_line > e.cursor_y) e.top_line = e.cursor_y;
-    }
-}
-
-static void e_delete(void) {
-    if (!e.current) return;
-    if (e.cursor_x < e.current->len) {
-        line_delete_char(e.current, e.cursor_x);
-        e.modified = 1;
-    }
-    else if (e.current->next) {
-        Line *next = e.current->next;
-        line_append(e.current, next->text);
-        e.current->next = next->next;
-        if (next->next) next->next->prev = e.current;
-        else e.last = e.current;
-        line_free(next);
-        e.lines_count--;
-        e.modified = 1;
+        if (e.top > e.cy) e.top = e.cy;
     }
 }
 
-static void e_tab(void) { for (int i = 0; i < TAB_SIZE; i++) e_insert_char(' '); }
+static void ed_del(void) {
+    if (!e.cur) return;
+    if (e.cx < e.cur->len) {
+        line_delete(e.cur, e.cx);
+        e.modified = 1;
+    } else if (e.cur->next) {
+        line_t *n = e.cur->next;
+        line_append(e.cur, n->text);
+        e.cur->next = n->next;
+        if (n->next) n->next->prev = e.cur;
+        else e.last = e.cur;
+        line_free(n);
+        e.count--;
+        e.modified = 1;
+    }
+}
 
-int uwr_open(const char *filename) {
-    if (filename && filename[0]) {
-        strcpy(e.filename, filename);
-        build_path(filename, e.fullpath);
+static void ed_del_word(void) {
+    if (!e.cur) return;
+    int s = e.cx;
+    int en = s;
+    while (en < e.cur->len && e.cur->text[en] == ' ') en++;
+    while (en < e.cur->len && e.cur->text[en] != ' ') en++;
+    if (en == s) {
+        while (en < e.cur->len && e.cur->text[en] == ' ') en++;
+        while (en < e.cur->len && e.cur->text[en] != ' ') en++;
+    }
+    int i;
+    for (i = en - 1; i >= s; i--) line_delete(e.cur, i);
+    e.modified = 1;
+}
+
+static void ed_tab(void) { int i; for (i = 0; i < 8; i++) ed_put(' '); }
+
+static void ed_yank(void) {
+    if (!e.cur) return;
+    if (e.yank) kfree(e.yank);
+    e.ylen = e.cur->len;
+    e.yank = kmalloc(e.ylen + 1);
+    memcpy(e.yank, e.cur->text, e.ylen);
+    e.yank[e.ylen] = 0;
+}
+
+static void ed_yank_line(void) { ed_yank(); }
+
+static void ed_kill_yank(void) {
+    ed_yank_line();
+    ed_line_kill();
+}
+
+static void ed_put_below(void) {
+    if (!e.yank || e.ylen == 0) return;
+    line_t *l = line_alloc();
+    line_append(l, e.yank);
+    l->prev = e.cur;
+    l->next = e.cur->next;
+    if (e.cur->next) e.cur->next->prev = l;
+    else e.last = l;
+    e.cur->next = l;
+    e.count++;
+    e.modified = 1;
+}
+
+static void ed_put_above(void) {
+    if (!e.yank || e.ylen == 0) return;
+    line_t *l = line_alloc();
+    line_append(l, e.yank);
+    l->next = e.cur;
+    l->prev = e.cur->prev;
+    if (e.cur->prev) e.cur->prev->next = l;
+    else e.first = l;
+    e.cur->prev = l;
+    e.count++;
+    e.modified = 1;
+}
+
+static void ed_search(void) {
+    if (e.pat[0] == 0) return;
+    line_t *l = e.cur;
+    int n = e.cy;
+    int f = 0;
+    while (!f) {
+        if (e.pdir > 0) {
+            if (l->next) {
+                l = l->next;
+                n++;
+            } else break;
+        } else {
+            if (l->prev) {
+                l = l->prev;
+                n--;
+            } else break;
+        }
+        char *p = strstr(l->text, e.pat);
+        if (p) {
+            e.cur = l;
+            e.cy = n;
+            e.cx = p - l->text;
+            if (e.cy < e.top) e.top = e.cy;
+            if (e.cy >= e.top + 23) e.top = e.cy - 22;
+            f = 1;
+        }
+    }
+}
+
+static void ed_search_dir(int d) {
+    e.mode = SEARCH;
+    e.pdir = d;
+    e.ppos = 0;
+    e.pat[0] = 0;
+}
+
+static int ed_open(const char *f) {
+    if (f && f[0]) {
+        strcpy(e.name, f);
+        build_path(f, e.path);
     } else {
-        strcpy(e.filename, "untitled");
-        e.fullpath[0] = '\0';
+        strcpy(e.name, "new");
+        e.path[0] = 0;
     }
-    
-    e_free();
-    e_init();
-    
-    if (e.fullpath[0] == '\0' || !ufs_exists(e.fullpath) || ufs_isdir(e.fullpath)) {
-        Line *l = line_new();
-        if (l) { e.first = e.last = e.current = l; e.lines_count = 1; }
+    ed_free();
+    ed_init();
+    if (e.path[0] == 0 || !ufs_exists(e.path) || ufs_isdir(e.path)) {
+        e.first = e.last = e.cur = line_alloc();
+        e.count = 1;
         return 0;
     }
-    
-    u8 *data;
-    u32 size;
-    if (ufs_read(e.fullpath, &data, &size) != 0) {
-        Line *l = line_new();
-        if (l) { e.first = e.last = e.current = l; e.lines_count = 1; }
+    u8 *d;
+    u32 sz;
+    if (ufs_read(e.path, &d, &sz) != 0) {
+        e.first = e.last = e.cur = line_alloc();
+        e.count = 1;
         return 0;
     }
-    
-    char line_buf[MAX_LINE_LEN];
-    int line_len = 0;
-    Line *last = NULL;
-    
-    for (u32 i = 0; i < size; i++) {
-        char c = data[i];
-        
-        if (c == '\n') {
-            line_buf[line_len] = '\0';
-            
-            Line *l = line_new();
-            if (l) {
-                line_ensure_capacity(l, line_len);
-                memcpy(l->text, line_buf, line_len);
-                l->text[line_len] = '\0';
-                l->len = line_len;
-                
-                if (!e.first) e.first = l;
-                if (last) {
-                    last->next = l;
-                    l->prev = last;
-                }
-                last = l;
-                e.lines_count++;
-            }
-            
-            line_len = 0;
-            continue;
-        }
-        
-        if (c != '\r' && line_len < MAX_LINE_LEN - 1) {
-            line_buf[line_len++] = c;
-        }
-    }
-    
-    if (line_len > 0 || e.lines_count == 0) {
-        line_buf[line_len] = '\0';
-        
-        Line *l = line_new();
-        if (l) {
-            line_ensure_capacity(l, line_len);
-            memcpy(l->text, line_buf, line_len);
-            l->text[line_len] = '\0';
-            l->len = line_len;
-            
+    char tmp[4096];
+    int p = 0;
+    line_t *last = 0;
+    u32 i;
+    for (i = 0; i < sz; i++) {
+        if (d[i] == '\n') {
+            tmp[p] = 0;
+            line_t *l = line_alloc();
+            line_append(l, tmp);
             if (!e.first) e.first = l;
             if (last) {
                 last->next = l;
                 l->prev = last;
             }
             last = l;
-            e.lines_count++;
+            e.count++;
+            p = 0;
+        } else if (d[i] != '\r') {
+            tmp[p++] = d[i];
         }
     }
-    
-    kfree(data);
-    
+    if (p > 0 || e.count == 0) {
+        tmp[p] = 0;
+        line_t *l = line_alloc();
+        line_append(l, tmp);
+        if (!e.first) e.first = l;
+        if (last) {
+            last->next = l;
+            l->prev = last;
+        }
+        last = l;
+        e.count++;
+    }
+    kfree(d);
     e.last = last;
-    e.current = e.first;
-    e.cursor_x = 0;
-    e.cursor_y = 0;
-    e.top_line = 0;
+    e.cur = e.first;
+    e.cx = 0;
+    e.cy = 0;
+    e.top = 0;
+    e.left = 0;
     e.modified = 0;
-    
     return 0;
 }
 
-int uwr_save(void) {
-    if (e.fullpath[0] == '\0') return -1;
-    
-    int total = 0;
-    Line *l = e.first;
+static int ed_save(void) {
+    if (e.path[0] == 0) return -1;
+    int tot = 0;
+    line_t *l = e.first;
     while (l) {
-        total += l->len + 1;
+        tot += l->len + 1;
         l = l->next;
     }
-    
-    if (total <= 0) {
-        if (ufs_rewrite(e.fullpath, NULL, 0) == 0) {
-            e.modified = 0;
-            return 0;
-        }
-        return -1;
-    }
-    
-    u8 *data = kmalloc(total + 1);
-    if (!data) return -1;
-    
-    u8 *p = data;
+    u8 *d = kmalloc(tot + 1);
+    u8 *p = d;
     l = e.first;
     while (l) {
         if (l->len > 0) {
@@ -368,215 +525,297 @@ int uwr_save(void) {
         *p++ = '\n';
         l = l->next;
     }
-    
-    int res = ufs_rewrite(e.fullpath, data, total);
-    kfree(data);
-    
-    if (res == 0) e.modified = 0;
-    return res;
+    int r = ufs_rewrite(e.path, d, tot);
+    kfree(d);
+    if (r == 0) e.modified = 0;
+    return r;
 }
 
-static void e_show_message(const char *msg, int color) {
-    vga_setcolor(color, 0);
-    vga_setpos(40, 24);
-    for (int i = 0; i < 40; i++) vga_putchar(' ');
-    vga_setpos(40, 24);
-    vga_write(msg);
-    vga_setcolor(0x07, 0);
-}
-
-static void e_clear_message(void) {
-    vga_setpos(40, 24);
-    for (int i = 0; i < 40; i++) vga_putchar(' ');
-}
-
-static void e_draw_status(void) {
+static void ed_draw_status(void) {
     vga_setcolor(0x0F, 0);
     vga_setpos(0, 0);
-    
     vga_write("UWR ");
-    vga_write(e.filename);
-    
-    if (e.modified) {
-        vga_write(" [modified]");
-    }
-    
+    vga_write(e.name);
+    if (e.modified) vga_write(" [+]");
     vga_setpos(50, 0);
-    vga_write("Line ");
-    vga_write_num(e.cursor_y + 1);
+    vga_write("Ln ");
+    vga_write_num(e.cy + 1);
     vga_write("/");
-    vga_write_num(e.lines_count);
+    vga_write_num(e.count);
     vga_write(" Col ");
-    vga_write_num(e.cursor_x + 1);
-    
-    for (int i = 70; i < 80; i++) {
+    vga_write_num(e.cx + 1);
+    vga_setpos(75, 0);
+    if (e.mode == NORMAL) vga_write("NORMAL");
+    else if (e.mode == INSERT) vga_write("INSERT");
+    else if (e.mode == COMMAND) vga_write("COMMAND");
+    else if (e.mode == SEARCH) vga_write("SEARCH");
+    int i;
+    for (i = 0; i < 80; i++) {
+        u8 x, y;
+        vga_getpos(&x, &y);
+        if (x >= 80) break;
         vga_putchar(' ');
     }
 }
 
-static void e_draw_text(void) {
-    if (!e.current) return;
-    
-    Line *l = e.first;
-    int line_num = 0;
-    
-    for (int i = 0; i < e.top_line && l; i++) {
+static void ed_draw_text(void) {
+    line_t *l = e.first;
+    int n = 0;
+    int i;
+    for (i = 0; i < e.top && l; i++) {
         l = l->next;
-        line_num++;
+        n++;
     }
-    
-    for (int row = 0; row < 23 && l; row++) {
-        vga_setpos(0, row + 1);
-        
+    int r;
+    for (r = 0; r < 23 && l; r++) {
+        vga_setpos(0, r + 1);
         vga_setcolor(0x08, 0);
-        int n = line_num + 1;
-        
-        if (n < 10) {
+        int num = n + 1;
+        if (num < 10) {
             vga_putchar(' ');
             vga_putchar(' ');
             vga_putchar(' ');
-            vga_write_num(n);
-        } else if (n < 100) {
+            vga_write_num(num);
+        } else if (num < 100) {
             vga_putchar(' ');
             vga_putchar(' ');
-            vga_write_num(n);
-        } else if (n < 1000) {
+            vga_write_num(num);
+        } else if (num < 1000) {
             vga_putchar(' ');
-            vga_write_num(n);
+            vga_write_num(num);
         } else {
-            vga_write_num(n);
+            vga_write_num(num);
         }
         vga_putchar(' ');
-        
         vga_setcolor(0x07, 0);
-        if (l->text) {
-            vga_write(l->text);
+        int s = e.left;
+        int ln = l->len - s;
+        if (ln > 74) ln = 74;
+        for (i = 0; i < ln; i++) {
+            char c = l->text[s + i];
+            if (c < 32) c = '.';
+            vga_putchar(c);
         }
-        
-        int text_len = l->text ? l->len : 0;
-        for (int i = text_len + 5; i < 80; i++) {
-            vga_putchar(' ');
-        }
-        
+        for (i = ln; i < 74; i++) vga_putchar(' ');
         l = l->next;
-        line_num++;
+        n++;
     }
-    
-    for (int row = line_num - e.top_line; row < 23; row++) {
-        vga_setpos(0, row + 1);
-        for (int i = 0; i < 80; i++) {
-            vga_putchar(' ');
-        }
+    for (; r < 23; r++) {
+        vga_setpos(0, r + 1);
+        for (i = 0; i < 80; i++) vga_putchar(' ');
     }
 }
 
-static void e_draw_cursor(void) {
-    if (!e.current) return;
-    
-    int screen_y = e.cursor_y - e.top_line + 1;
-    if (screen_y >= 1 && screen_y <= 23) {
-        vga_setpos(e.cursor_x + 5, screen_y);
-        vga_update_cursor();
+static void ed_draw_cursor(void) {
+    int x = e.cx - e.left + 5;
+    int y = e.cy - e.top + 1;
+    if (y >= 1 && y <= 23 && x >= 5 && x < 80) {
+        vga_setpos(x, y);
+    } else {
+        vga_setpos(79, 24);
     }
+    vga_update_cursor();
 }
 
-static void e_draw_path(void) {
-    vga_setcolor(0x08, 0);
+static void ed_draw_cmd(void) {
+    vga_setcolor(0x0F, 0);
     vga_setpos(0, 24);
-    vga_write("Path: ");
-    vga_write(e.fullpath);
-    for (int i = strlen(e.fullpath) + 6; i < 80; i++) {
-        vga_putchar(' ');
+    int i;
+    for (i = 0; i < 80; i++) vga_putchar(' ');
+    vga_setpos(0, 24);
+    if (e.mode == COMMAND) {
+        vga_write(":");
+        vga_write(e.buf);
+    } else if (e.mode == SEARCH) {
+        if (e.pdir > 0) vga_write("/");
+        else vga_write("?");
+        vga_write(e.pat);
     }
-    vga_setcolor(0x07, 0);
 }
 
-static void e_draw(void) {
+static void ed_draw(void) {
     vga_clear();
-    e_draw_status();
-    e_draw_text();
-    e_draw_cursor();
-    e_draw_path();
+    ed_draw_status();
+    ed_draw_text();
+    ed_draw_cursor();
+    ed_draw_cmd();
 }
 
-void uwr_main(const char *filename, int vesa) {
-    (void)vesa;
-    
-    uwr_open(filename);
-    e.running = 1;
-    e_draw();
-    
-    while (e.running) {
-        if (!keyboard_data_ready()) continue;
-        
-        u8 k = keyboard_getc();
-        int mods = keyboard_get_modifiers();
-        
-        if (k == 19) {
-            uwr_save();
-            e_draw();
-            continue;
+static void ed_normal(u8 k) {
+    if (k == 'i') {
+        e.mode = INSERT;
+    } else if (k == 'a') {
+        if (e.cx < e.cur->len) e.cx++;
+        e.mode = INSERT;
+    } else if (k == 'I') {
+        e.cx = 0;
+        e.mode = INSERT;
+    } else if (k == 'A') {
+        e.cx = e.cur->len;
+        e.mode = INSERT;
+    } else if (k == 'o') {
+        ed_line_open();
+        e.mode = INSERT;
+    } else if (k == 'O') {
+        if (e.cur->prev) {
+            e.cur = e.cur->prev;
+            e.cy--;
         }
-        
-        if (k == 17) {
-            if (e.modified) {
-                e_show_message("Not saved! (S)ave (Q)uit", 0x0C);
-                
-                while (1) {
-                    if (!keyboard_data_ready()) continue;
-                    u8 c = keyboard_getc();
-                    
-                    if (c == 's' || c == 'S') {
-                        if (uwr_save() == 0) {
-                            e_clear_message();
-                            e.running = 0;
-                            break;
-                        }
-                    } else if (c == 'q' || c == 'Q') {
-                        e_clear_message();
-                        e.running = 0;
-                        break;
-                    }
-                }
-            } else {
-                e.running = 0;
-            }
-            if (e.running) e_draw();
-            continue;
+        ed_line_open();
+        e.mode = INSERT;
+    } else if (k == 'h') {
+        ed_left();
+    } else if (k == 'j') {
+        ed_down();
+    } else if (k == 'k') {
+        ed_up();
+    } else if (k == 'l') {
+        ed_right();
+    } else if (k == 'w') {
+        ed_word();
+    } else if (k == 'b') {
+        ed_bword();
+    } else if (k == '0') {
+        ed_home();
+    } else if (k == '$') {
+        ed_end();
+    } else if (k == 'G') {
+        ed_bot();
+    } else if (k == 'g') {
+        ed_top();
+    } else if (k == 'x') {
+        ed_del();
+    } else if (k == 'X') {
+        if (e.cx > 0) {
+            e.cx--;
+            ed_del();
         }
-        
-        if (k >= 0xE0 && k <= 0xE9) {
-            switch (k) {
-                case 0xE0: e_page_up(); break;
-                case 0xE1: e_page_down(); break;
-                case 0xE2: e_move_left(); break;
-                case 0xE3: e_move_right(); break;
-                case 0xE4: e_move_home(); break;
-                case 0xE5: e_move_end(); break;
-                case 0xE6: e_page_up(); break;
-                case 0xE7: e_page_down(); break;
-                case 0xE8: break;
-                case 0xE9: e_delete(); break;
-            }
-            e_draw();
-            continue;
+    } else if (k == 'd' && (e.pos == 0 || e.buf[e.pos-1] == 'd')) {
+        if (e.pos > 0 && e.buf[e.pos-1] == 'd') {
+            ed_kill_yank();
+            e.pos = 0;
+        } else {
+            e.buf[e.pos++] = 'd';
         }
-        
-        if (!(mods & KEY_MOD_CTRL)) {
-            switch (k) {
-                case '\b': e_backspace(); e_draw(); break;
-                case '\n': e_newline(); e_draw(); break;
-                case '\t': e_tab(); e_draw(); break;
-                default:
-                    if (k >= 32 && k <= 126) {
-                        e_insert_char(k);
-                        e_draw();
-                    }
-                    break;
-            }
+    } else if (k == 'D') {
+        if (e.cx < e.cur->len) {
+            line_cut(e.cur, e.cx);
+            e.modified = 1;
         }
+    } else if (k == 'J') {
+        ed_line_join();
+    } else if (k == 'y' && (e.pos == 0 || e.buf[e.pos-1] == 'y')) {
+        if (e.pos > 0 && e.buf[e.pos-1] == 'y') {
+            ed_yank_line();
+            e.pos = 0;
+        } else {
+            e.buf[e.pos++] = 'y';
+        }
+    } else if (k == 'Y') {
+        ed_yank_line();
+    } else if (k == 'p') {
+        ed_put_below();
+    } else if (k == 'P') {
+        ed_put_above();
+    } else if (k == '/') {
+        ed_search_dir(1);
+    } else if (k == '?') {
+        ed_search_dir(-1);
+    } else if (k == 'n') {
+        ed_search();
+    } else if (k == 'N') {
+        e.pdir = -e.pdir;
+        ed_search();
+        e.pdir = -e.pdir;
+    } else if (k == ':') {
+        e.mode = COMMAND;
+        e.pos = 0;
+        e.buf[0] = 0;
+    } else if (k == 0xE4) {
+        ed_top();
+    } else if (k == 0xE5) {
+        ed_bot();
+    } else if (k == 0xE6) {
+        ed_pgup();
+    } else if (k == 0xE7) {
+        ed_pgdn();
+    } else if (k == 0x1B) {
+        e.pos = 0;
     }
-    
-    e_free();
+}
+
+static void ed_insert(u8 k) {
+    if (k == 0x1B) {
+        if (e.cx > 0) e.cx--;
+        e.mode = NORMAL;
+    } else if (k == '\b') {
+        ed_bs();
+    } else if (k == '\n') {
+        ed_nl();
+    } else if (k == '\t') {
+        ed_tab();
+    } else if (k >= 32 && k <= 126) {
+        ed_put(k);
+    }
+}
+
+static void ed_command(u8 k) {
+    if (k == 0x1B) {
+        e.mode = NORMAL;
+        e.pos = 0;
+    } else if (k == '\n') {
+        e.buf[e.pos] = 0;
+        if (strcmp(e.buf, "w") == 0) {
+            ed_save();
+        } else if (strcmp(e.buf, "q") == 0) {
+            e.run = 0;
+        } else if (strcmp(e.buf, "wq") == 0) {
+            ed_save();
+            e.run = 0;
+        } else if (strcmp(e.buf, "q!") == 0) {
+            e.run = 0;
+        }
+        e.mode = NORMAL;
+        e.pos = 0;
+    } else if (k == '\b') {
+        if (e.pos > 0) e.pos--;
+    } else if (k >= 32 && k <= 126) {
+        e.buf[e.pos++] = k;
+    }
+}
+
+static void ed_search_mode(u8 k) {
+    if (k == 0x1B) {
+        e.mode = NORMAL;
+        e.ppos = 0;
+    } else if (k == '\n') {
+        e.pat[e.ppos] = 0;
+        e.mode = NORMAL;
+        ed_search();
+    } else if (k == '\b') {
+        if (e.ppos > 0) e.ppos--;
+        e.pat[e.ppos] = 0;
+    } else if (k >= 32 && k <= 126) {
+        e.pat[e.ppos++] = k;
+        e.pat[e.ppos] = 0;
+    }
+}
+
+void uwr_main(const char *f, int v) {
+    (void)v;
+    ed_open(f);
+    e.run = 1;
+    ed_draw();
+    while (e.run) {
+        if (!keyboard_data_ready()) continue;
+        u8 k = keyboard_getc();
+        if (e.mode == NORMAL) ed_normal(k);
+        else if (e.mode == INSERT) ed_insert(k);
+        else if (e.mode == COMMAND) ed_command(k);
+        else if (e.mode == SEARCH) ed_search_mode(k);
+        ed_draw();
+    }
+    if (e.yank) kfree(e.yank);
+    ed_free();
     vga_clear();
 }

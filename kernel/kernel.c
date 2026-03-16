@@ -12,6 +12,9 @@
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 
+// Внешняя функция из drivers/udisk.c
+void disk_commands_init(void);
+
 void kernel_main(void *mb_info) {
     (void)mb_info;
     
@@ -71,7 +74,7 @@ void kernel_main(void *mb_info) {
     shell_init();
     commands_init();
     fs_commands_init();
-    // disk_commands_init() убрали
+    disk_commands_init();
     vga_write("OK\n");
     
     vga_write("welcome to UTMS!\n");

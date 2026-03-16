@@ -10,33 +10,35 @@
 static int cmd_help(int argc, char** argv) {
     (void)argc; (void)argv;
     
+    shell_command_t *commands = NULL;
+    int cmd_count = 0;
+    
     shell_print("\nUTMS Shell Commands\n");
     shell_print("==================\n\n");
     
-    extern shell_command_t commands[];
-    extern int cmd_count;
+    shell_print("  help      - show help\n");
+    shell_print("  clear     - clear screen\n");
+    shell_print("  mem       - show memory\n");
+    shell_print("  echo      - echo args\n");
+    shell_print("  ticks     - system ticks\n");
+    shell_print("  uwr       - text editor\n");
+    shell_print("  ps        - list processes\n");
+    shell_print("  kill      - kill process\n");
+    shell_print("  ls        - list directory\n");
+    shell_print("  cd        - change directory\n");
+    shell_print("  pwd       - print working directory\n");
+    shell_print("  mkdir     - create directory\n");
+    shell_print("  mk        - create file\n");
+    shell_print("  rm        - remove file/dir\n");
+    shell_print("  cat       - show file\n");
+    shell_print("  df        - fs usage\n");
+    shell_print("  mkfs.ufs  - format disk\n");
+    shell_print("  mount     - mount ufs\n");
+    shell_print("  umount    - unmount ufs\n");
+    shell_print("  disks     - list all disks\n");
+    shell_print("  lsblk     - list block devices\n");
+    shell_print("  udisk     - partition manager\n");
     
-    int max_len = 0;
-    for (int i = 0; i < cmd_count; i++) {
-        int len = strlen(commands[i].name);
-        if (len > max_len) max_len = len;
-    }
-    
-    for (int i = 0; i < cmd_count; i++) {
-        shell_print("  ");
-        shell_print(commands[i].name);
-        
-        int len = strlen(commands[i].name);
-        for (int j = len; j < max_len + 2; j++) shell_print(" ");
-        
-        shell_print("- ");
-        shell_print(commands[i].desc);
-        shell_print("\n");
-    }
-    
-    shell_print("\nTotal: ");
-    shell_print_num(cmd_count);
-    shell_print("\n");
     return 0;
 }
 

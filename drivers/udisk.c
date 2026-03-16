@@ -12,7 +12,6 @@ static int scanned = 0;
 static u64 last_scan_tick = 0;
 extern u32 system_ticks;
 
-// ========== ВНУТРЕННИЕ ФУНКЦИИ ==========
 static void shell_print_char(char c) {
     char str[2] = {c, '\0'};
     shell_print(str);
@@ -197,8 +196,6 @@ static int mbr_add_partition(int disk, u64 start, u64 size, partition_type_t typ
     return 0;
 }
 
-// ========== API ДЛЯ ДРУГИХ ЧАСТЕЙ ЯДРА ==========
-
 int udisk_init(void) {
     memset(disks, 0, sizeof(disks));
     scanned = 0;
@@ -373,8 +370,6 @@ int udisk_format_partition(const char* devname, const char* fstype) {
     
     return -1;
 }
-
-// ========== КОМАНДЫ ШЕЛЛА ==========
 
 static int cmd_disks(int argc, char** argv) {
     (void)argc; (void)argv;
