@@ -23,7 +23,6 @@ static u64* create_address_space(void) {
     if (!pml4) return NULL;
     memset(pml4, 0, 4096);
     
-    // Копируем ядерную часть из текущего PML4
     u64* kernel_pml4 = (u64*)0x1000;
     for (int i = 256; i < 512; i++) {
         pml4[i] = kernel_pml4[i];
@@ -35,13 +34,24 @@ static u64* create_address_space(void) {
 static void free_address_space(u64* pml4) {
     if (!pml4 || pml4 == (u64*)0x1000) return;
     
-    // Освобождаем таблицы пользовательской части
     for (int i = 0; i < 256; i++) {
         if (pml4[i] & PAGE_PRESENT) {
             u64* pdpt = (u64*)(pml4[i] & ~0xFFF);
             for (int j = 0; j < 512; j++) {
                 if (pdpt[j] & PAGE_PRESENT) {
                     u64* pd = (u64*)(pdpt[j] & ~0xFFF);
+                    for (int k = 0; k < 512; k++) {
+                        if (pd[k] & PAGE_PRESENT) {
+                            u64* pt = (u64*)(pd[k] & ~0xFFF);
+                            for (int l = 0; l < 512; l++) {
+                                if (pt[l] & PAGE_PRESENT) {
+                                    u64 phys = pt[l] & ~0xFFF;
+                                    kfree((void*)phys);
+                                }
+                            }
+                            kfree(pt);
+                        }
+                    }
                     kfree(pd);
                 }
             }
@@ -66,6 +76,14 @@ void sched_init(void) {
     idle->ppid = 0;
     idle->time_slice = TIME_SLICE;
     idle->sleep_until = 0;
+    idle->heap_start = 0;
+    idle->heap_end = 0;
+    idle->user_rsp = 0;
+    idle->user_rip = 0;
+    
+    for (int i = 0; i < 32; i++) {
+        idle->fd_table[i].used = 0;
+    }
     
     current = idle;
     process_count = 1;
@@ -103,26 +121,94 @@ int sched_create_process(const char *name, void (*entry)(void)) {
     
     u64 *stack = (u64*)((u64)p->kstack + STACK_SIZE);
     
-    *--stack = 0; // r15
-    *--stack = 0; // r14
-    *--stack = 0; // r13
-    *--stack = 0; // r12
-    *--stack = 0; // r11
-    *--stack = 0; // r10
-    *--stack = 0; // r9
-    *--stack = 0; // r8
-    *--stack = 0; // rbp
-    *--stack = 0; // rsi
-    *--stack = 0; // rdi
-    *--stack = 0; // rdx
-    *--stack = 0; // rcx
-    *--stack = 0; // rbx
-    *--stack = 0; // rax
-    *--stack = 0x202; // rflags (IF=1)
-    *--stack = (u64)entry; // rip
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0;
+    *--stack = 0x202;
+    *--stack = (u64)entry;
     
     p->rsp = (u64)stack;
     p->rbp = (u64)stack;
+    p->heap_start = 0;
+    p->heap_end = 0;
+    p->user_rsp = 0;
+    p->user_rip = 0;
+    
+    for (int i = 0; i < 32; i++) {
+        p->fd_table[i].used = 0;
+    }
+    
+    process_count++;
+    return p->pid;
+}
+
+int sched_create_user_process(const char *name, u8 *elf_data, u32 elf_size) {
+    if (process_count >= MAX_PROCESSES) return -1;
+    
+    process_t *p = NULL;
+    for (int i = 1; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROCESS_ZOMBIE || processes[i].state == 0) {
+            p = &processes[i];
+            break;
+        }
+    }
+    if (!p) return -1;
+    
+    memset(p, 0, sizeof(process_t));
+    p->pid = next_pid++;
+    p->ppid = current ? current->pid : 0;
+    strncpy(p->name, name, 31);
+    p->name[31] = '\0';
+    p->state = PROCESS_READY;
+    p->time_slice = TIME_SLICE;
+    p->sleep_until = 0;
+    
+    p->kstack = kmalloc(STACK_SIZE);
+    if (!p->kstack) return -1;
+    
+    p->cr3 = (u64)create_address_space();
+    if (!p->cr3) {
+        kfree(p->kstack);
+        return -1;
+    }
+    
+    extern int elf_load_user(u8*, void*);
+    if (elf_load_user(elf_data, p) != 0) {
+        kfree(p->kstack);
+        free_address_space((u64*)p->cr3);
+        return -1;
+    }
+    
+    u64 *stack = (u64*)((u64)p->kstack + STACK_SIZE);
+    
+    *--stack = 0x23;
+    *--stack = p->user_rsp;
+    *--stack = 0x202;
+    *--stack = 0x1B;
+    *--stack = p->user_rip;
+    
+    p->rsp = (u64)stack;
+    p->rbp = (u64)stack;
+    
+    for (int i = 0; i < 3; i++) {
+        p->fd_table[i].used = 1;
+        p->fd_table[i].type = 0;
+        if (i == 0) strcpy(p->fd_table[i].file.path, "/dev/stdin");
+        if (i == 1) strcpy(p->fd_table[i].file.path, "/dev/stdout");
+        if (i == 2) strcpy(p->fd_table[i].file.path, "/dev/stderr");
+        p->fd_table[i].file.pos = 0;
+    }
     
     process_count++;
     return p->pid;

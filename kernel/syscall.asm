@@ -6,48 +6,43 @@ section .text
 bits 64
 
 syscall_handler:
-    ; Сохраняем все регистры
-    push r15
-    push r14
-    push r13
-    push r12
-    push r11
-    push r10
-    push r9
-    push r8
+    swapgs
+    mov [rsp-8], rcx      ; сохраняем RIP
+    mov [rsp-16], r11     ; сохраняем RFLAGS
+    
+    ; Переключаемся на стек ядра
+    mov rcx, rsp
+    mov rsp, [gs:8]       ; kernel rsp
+    
+    push rcx              ; user rsp
+    push r11              ; user rflags
+    push rcx              ; user rip
     push rbp
-    push rsi
-    push rdi
-    push rdx
-    push rcx
     push rbx
-    push rax
+    push r12
+    push r13
+    push r14
+    push r15
     
     ; Вызываем C обработчик
-    ; rdi = syscall_num (уже в rdi из пользователя)
-    mov rsi, rbx    ; arg1
-    mov rdx, rcx    ; arg2
-    mov rcx, rdx    ; arg3
+    mov r9, r8
+    mov r8, rcx
+    mov rcx, rdx
+    mov rdx, rsi
+    mov rsi, rdi
+    mov rdi, rax
     call syscall_handler_c
     
-    ; Восстанавливаем регистры, но сохраняем результат
-    mov rbx, rax    ; сохраняем результат
-    pop rax
-    pop rbx
-    pop rcx
-    pop rdx
-    pop rdi
-    pop rsi
-    pop rbp
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    pop r12
-    pop r13
-    pop r14
+    ; Восстанавливаем
     pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    pop rbp
+    pop rcx               ; user rip
+    pop r11               ; user rflags
+    pop rsp               ; user rsp
     
-    ; Возвращаем результат в rax
-    mov rax, rbx
-    iretq
+    swapgs
+    o64 sysret

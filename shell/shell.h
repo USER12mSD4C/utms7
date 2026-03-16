@@ -15,5 +15,6 @@ void shell_unregister_command(const char* name);
 void shell_print(const char* str);
 void shell_print_num(u32 num);
 void shell_print_hex(u32 num);
+void shell_init(void);
 
 #endif

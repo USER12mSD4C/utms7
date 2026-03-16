@@ -5,13 +5,9 @@
 #include "../kernel/kapi.h"
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
-#include "../apps/uwr.h"
 
 static int cmd_help(int argc, char** argv) {
     (void)argc; (void)argv;
-    
-    shell_command_t *commands = NULL;
-    int cmd_count = 0;
     
     shell_print("\nUTMS Shell Commands\n");
     shell_print("==================\n\n");
@@ -21,7 +17,6 @@ static int cmd_help(int argc, char** argv) {
     shell_print("  mem       - show memory\n");
     shell_print("  echo      - echo args\n");
     shell_print("  ticks     - system ticks\n");
-    shell_print("  uwr       - text editor\n");
     shell_print("  ps        - list processes\n");
     shell_print("  kill      - kill process\n");
     shell_print("  ls        - list directory\n");
@@ -38,6 +33,7 @@ static int cmd_help(int argc, char** argv) {
     shell_print("  disks     - list all disks\n");
     shell_print("  lsblk     - list block devices\n");
     shell_print("  udisk     - partition manager\n");
+    shell_print("  upac      - package manager\n");
     
     return 0;
 }
@@ -72,22 +68,6 @@ static int cmd_ticks(int argc, char** argv) {
     (void)argc; (void)argv;
     shell_print_num(kapi_get_ticks());
     shell_print("\n");
-    return 0;
-}
-
-static int cmd_uwr(int argc, char** argv) {
-    const char* filename = NULL;
-    int use_vesa = 0;
-    
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-v") == 0) {
-            use_vesa = 1;
-        } else {
-            filename = argv[i];
-        }
-    }
-    
-    uwr_main(filename, use_vesa);
     return 0;
 }
 
@@ -152,13 +132,18 @@ static int cmd_kill(int argc, char** argv) {
     }
 }
 
+static int cmd_upac(int argc, char** argv) {
+    extern int upac_main(int, char**);
+    return upac_main(argc, argv);
+}
+
 void commands_init(void) {
     shell_register_command("help", cmd_help, "show help");
     shell_register_command("clear", cmd_clear, "clear screen");
     shell_register_command("mem", cmd_mem, "show memory");
     shell_register_command("echo", cmd_echo, "echo args");
     shell_register_command("ticks", cmd_ticks, "system ticks");
-    shell_register_command("uwr", cmd_uwr, "text editor");
     shell_register_command("ps", cmd_ps, "list processes");
     shell_register_command("kill", cmd_kill, "kill process");
+    shell_register_command("upac", cmd_upac, "package manager");
 }

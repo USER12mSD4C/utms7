@@ -1,0 +1,81 @@
+#include "ip.h"
+#include "arp.h"
+#include "net.h"
+#include "../include/string.h"
+#include "../kernel/memory.h"
+
+u16 ip_checksum(u16 *data, int len) {
+    u32 sum = 0;
+    
+    for (int i = 0; i < len / 2; i++) {
+        sum += data[i];
+    }
+    
+    if (len & 1) {
+        sum += *((u8*)data + len - 1);
+    }
+    
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    
+    return ~sum;
+}
+
+int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len, u8 *src_mac, u32 src_ip) {
+    u8 dst_mac[6];
+    
+    if (arp_cache_lookup(dst_ip, dst_mac) != 0) {
+        arp_send_request(dst_ip, src_mac, src_ip);
+        return -1;
+    }
+    
+    int total_len = sizeof(ip_hdr_t) + len;
+    u8 *packet = kmalloc(total_len);
+    if (!packet) return -1;
+    
+    ip_hdr_t *ip = (ip_hdr_t*)packet;
+    
+    ip->ver_ihl = 0x45;
+    ip->tos = 0;
+    ip->total_len = (total_len << 8) | (total_len >> 8);
+    ip->id = 0x0100;
+    ip->frag_off = 0;
+    ip->ttl = 64;
+    ip->protocol = protocol;
+    ip->checksum = 0;
+    ip->src = src_ip;
+    ip->dst = dst_ip;
+    
+    ip->checksum = ip_checksum((u16*)ip, sizeof(ip_hdr_t));
+    
+    memcpy(packet + sizeof(ip_hdr_t), data, len);
+    
+    net_eth_send(dst_mac, 0x0008, packet, total_len);
+    kfree(packet);
+    
+    return len;
+}
+
+void ip_handle_packet(u8 *packet, int len, void (*tcp_handler)(u8*, int, u32, u32)) {
+    if (len < sizeof(ip_hdr_t)) return;
+    
+    ip_hdr_t *ip = (ip_hdr_t*)packet;
+    
+    if (ip->ver_ihl >> 4 != 4) return;
+    
+    int header_len = (ip->ver_ihl & 0x0F) * 4;
+    if (header_len < sizeof(ip_hdr_t) || header_len > len) return;
+    
+    u16 total_len = (ip->total_len << 8) | (ip->total_len >> 8);
+    if (total_len > len) total_len = len;
+    
+    if (ip->dst != net_get_ip() && ip->dst != 0xFFFFFFFF) return;
+    
+    int data_len = total_len - header_len;
+    u8 *data = packet + header_len;
+    
+    if (ip->protocol == IP_PROTO_TCP && tcp_handler) {
+        tcp_handler(data, data_len, ip->src, ip->dst);
+    }
+}

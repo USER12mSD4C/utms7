@@ -3,16 +3,16 @@
 #include "paging.h"
 #include "gdt.h"
 #include "idt.h"
-#include "kinit.h"
 #include "sched.h"
-#include "../include/shell_api.h"
+#include "kapi.h"
+#include "../drivers/pci.h"
+#include "../net/rtl8139.h"
+#include "../net/net.h"
 #include "../fs/ufs.h"
-#include "../drivers/keyboard.h"
-#include "../drivers/disk.h"
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
+#include "../include/shell_api.h"
 
-// Внешняя функция из drivers/udisk.c
 void disk_commands_init(void);
 
 void kernel_main(void *mb_info) {
@@ -22,7 +22,7 @@ void kernel_main(void *mb_info) {
     
     vga_init();
     vga_clear();
-    vga_write("UTMS v0.2\n");
+    vga_write("UTMS v0.3 - Network Edition\n");
     
     vga_write("[1/8] GDT... ");
     gdt_init();
@@ -43,43 +43,41 @@ void kernel_main(void *mb_info) {
     }
     vga_write("OK\n");
     
-    vga_write("[5/8] Timer... ");
-    timer_init();
-    vga_write("OK\n");
-    
-    vga_write("[6/8] Scheduler... ");
+    vga_write("[5/8] Scheduler... ");
     sched_init();
     vga_write("OK\n");
     
-    vga_write("[7/8] Disk... ");
-    disk_init();
+    vga_write("[6/8] Syscalls... ");
+    kapi_init();
     vga_write("OK\n");
     
-    vga_write("[8/8] Keyboard... ");
-    keyboard_init();
+    vga_write("[7/8] PCI... ");
+    pci_init();
+    vga_write("OK\n");
+    
+    vga_write("[8/8] Network... ");
+    net_init();
     vga_write("OK\n");
     
     __asm__ volatile ("sti");
     
-    vga_write("Mounting UFS... ");
+    vga_write("\nMounting UFS... ");
     if (ufs_mount(2048, 0) == 0) {
         vga_write("OK\n");
     } else {
-        vga_write("FAILED (no UFS partition)\n");
+        vga_write("FAILED\n");
     }
     
-    kinit_run_all();
-    
-    vga_write("shell init... ");
+    vga_write("\nShell init... ");
     shell_init();
     commands_init();
     fs_commands_init();
     disk_commands_init();
     vga_write("OK\n");
     
-    vga_write("welcome to UTMS!\n");
+    vga_write("\nUTMS is ready!\n");
     vga_write("Type 'help' for commands\n");
-    shell_run();
+    vga_write("Type 'upac -Sy' to sync packages\n");
     
-    while(1) { __asm__ volatile ("hlt"); }
+    shell_run();
 }

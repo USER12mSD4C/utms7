@@ -2,79 +2,8 @@
 #include "../drivers/disk.h"
 #include "../kernel/memory.h"
 #include "../include/string.h"
-#include "../drivers/vga.h"
 
-#define UFS_MAGIC 0x55465300
-#define SUPERBLOCK_BLOCK 0
-#define ROOTDIR_BLOCK 1
 #define ENTRIES_PER_BLOCK (UFS_BLOCK_SIZE / sizeof(FSNode))
-
-#define UFS_DEBUG 1
-
-#ifdef UFS_DEBUG
-#include "../include/stdarg.h"
-static void ufs_log(const char* fmt, ...) {
-    char buf[256];
-    char* p = buf;
-    *p++ = '[';
-    *p++ = 'U';
-    *p++ = 'F';
-    *p++ = 'S';
-    *p++ = ']';
-    *p++ = ' ';
-    
-    va_list args;
-    va_start(args, fmt);
-    char* f = (char*)fmt;
-    while (*f) {
-        if (*f == '%' && *(f+1) == 'd') {
-            u32 num = va_arg(args, u32);
-            if (num == 0) {
-                buf[p - buf] = '0';
-                p++;
-            } else {
-                char tmp[16];
-                int ti = 0;
-                while (num > 0) {
-                    tmp[ti++] = '0' + (num % 10);
-                    num /= 10;
-                }
-                while (ti > 0) {
-                    buf[p - buf] = tmp[--ti];
-                    p++;
-                }
-            }
-            f += 2;
-        } else if (*f == '%' && *(f+1) == 's') {
-            char* s = va_arg(args, char*);
-            while (*s) {
-                buf[p - buf] = *s++;
-                p++;
-            }
-            f += 2;
-        } else if (*f == '%' && *(f+1) == 'x') {
-            u32 num = va_arg(args, u32);
-            char hex[] = "0123456789ABCDEF";
-            buf[p - buf] = '0'; p++;
-            buf[p - buf] = 'x'; p++;
-            for (int i = 28; i >= 0; i -= 4) {
-                buf[p - buf] = hex[(num >> i) & 0xF];
-                p++;
-            }
-            f += 2;
-        } else {
-            buf[p - buf] = *f++;
-            p++;
-        }
-    }
-    va_end(args);
-    
-    buf[p - buf] = '\0';
-    vga_write(buf);
-}
-#else
-#define ufs_log(...)
-#endif
 
 typedef struct {
     u32 magic;
@@ -214,52 +143,6 @@ static int get_parent(const char* path, u32* parent, char* name) {
     return (*parent == 0) ? -1 : 0;
 }
 
-static int read_all_entries(u32 dir_block, FSNode** entries, u32* count) {
-    u32 total = 0;
-    u32 current = dir_block;
-    
-    while (current != 0) {
-        u8 buf[UFS_BLOCK_SIZE];
-        if (read_block(current, buf) != 0) return -1;
-        
-        FSNode* e = (FSNode*)buf;
-        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
-            if (e[i].name[0] != 0) total++;
-        }
-        current = e[0].next_block;
-    }
-    
-    if (total == 0) {
-        *entries = NULL;
-        *count = 0;
-        return 0;
-    }
-    
-    *entries = kmalloc(total * sizeof(FSNode));
-    if (!*entries) return -1;
-    
-    u32 idx = 0;
-    current = dir_block;
-    while (current != 0) {
-        u8 buf[UFS_BLOCK_SIZE];
-        if (read_block(current, buf) != 0) {
-            kfree(*entries);
-            return -1;
-        }
-        
-        FSNode* e = (FSNode*)buf;
-        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
-            if (e[i].name[0] != 0) {
-                memcpy(&(*entries)[idx++], &e[i], sizeof(FSNode));
-            }
-        }
-        current = e[0].next_block;
-    }
-    
-    *count = total;
-    return 0;
-}
-
 static int find_in_dir(u32 dir_block, const char* name, FSNode* out) {
     if (!name || name[0] == '\0') return -1;
     
@@ -367,29 +250,47 @@ static int remove_from_dir(u32 dir_block, const char* name) {
     return -1;
 }
 
-int ufs_mount(u32 start_lba, int disk) {
-    ufs_log("ufs_mount: start_lba=%d disk=%d\n", start_lba, disk);
+static int update_in_dir(u32 dir_block, const char* name, FSNode* new_data) {
+    u32 current = dir_block;
     
+    while (current != 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(current, buf) != 0) return -1;
+        
+        FSNode* e = (FSNode*)buf;
+        
+        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
+            if (e[i].name[0] && strcmp(e[i].name, name) == 0) {
+                memcpy(&e[i], new_data, sizeof(FSNode));
+                return write_block(current, buf);
+            }
+        }
+        
+        current = e[0].next_block;
+    }
+    
+    return -1;
+}
+
+int ufs_mount(u32 start_lba, int disk) {
     part_start = start_lba;
     current_disk = disk;
     disk_set_disk(disk);
     
     u8 buf[UFS_BLOCK_SIZE];
-    if (disk_read(start_lba, buf) != 0) {
-        ufs_log("  read failed\n");
-        return -1;
-    }
+    if (disk_read(start_lba, buf) != 0) return -1;
     
     memcpy(&sb, buf, sizeof(sb));
     
-    if (sb.magic != UFS_MAGIC) {
-        ufs_log("  bad magic: %x\n", sb.magic);
-        return -1;
-    }
+    if (sb.magic != UFS_MAGIC) return -1;
     
     mounted = 1;
-    snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
-    ufs_log("  mounted %s\n", mounted_device);
+    
+    int len = strlen("/dev/sd");
+    strcpy(mounted_device, "/dev/sd");
+    mounted_device[len] = 'a' + disk;
+    mounted_device[len + 1] = '\0';
+    
     return 0;
 }
 
@@ -405,13 +306,10 @@ int ufs_ismounted(void) {
 }
 
 const char* ufs_get_device(void) {
-    if (!mounted) return "";
     return mounted_device;
 }
 
 int ufs_format(u32 start_lba, u32 blocks, int disk) {
-    ufs_log("ufs_format: start_lba=%d blocks=%d disk=%d\n", start_lba, blocks, disk);
-    
     part_start = start_lba;
     current_disk = disk;
     disk_set_disk(disk);
@@ -442,7 +340,12 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     if (disk_write(start_lba + ROOTDIR_BLOCK, buf) != 0) return -1;
     
     mounted = 1;
-    snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
+    
+    int len = strlen("/dev/sd");
+    strcpy(mounted_device, "/dev/sd");
+    mounted_device[len] = 'a' + disk;
+    mounted_device[len + 1] = '\0';
+    
     return 0;
 }
 
@@ -492,7 +395,6 @@ int ufs_mkdir(const char* path) {
 
 int ufs_write(const char* path, u8* data, u32 size) {
     if (!mounted) return -1;
-    if (!path || path[0] == '\0') return -1;
     
     if (ufs_exists(path) && !ufs_isdir(path)) {
         ufs_delete(path);
@@ -503,7 +405,6 @@ int ufs_write(const char* path, u8* data, u32 size) {
     
     if (get_parent(path, &parent_block, name) != 0) return -1;
     if (name[0] == '\0') return -1;
-    if (parent_block == 0 || parent_block >= sb.total_blocks) return -1;
     
     if (size == 0) {
         FSNode entry;
@@ -551,7 +452,6 @@ int ufs_write(const char* path, u8* data, u32 size) {
 
 int ufs_rewrite(const char* path, u8* data, u32 size) {
     if (!mounted) return -1;
-    if (!path || path[0] == '\0') return -1;
     
     char name[UFS_MAX_NAME];
     u32 parent_block;
@@ -573,22 +473,7 @@ int ufs_rewrite(const char* path, u8* data, u32 size) {
     if (size == 0) {
         e.size = 0;
         e.first_block = 0;
-        
-        u32 current = parent_block;
-        while (current != 0) {
-            u8 buf[UFS_BLOCK_SIZE];
-            if (read_block(current, buf) != 0) return -1;
-            
-            FSNode* entries = (FSNode*)buf;
-            for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
-                if (entries[i].name[0] && strcmp(entries[i].name, name) == 0) {
-                    memcpy(&entries[i], &e, sizeof(FSNode));
-                    return write_block(current, buf);
-                }
-            }
-            current = entries[0].next_block;
-        }
-        return -1;
+        return update_in_dir(parent_block, name, &e);
     }
     
     u32 blocks = (size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
@@ -620,22 +505,99 @@ int ufs_rewrite(const char* path, u8* data, u32 size) {
     e.size = size;
     e.first_block = first_block;
     
-    u32 current = parent_block;
-    while (current != 0) {
-        u8 buf[UFS_BLOCK_SIZE];
-        if (read_block(current, buf) != 0) return -1;
-        
-        FSNode* entries = (FSNode*)buf;
-        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
-            if (entries[i].name[0] && strcmp(entries[i].name, name) == 0) {
-                memcpy(&entries[i], &e, sizeof(FSNode));
-                return write_block(current, buf);
-            }
+    return update_in_dir(parent_block, name, &e);
+}
+
+int ufs_write_at(const char* path, u8* data, u32 size, u32 offset) {
+    if (!mounted) return -1;
+    
+    char name[UFS_MAX_NAME];
+    u32 parent_block;
+    
+    if (get_parent(path, &parent_block, name) != 0) return -1;
+    if (name[0] == '\0') return -1;
+    
+    FSNode e;
+    if (find_in_dir(parent_block, name, &e) != 0) {
+        if (offset == 0) {
+            return ufs_write(path, data, size);
         }
-        current = entries[0].next_block;
+        return -1;
+    }
+    if (e.is_dir) return -1;
+    
+    u32 new_size = (offset + size > e.size) ? offset + size : e.size;
+    u32 old_blocks = (e.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
+    u32 new_blocks = (new_size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
+    
+    if (new_blocks > old_blocks) {
+        if (sb.free_blocks < (new_blocks - old_blocks)) return -1;
     }
     
-    return -1;
+    u8 *full_data = kmalloc(new_size);
+    if (!full_data) return -1;
+    memset(full_data, 0, new_size);
+    
+    if (e.size > 0) {
+        u32 block = e.first_block;
+        u32 pos = 0;
+        u32 left = e.size;
+        
+        while (left > 0 && block != 0) {
+            u8 buf[UFS_BLOCK_SIZE];
+            if (read_block(block, buf) != 0) {
+                kfree(full_data);
+                return -1;
+            }
+            
+            u32 chunk = (left < UFS_BLOCK_SIZE) ? left : UFS_BLOCK_SIZE;
+            memcpy(full_data + pos, buf, chunk);
+            
+            pos += chunk;
+            left -= chunk;
+            block++;
+        }
+    }
+    
+    memcpy(full_data + offset, data, size);
+    
+    for (u32 i = 0; i < old_blocks; i++) {
+        free_block(e.first_block + i);
+    }
+    
+    u32 first_block = 0;
+    for (u32 i = 0; i < new_blocks; i++) {
+        u32 b = find_free_block();
+        if (!b) {
+            for (u32 j = 0; j < i; j++) free_block(first_block + j);
+            kfree(full_data);
+            return -1;
+        }
+        
+        if (i == 0) first_block = b;
+        
+        u8 block_buf[UFS_BLOCK_SIZE] = {0};
+        u32 block_offset = i * UFS_BLOCK_SIZE;
+        u32 chunk = new_size - block_offset;
+        if (chunk > UFS_BLOCK_SIZE) chunk = UFS_BLOCK_SIZE;
+        
+        memcpy(block_buf, full_data + block_offset, chunk);
+        
+        if (write_block(b, block_buf) != 0) {
+            for (u32 j = 0; j <= i; j++) free_block(first_block + j);
+            kfree(full_data);
+            return -1;
+        }
+    }
+    
+    kfree(full_data);
+    
+    e.size = new_size;
+    e.first_block = first_block;
+    
+    if (update_in_dir(parent_block, name, &e) != 0) return -1;
+    
+    return size;
 }
 
 int ufs_read(const char* path, u8** data, u32* size) {
@@ -687,6 +649,62 @@ int ufs_read(const char* path, u8** data, u32* size) {
     return 0;
 }
 
+int ufs_read_at(const char* path, u8* data, u32 size, u32 offset) {
+    if (!mounted) return -1;
+    
+    char name[UFS_MAX_NAME];
+    u32 parent_block;
+    
+    if (get_parent(path, &parent_block, name) != 0) return -1;
+    
+    FSNode e;
+    if (find_in_dir(parent_block, name, &e) != 0) return -1;
+    if (e.is_dir) return -1;
+    
+    if (offset >= e.size) return 0;
+    
+    u32 to_read = (offset + size > e.size) ? e.size - offset : size;
+    if (to_read == 0) return 0;
+    
+    u32 start_block = e.first_block + (offset / UFS_BLOCK_SIZE);
+    u32 block_offset = offset % UFS_BLOCK_SIZE;
+    u32 left = to_read;
+    u32 pos = 0;
+    u32 current_block = start_block;
+    
+    while (left > 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(current_block, buf) != 0) return pos;
+        
+        u32 chunk = UFS_BLOCK_SIZE - block_offset;
+        if (chunk > left) chunk = left;
+        
+        memcpy(data + pos, buf + block_offset, chunk);
+        
+        pos += chunk;
+        left -= chunk;
+        current_block++;
+        block_offset = 0;
+    }
+    
+    return to_read;
+}
+
+u32 ufs_file_size(const char* path) {
+    if (!mounted) return 0;
+    
+    char name[UFS_MAX_NAME];
+    u32 parent_block;
+    
+    if (get_parent(path, &parent_block, name) != 0) return 0;
+    
+    FSNode e;
+    if (find_in_dir(parent_block, name, &e) != 0) return 0;
+    if (e.is_dir) return 0;
+    
+    return e.size;
+}
+
 int ufs_readdir(const char* path, FSNode** entries, u32* count) {
     if (!mounted) return -1;
     
@@ -699,7 +717,43 @@ int ufs_readdir(const char* path, FSNode** entries, u32* count) {
         if (dir_block == 0) return -1;
     }
     
-    return read_all_entries(dir_block, entries, count);
+    u32 total = 0;
+    u32 current = dir_block;
+    
+    while (current != 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(current, buf) != 0) return -1;
+        
+        FSNode* e = (FSNode*)buf;
+        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
+            if (e[i].name[0] != 0) total++;
+        }
+        current = e[0].next_block;
+    }
+    
+    *entries = kmalloc(total * sizeof(FSNode));
+    if (!*entries) return -1;
+    
+    u32 idx = 0;
+    current = dir_block;
+    while (current != 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(current, buf) != 0) {
+            kfree(*entries);
+            return -1;
+        }
+        
+        FSNode* e = (FSNode*)buf;
+        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
+            if (e[i].name[0] != 0) {
+                memcpy(&(*entries)[idx++], &e[i], sizeof(FSNode));
+            }
+        }
+        current = e[0].next_block;
+    }
+    
+    *count = total;
+    return 0;
 }
 
 int ufs_delete(const char* path) {
@@ -738,21 +792,17 @@ int ufs_rmdir(const char* path) {
     if (find_in_dir(parent, name, &e) != 0) return -1;
     if (!e.is_dir) return -1;
     
-    FSNode* entries;
-    u32 count;
-    if (read_all_entries(e.first_block, &entries, &count) != 0) return -1;
-    
-    int empty = (count == 0);
-    if (entries) kfree(entries);
-    
-    if (!empty) return -1;
-    
     u32 current = e.first_block;
     while (current != 0) {
         u32 next = 0;
         u8 buf[UFS_BLOCK_SIZE];
         if (read_block(current, buf) == 0) {
             FSNode* be = (FSNode*)buf;
+            
+            for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
+                if (be[i].name[0] != 0) return -1;
+            }
+            
             next = be[0].next_block;
         }
         free_block(current);
@@ -764,7 +814,6 @@ int ufs_rmdir(const char* path) {
 
 int ufs_rmdir_force(const char* path) {
     if (!mounted) return -1;
-    if (!path || path[0] == '\0' || strcmp(path, "/") == 0) return -1;
     
     FSNode* entries;
     u32 count;
@@ -795,8 +844,12 @@ int ufs_exists(const char* path) {
     if (!mounted) return 0;
     if (!path || path[0] == '\0' || strcmp(path, "/") == 0) return 1;
     
-    u32 block = resolve_path(path);
-    return (block != 0);
+    char name[UFS_MAX_NAME];
+    u32 parent;
+    if (get_parent(path, &parent, name) != 0) return 0;
+    
+    FSNode e;
+    return (find_in_dir(parent, name, &e) == 0);
 }
 
 int ufs_isdir(const char* path) {

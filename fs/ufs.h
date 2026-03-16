@@ -6,6 +6,9 @@
 #define UFS_BLOCK_SIZE 512
 #define UFS_MAX_NAME 32
 #define UFS_MAX_PATH 256
+#define UFS_MAGIC 0x55465300
+#define SUPERBLOCK_BLOCK 0
+#define ROOTDIR_BLOCK 1
 
 typedef struct {
     char name[UFS_MAX_NAME];
@@ -16,22 +19,30 @@ typedef struct {
 } __attribute__((packed)) FSNode;
 
 int ufs_mount(u32 start_lba, int disk);
+int ufs_umount(void);
+int ufs_ismounted(void);
+const char* ufs_get_device(void);
+
 int ufs_format(u32 start_lba, u32 blocks, int disk);
+
 int ufs_write(const char* path, u8* data, u32 size);
 int ufs_read(const char* path, u8** data, u32* size);
+int ufs_rewrite(const char* path, u8* data, u32 size);
 int ufs_delete(const char* path);
+
+int ufs_write_at(const char* path, u8* data, u32 size, u32 offset);
+int ufs_read_at(const char* path, u8* data, u32 size, u32 offset);
+u32 ufs_file_size(const char* path);
+
 int ufs_mkdir(const char* path);
 int ufs_rmdir(const char* path);
 int ufs_rmdir_force(const char* path);
 int ufs_readdir(const char* path, FSNode** entries, u32* count);
+
 int ufs_exists(const char* path);
 int ufs_isdir(const char* path);
 int ufs_stat(u32* total, u32* used, u32* free);
 int ufs_cp(const char* src, const char* dst);
 int ufs_mv(const char* src, const char* dst);
-int ufs_rewrite(const char* path, u8* data, u32 size);
-int ufs_ismounted(void);
-const char* ufs_get_device(void);
-int ufs_umount(void);
 
 #endif

@@ -3,7 +3,10 @@
 
 #include "../include/types.h"
 
-#define ELF_MAGIC 0x464C457F // "\x7FELF"
+#define ELF_MAGIC 0x464C457F
+#define ET_EXEC 2
+#define ET_DYN 3
+#define PT_LOAD 1
 
 typedef struct {
     u8  ident[16];
@@ -33,8 +36,6 @@ typedef struct {
     u64 align;
 } __attribute__((packed)) elf64_phdr_t;
 
-#define PT_LOAD 1
-
-int elf_load(u8 *data, u64 *entry, u64 *stack);
+int elf_load_user(u8 *data, void *p);
 
 #endif

@@ -7,47 +7,76 @@ ASFLAGS = -f elf64
 CFLAGS = -m64 -ffreestanding -nostdlib -Iinclude -fno-stack-protector -mno-red-zone -mcmodel=large -mno-sse -O2
 LDFLAGS = -m elf_x86_64 -T linker.ld -nostdlib
 
+# Ядро
 CORE_OBJS = kernel/entry.o \
             kernel/kernel.o \
             kernel/kinit.o \
+            kernel/elf.o \
+            kernel/kapi.o \
+            kernel/gdt.o \
             kernel/idt.o \
             kernel/idt_irq.o \
             kernel/memory.o \
             kernel/paging.o \
-            kernel/kapi.o \
-            kernel/gdt.o \
             kernel/panic.o \
             kernel/sched.o \
-            kernel/sched_asm.o \
-            drivers/vga.o \
-            drivers/vesa.o \
-            drivers/keyboard.o \
-            drivers/mouse.o \
-            drivers/disk.o \
-            drivers/gpt.o \
-            drivers/udisk.o \
-            lib/string.o \
-            lib/font.o \
-            lib/path.o
+            kernel/sched_asm.o
 
-NORMAL_OBJS = $(CORE_OBJS) \
-              fs/ufs.o \
-              fs/fat.o \
-              shell/shell.o \
-              shell/uss.o \
-              commands/builtin.o \
-              commands/fs.o \
-              apps/uwr.o
+# Драйверы
+DRIVER_OBJS = drivers/vga.o \
+              drivers/vesa.o \
+              drivers/keyboard.o \
+              drivers/mouse.o \
+              drivers/disk.o \
+              drivers/gpt.o \
+              drivers/udisk.o \
+              drivers/pci.o
 
+# Сеть
+NET_OBJS = net/arp.o \
+           net/ip.o \
+           net/tcp.o \
+           net/udp.o \
+           net/dhcp.o \
+           net/dns.o \
+           net/http.o \
+           net/net.o \
+           net/rtl8139.o
+
+# Библиотеки
+LIB_OBJS = lib/string.o \
+           lib/font.o \
+           lib/path.o \
+           lib/zlib.o
+
+# Файловые системы
+FS_OBJS = fs/ufs.o \
+          fs/fat.o
+
+# Шелл и команды
+SHELL_OBJS = shell/shell.o \
+             shell/uss.o \
+             commands/builtin.o \
+             commands/fs.o
+
+# Приложения (БЕЗ UWR)
+APP_OBJS = apps/installer.o \
+           apps/upac.o
+
+# Все объекты
+NORMAL_OBJS = $(CORE_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(LIB_OBJS) $(FS_OBJS) $(SHELL_OBJS) $(APP_OBJS)
+
+# LiveCD объекты (БЕЗ UWR)
 LIVECD_OBJS = kernel/entry.o \
               kernel/kernel-livecd.o \
               kernel/kinit.o \
+              kernel/elf.o \
+              kernel/kapi.o \
+              kernel/gdt.o \
               kernel/idt.o \
               kernel/idt_irq.o \
               kernel/memory.o \
               kernel/paging.o \
-              kernel/kapi.o \
-              kernel/gdt.o \
               kernel/panic.o \
               kernel/sched.o \
               kernel/sched_asm.o \
@@ -58,17 +87,27 @@ LIVECD_OBJS = kernel/entry.o \
               drivers/disk.o \
               drivers/gpt.o \
               drivers/udisk.o \
+              drivers/pci.o \
+              net/arp.o \
+              net/ip.o \
+              net/tcp.o \
+              net/udp.o \
+              net/dhcp.o \
+              net/dns.o \
+              net/http.o \
+              net/net.o \
+              net/rtl8139.o \
               lib/string.o \
               lib/font.o \
               lib/path.o \
+              lib/zlib.o \
               fs/ufs.o \
               fs/fat.o \
               shell/shell.o \
               shell/uss.o \
               commands/builtin.o \
               commands/fs.o \
-              apps/installer.o \
-              apps/uwr.o
+              apps/installer.o
 
 all: kernel.bin kom
 
@@ -111,10 +150,16 @@ disk5g.img:
 	dd if=/dev/zero of=disk5g.img bs=1M count=5120
 
 run: iso disk5g.img
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user
 
 run-livecd: livecd disk5g.img
-	qemu-system-x86_64 -cdrom utms-livecd.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -boot d
+	qemu-system-x86_64 -cdrom utms-livecd.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -boot d -net nic,model=rtl8139 -net user
+
+run-net: kernel.bin disk5g.img
+	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -append "console=ttyS0"
+
+debug: kernel.bin
+	qemu-system-x86_64 -kernel kernel.bin -m 512 -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -s -S
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -137,4 +182,4 @@ clean:
 distclean: clean
 	rm -rf modules/ tools/mkmod
 
-.PHONY: all clean distclean run run-livecd iso livecd kom
+.PHONY: all clean distclean run run-livecd run-net debug iso livecd kom

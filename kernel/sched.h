@@ -25,10 +25,28 @@ typedef struct {
     u64 cr3;
     u32 time_slice;
     u64 sleep_until;
+    
+    // User mode поля
+    u64 user_rsp;
+    u64 user_rip;
+    u64 heap_start;
+    u64 heap_end;
+    
+    // Файловые дескрипторы
+    struct {
+        int used;
+        int type;
+        struct {
+            char path[256];
+            u32 pos;
+        } file;
+    } fd_table[32];
+    
 } process_t;
 
 void sched_init(void);
 int sched_create_process(const char *name, void (*entry)(void));
+int sched_create_user_process(const char *name, u8 *elf_data, u32 elf_size);
 void sched_exit(int code);
 void sched_yield(void);
 void sched_sleep(u32 ticks);

@@ -13,7 +13,6 @@
 #include "../commands/fs.h"
 #include "../apps/installer.h"
 
-// Внешняя функция из drivers/udisk.c
 void disk_commands_init(void);
 
 void kernel_main(void *mb_info) {
@@ -75,7 +74,7 @@ void kernel_main(void *mb_info) {
     shell_init();
     commands_init();
     fs_commands_init();
-    disk_commands_init();  // ← добавляем
+    disk_commands_init();
     vga_write("OK\n");
     
     shell_register_command("install", install_main, "install system to disk");
