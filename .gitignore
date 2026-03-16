@@ -4,5 +4,6 @@
 *.elf
 *.img
 *.log
+*.ko
 iso
 
