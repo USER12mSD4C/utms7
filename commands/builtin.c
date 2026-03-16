@@ -48,9 +48,9 @@ static int cmd_clear(int argc, char** argv) {
 static int cmd_mem(int argc, char** argv) {
     (void)argc; (void)argv;
     shell_print("used: ");
-    shell_print_num(kapi_memory_used());
+    shell_print_num(memory_used());
     shell_print(" free: ");
-    shell_print_num(kapi_memory_free());
+    shell_print_num(memory_free());
     shell_print("\n");
     return 0;
 }
@@ -66,7 +66,8 @@ static int cmd_echo(int argc, char** argv) {
 
 static int cmd_ticks(int argc, char** argv) {
     (void)argc; (void)argv;
-    shell_print_num(kapi_get_ticks());
+    extern u32 system_ticks;
+    shell_print_num(system_ticks);
     shell_print("\n");
     return 0;
 }

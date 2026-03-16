@@ -3,6 +3,9 @@
 #include "../kernel/memory.h"
 #include "../include/string.h"
 
+#define UFS_MAGIC 0x55465300
+#define SUPERBLOCK_BLOCK 0
+#define ROOTDIR_BLOCK 1
 #define ENTRIES_PER_BLOCK (UFS_BLOCK_SIZE / sizeof(FSNode))
 
 typedef struct {
@@ -250,28 +253,6 @@ static int remove_from_dir(u32 dir_block, const char* name) {
     return -1;
 }
 
-static int update_in_dir(u32 dir_block, const char* name, FSNode* new_data) {
-    u32 current = dir_block;
-    
-    while (current != 0) {
-        u8 buf[UFS_BLOCK_SIZE];
-        if (read_block(current, buf) != 0) return -1;
-        
-        FSNode* e = (FSNode*)buf;
-        
-        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
-            if (e[i].name[0] && strcmp(e[i].name, name) == 0) {
-                memcpy(&e[i], new_data, sizeof(FSNode));
-                return write_block(current, buf);
-            }
-        }
-        
-        current = e[0].next_block;
-    }
-    
-    return -1;
-}
-
 int ufs_mount(u32 start_lba, int disk) {
     part_start = start_lba;
     current_disk = disk;
@@ -285,12 +266,7 @@ int ufs_mount(u32 start_lba, int disk) {
     if (sb.magic != UFS_MAGIC) return -1;
     
     mounted = 1;
-    
-    int len = strlen("/dev/sd");
-    strcpy(mounted_device, "/dev/sd");
-    mounted_device[len] = 'a' + disk;
-    mounted_device[len + 1] = '\0';
-    
+    snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
     return 0;
 }
 
@@ -306,6 +282,7 @@ int ufs_ismounted(void) {
 }
 
 const char* ufs_get_device(void) {
+    if (!mounted) return "";
     return mounted_device;
 }
 
@@ -340,12 +317,7 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     if (disk_write(start_lba + ROOTDIR_BLOCK, buf) != 0) return -1;
     
     mounted = 1;
-    
-    int len = strlen("/dev/sd");
-    strcpy(mounted_device, "/dev/sd");
-    mounted_device[len] = 'a' + disk;
-    mounted_device[len + 1] = '\0';
-    
+    snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
     return 0;
 }
 
@@ -449,7 +421,27 @@ int ufs_write(const char* path, u8* data, u32 size) {
     
     return add_to_dir(parent_block, &entry);
 }
-
+static int update_in_dir(u32 dir_block, const char* name, FSNode* new_data) {
+    u32 current = dir_block;
+    
+    while (current != 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(current, buf) != 0) return -1;
+        
+        FSNode* e = (FSNode*)buf;
+        
+        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
+            if (e[i].name[0] && strcmp(e[i].name, name) == 0) {
+                memcpy(&e[i], new_data, sizeof(FSNode));
+                return write_block(current, buf);
+            }
+        }
+        
+        current = e[0].next_block;
+    }
+    
+    return -1;
+}
 int ufs_rewrite(const char* path, u8* data, u32 size) {
     if (!mounted) return -1;
     

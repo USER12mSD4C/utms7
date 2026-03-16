@@ -1,7 +1,8 @@
+#include "dhcp.h"
+#include "udp.h"
+#include "net.h"
 #include "../include/string.h"
 #include "../kernel/memory.h"
-#include "ip.h"
-#include "udp.h"
 
 #define DHCP_SERVER_PORT 67
 #define DHCP_CLIENT_PORT 68
@@ -35,6 +36,14 @@ static u32 dhcp_xid = 0x12345678;
 static u32 dhcp_server = 0;
 static u32 dhcp_lease = 86400;
 
+static u32 dhcp_htonl(u32 h) {
+    return (h >> 24) | ((h >> 8) & 0xFF00) | ((h << 8) & 0xFF0000) | (h << 24);
+}
+
+static u16 dhcp_htons(u16 h) {
+    return (h >> 8) | (h << 8);
+}
+
 int dhcp_send_discover(u8 *mac, u32 xid) {
     dhcp_pkt_t pkt;
     u8 *opt;
@@ -44,9 +53,9 @@ int dhcp_send_discover(u8 *mac, u32 xid) {
     pkt.op = 1;
     pkt.htype = 1;
     pkt.hlen = 6;
-    pkt.xid = ip_htonl(xid);
+    pkt.xid = dhcp_htonl(xid);
     memcpy(pkt.chaddr, mac, 6);
-    pkt.magic = ip_htonl(DHCP_MAGIC_COOKIE);
+    pkt.magic = dhcp_htonl(DHCP_MAGIC_COOKIE);
     
     opt = pkt.options;
     *opt++ = 53;
@@ -74,9 +83,9 @@ int dhcp_send_request(u8 *mac, u32 xid, u32 requested_ip, u32 server_ip) {
     pkt.op = 1;
     pkt.htype = 1;
     pkt.hlen = 6;
-    pkt.xid = ip_htonl(xid);
+    pkt.xid = dhcp_htonl(xid);
     memcpy(pkt.chaddr, mac, 6);
-    pkt.magic = ip_htonl(DHCP_MAGIC_COOKIE);
+    pkt.magic = dhcp_htonl(DHCP_MAGIC_COOKIE);
     
     opt = pkt.options;
     *opt++ = 53;
@@ -106,20 +115,32 @@ void dhcp_handle_packet(u8 *packet, int len) {
     dhcp_pkt_t *pkt = (dhcp_pkt_t*)packet;
     
     if (len < sizeof(dhcp_pkt_t) - sizeof(pkt->options)) return;
-    if (ip_htonl(pkt->magic) != DHCP_MAGIC_COOKIE) return;
+    if (dhcp_htonl(pkt->magic) != DHCP_MAGIC_COOKIE) return;
     
     u8 *opt = pkt->options;
     u8 *end = (u8*)packet + len;
     u8 msg_type = 0;
     u32 server_ip = 0;
+    u32 subnet_mask = 0;
+    u32 gateway = 0;
+    u32 dns = 0;
     
     while (opt < end && *opt != 255) {
         u8 code = *opt++;
         u8 length = *opt++;
         
-        if (code == 53) msg_type = *opt;
+        if (code == 53 && length == 1) msg_type = *opt;
         if (code == 54 && length == 4) {
             server_ip = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
+        }
+        if (code == 1 && length == 4) {
+            subnet_mask = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
+        }
+        if (code == 3 && length == 4) {
+            gateway = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
+        }
+        if (code == 6 && length == 4) {
+            dns = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
         }
         
         opt += length;
@@ -127,36 +148,14 @@ void dhcp_handle_packet(u8 *packet, int len) {
     
     if (msg_type == DHCP_OFFER && pkt->yiaddr != 0) {
         dhcp_server = server_ip;
-        dhcp_send_request(net_get_mac(), ip_htonl(pkt->xid), pkt->yiaddr, server_ip);
+        dhcp_send_request(net_get_mac(), dhcp_htonl(pkt->xid), pkt->yiaddr, server_ip);
     }
     
     if (msg_type == DHCP_ACK && pkt->yiaddr != 0) {
         net_set_ip(pkt->yiaddr);
-        net_set_server(dhcp_server);
-        
-        opt = pkt->options;
-        while (opt < end && *opt != 255) {
-            u8 code = *opt++;
-            u8 length = *opt++;
-            
-            if (code == 1) {
-                u32 mask = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
-                net_set_netmask(mask);
-            }
-            if (code == 3) {
-                u32 gateway = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
-                net_set_gateway(gateway);
-            }
-            if (code == 6) {
-                u32 dns = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
-                net_set_dns(dns);
-            }
-            if (code == 51 && length == 4) {
-                dhcp_lease = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
-            }
-            
-            opt += length;
-        }
+        if (subnet_mask) net_set_netmask(subnet_mask);
+        if (gateway) net_set_gateway(gateway);
+        if (dns) net_set_dns(dns);
     }
 }
 

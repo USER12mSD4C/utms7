@@ -1,11 +1,11 @@
 #include "kapi.h"
 #include "sched.h"
-#include "../include/string.h"
+#include "../fs/ufs.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
 #include "memory.h"
 #include "paging.h"
-#include "../fs/ufs.h"
+#include "../include/string.h"
 
 #define MAX_FDS 32
 #define SYSCALL_COUNT 64
@@ -35,8 +35,6 @@ static long sys_write(long fd, long buf, long count, long unused1, long unused2,
     
     if (!p->fd_table[fd].used) return -1;
     
-    // В UFS пока нет write_at, используем write (упрощенно)
-    // TODO: добавить позиционирование
     int res = ufs_write(p->fd_table[fd].file.path, (u8*)buf, count);
     if (res == 0) {
         p->fd_table[fd].file.pos += count;
@@ -59,7 +57,6 @@ static long sys_read(long fd, long buf, long count, long unused1, long unused2, 
     
     if (!p->fd_table[fd].used) return -1;
     
-    // В UFS пока нет read_at, используем read (упрощенно)
     u8 *tmp;
     u32 size;
     if (ufs_read(p->fd_table[fd].file.path, &tmp, &size) != 0) return -1;
@@ -127,11 +124,10 @@ static long sys_lseek(long fd, long offset, long whence, long unused1, long unus
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS || !p->fd_table[fd].used) return -1;
     
-    // Упрощенно - без проверки размера файла
     switch (whence) {
         case 0: p->fd_table[fd].file.pos = offset; break;
         case 1: p->fd_table[fd].file.pos += offset; break;
-        case 2: p->fd_table[fd].file.pos = offset; break; // В реальности с конца
+        case 2: p->fd_table[fd].file.pos = offset; break;
         default: return -1;
     }
     
@@ -169,6 +165,57 @@ static long sys_getpid(long unused1, long unused2, long unused3, long unused4, l
     return p ? p->pid : -1;
 }
 
+static long sys_socket(long domain, long type, long protocol, long unused1, long unused2, long unused3) {
+    (void)domain;
+    (void)type;
+    (void)protocol;
+    // TODO: реализовать сокеты
+    return -1;
+}
+
+static long sys_connect(long fd, long addr, long addrlen, long unused1, long unused2, long unused3) {
+    (void)fd;
+    (void)addr;
+    (void)addrlen;
+    // TODO: реализовать connect
+    return -1;
+}
+
+static long sys_send(long fd, long buf, long len, long flags, long unused1, long unused2) {
+    (void)fd;
+    (void)buf;
+    (void)len;
+    (void)flags;
+    // TODO: реализовать send
+    return -1;
+}
+
+static long sys_recv(long fd, long buf, long len, long flags, long unused1, long unused2) {
+    (void)fd;
+    (void)buf;
+    (void)len;
+    (void)flags;
+    // TODO: реализовать recv
+    return -1;
+}
+
+u32 kapi_memory_used(void) {
+    return memory_used();
+}
+
+u32 kapi_memory_free(void) {
+    return memory_free();
+}
+
+u32 kapi_get_ticks(void) {
+    extern u32 system_ticks;
+    return system_ticks;
+}
+
+void kapi_yield(void) {
+    __asm__ volatile ("hlt");
+}
+
 void kapi_init(void) {
     for (int i = 0; i < SYSCALL_COUNT; i++) syscall_table[i] = NULL;
     
@@ -180,4 +227,9 @@ void kapi_init(void) {
     syscall_register(12, sys_brk);
     syscall_register(39, sys_getpid);
     syscall_register(60, sys_exit);
+    
+    syscall_register(41, sys_socket);
+    syscall_register(42, sys_connect);
+    syscall_register(44, sys_send);
+    syscall_register(45, sys_recv);
 }

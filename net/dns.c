@@ -1,7 +1,7 @@
+#include "dns.h"
+#include "udp.h"
 #include "../include/string.h"
 #include "../kernel/memory.h"
-#include "ip.h"
-#include "udp.h"
 
 #define DNS_PORT 53
 #define DNS_TYPE_A 1
@@ -32,13 +32,19 @@ typedef struct {
 
 static u16 dns_id = 0;
 
-u16 dns_htons(u16 h) { return (h >> 8) | (h << 8); }
-u32 dns_htonl(u32 h) { return (h >> 24) | ((h >> 8) & 0xFF00) | ((h << 8) & 0xFF0000) | (h << 24); }
+static u16 dns_htons(u16 h) {
+    return (h >> 8) | (h << 8);
+}
 
-int dns_build_query(const char *hostname, u8 *buf, int buflen) {
+static u32 dns_htonl(u32 h) {
+    return (h >> 24) | ((h >> 8) & 0xFF00) | ((h << 8) & 0xFF0000) | (h << 24);
+}
+
+static int dns_build_query(const char *hostname, u8 *buf, int buflen) {
     dns_hdr_t *hdr = (dns_hdr_t*)buf;
     u8 *p = buf + sizeof(dns_hdr_t);
-    int len = 0;
+    
+    if (buflen < sizeof(dns_hdr_t) + strlen(hostname) + 2 + 4) return -1;
     
     memset(hdr, 0, sizeof(dns_hdr_t));
     hdr->id = dns_htons(dns_id++);
@@ -63,11 +69,10 @@ int dns_build_query(const char *hostname, u8 *buf, int buflen) {
     q->type = dns_htons(DNS_TYPE_A);
     q->class = dns_htons(DNS_CLASS_IN);
     
-    len = (p - buf) + sizeof(dns_question_t);
-    return len;
+    return (p - buf) + sizeof(dns_question_t);
 }
 
-int dns_parse_response(u8 *buf, int len, u32 *ip) {
+static int dns_parse_response(u8 *buf, int len, u32 *ip) {
     dns_hdr_t *hdr = (dns_hdr_t*)buf;
     
     if (dns_htons(hdr->ancount) == 0) return -1;
@@ -115,8 +120,7 @@ u32 dns_lookup(const char *hostname, u32 dns_server) {
     
     if (udp_send(dns_server, 12345, dns_server, DNS_PORT, query, qlen) < 0) return 0;
     
-    u32 timeout = system_ticks + 50;
-    while (system_ticks < timeout) {
+    for (int i = 0; i < 100; i++) {
         int rlen = udp_recv(response, sizeof(response));
         if (rlen > 0) {
             u32 ip;
@@ -124,6 +128,7 @@ u32 dns_lookup(const char *hostname, u32 dns_server) {
                 return ip;
             }
         }
+        for (int j = 0; j < 1000; j++) __asm__ volatile ("pause");
     }
     
     return 0;

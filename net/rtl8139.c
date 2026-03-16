@@ -1,11 +1,8 @@
+#include "rtl8139.h"
 #include "../include/io.h"
 #include "../include/string.h"
 #include "../kernel/memory.h"
 #include "../drivers/pci.h"
-#include "ethernet.h"
-
-#define RTL8139_VENDOR_ID 0x10EC
-#define RTL8139_DEVICE_ID 0x8139
 
 #define RTL8139_REG_MAC0 0x00
 #define RTL8139_REG_MAC4 0x04
@@ -15,7 +12,6 @@
 #define RTL8139_REG_ISR 0x3E
 #define RTL8139_REG_TXSTATUS0 0x10
 #define RTL8139_REG_TXADDR0 0x20
-#define RTL8139_REG_RX 0x3E
 #define RTL8139_REG_CFG 0x52
 
 #define RTL8139_CMD_RESET 0x10
@@ -44,7 +40,11 @@ int rtl8139_init(pci_dev_t *pci) {
     
     outb(rtl->io_base + RTL8139_REG_CFG, 0x00);
     outb(rtl->io_base + RTL8139_REG_CMD, RTL8139_CMD_RESET);
-    while (inb(rtl->io_base + RTL8139_REG_CMD) & RTL8139_CMD_RESET);
+    
+    int timeout = 1000;
+    while ((inb(rtl->io_base + RTL8139_REG_CMD) & RTL8139_CMD_RESET) && timeout-- > 0) {
+        for (int i = 0; i < 1000; i++) __asm__ volatile ("pause");
+    }
     
     for (int i = 0; i < 6; i++) {
         rtl->mac[i] = inb(rtl->io_base + RTL8139_REG_MAC0 + i);
@@ -55,20 +55,24 @@ int rtl8139_init(pci_dev_t *pci) {
         kfree(rtl);
         return -1;
     }
-    rtl->rx_buffer = (u8*)(((u32)rtl->rx_buffer + 15) & ~0xF);
+    
+    u64 addr = (u64)rtl->rx_buffer;
+    addr = (addr + 15) & ~0xF;
+    rtl->rx_buffer = (u8*)addr;
     
     for (int i = 0; i < 4; i++) {
         rtl->tx_buffer[i] = kmalloc(TX_BUF_SIZE);
-        if (!rtl->tx_buffer[i]) return -1;
+        if (!rtl->tx_buffer[i]) {
+            for (int j = 0; j < i; j++) kfree(rtl->tx_buffer[j]);
+            kfree(rtl->rx_buffer);
+            kfree(rtl);
+            return -1;
+        }
     }
     
-    outl(rtl->io_base + RTL8139_REG_RBSTART, (u32)rtl->rx_buffer);
-    
+    outl(rtl->io_base + RTL8139_REG_RBSTART, (u32)(u64)rtl->rx_buffer);
     outl(rtl->io_base + RTL8139_REG_IMR, 0xFFFF);
-    
-    outb(rtl->io_base + RTL8139_REG_CMD, 
-         RTL8139_CMD_RX_ENABLE | RTL8139_CMD_TX_ENABLE);
-    
+    outb(rtl->io_base + RTL8139_REG_CMD, RTL8139_CMD_RX_ENABLE | RTL8139_CMD_TX_ENABLE);
     outb(rtl->io_base + RTL8139_REG_CFG, 0x00);
     
     return 0;
@@ -80,7 +84,7 @@ void rtl8139_send(u8 *data, u16 len) {
     int idx = rtl->tx_cur;
     memcpy(rtl->tx_buffer[idx], data, len);
     
-    outl(rtl->io_base + RTL8139_REG_TXADDR0 + idx * 4, (u32)rtl->tx_buffer[idx]);
+    outl(rtl->io_base + RTL8139_REG_TXADDR0 + idx * 4, (u32)(u64)rtl->tx_buffer[idx]);
     outl(rtl->io_base + RTL8139_REG_TXSTATUS0 + idx * 4, len | 0x8000);
     
     rtl->tx_cur = (rtl->tx_cur + 1) % 4;
@@ -93,6 +97,8 @@ int rtl8139_recv(u8 *buffer, u16 max_len) {
     
     u16 status = inw(rtl->io_base + RTL8139_REG_ISR);
     if (!(status & 0x01)) return 0;
+    
+    outw(rtl->io_base + RTL8139_REG_ISR, status);
     
     u32 *rx_header = (u32*)rtl->rx_buffer;
     u16 pkt_len = (*rx_header >> 16) & 0x3FFF;
@@ -126,6 +132,7 @@ void rtl8139_handle_irq(void) {
         u8 packet[1514];
         int len = rtl8139_recv(packet, 1514);
         if (len > 0) {
+            extern void net_handle_packet(u8*, int);
             net_handle_packet(packet, len);
         }
     }

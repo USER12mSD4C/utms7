@@ -1,34 +1,16 @@
+#include "tcp.h"
+#include "ip.h"
+#include "net.h"
 #include "../include/string.h"
 #include "../kernel/memory.h"
-#include "ip.h"
 
 #define MAX_SOCKETS 16
 #define TCP_WINDOW 65535
 #define TCP_MSS 1460
 #define TCP_TIMEOUT 5000
 
-typedef struct {
-    int used;
-    u32 local_ip;
-    u16 local_port;
-    u32 remote_ip;
-    u16 remote_port;
-    u32 seq;
-    u32 ack;
-    int state;
-    
-    u8 *rx_buffer;
-    u32 rx_buffer_size;
-    u32 rx_buffer_head;
-    u32 rx_buffer_tail;
-    u32 rx_buffer_count;
-    
-    u32 timestamp;
-    int retries;
-} tcp_socket_t;
-
 static tcp_socket_t sockets[MAX_SOCKETS];
-static u32 system_ticks;
+static u32 system_ticks = 0;
 
 typedef struct {
     u32 src_ip;
@@ -37,9 +19,6 @@ typedef struct {
     u8 protocol;
     u16 tcp_len;
 } tcp_pseudo_t;
-
-u16 tcp_htons(u16 h) { return (h >> 8) | (h << 8); }
-u32 tcp_htonl(u32 h) { return (h >> 24) | ((h >> 8) & 0xFF00) | ((h << 8) & 0xFF0000) | (h << 24); }
 
 void tcp_init(void) {
     for (int i = 0; i < MAX_SOCKETS; i++) {
@@ -52,15 +31,16 @@ int tcp_socket_create(void) {
     for (int i = 0; i < MAX_SOCKETS; i++) {
         if (!sockets[i].used) {
             sockets[i].used = 1;
-            sockets[i].state = 0;
+            sockets[i].state = TCP_STATE_CLOSED;
             sockets[i].seq = 1000 + i * 1000;
             sockets[i].ack = 0;
             sockets[i].rx_buffer_size = 65536;
             sockets[i].rx_buffer = kmalloc(sockets[i].rx_buffer_size);
+            if (!sockets[i].rx_buffer) return -1;
             sockets[i].rx_buffer_head = 0;
             sockets[i].rx_buffer_tail = 0;
             sockets[i].rx_buffer_count = 0;
-            sockets[i].timestamp = system_ticks;
+            sockets[i].timestamp = 0;
             sockets[i].retries = 0;
             return i;
         }
@@ -68,7 +48,7 @@ int tcp_socket_create(void) {
     return -1;
 }
 
-u16 tcp_checksum(ip_hdr_t *ip, tcp_hdr_t *tcp, int tcp_len) {
+static u16 tcp_checksum(ip_hdr_t *ip, tcp_hdr_t *tcp, int tcp_len) {
     tcp_pseudo_t pseudo;
     u32 sum = 0;
     u16 *p;
@@ -77,7 +57,7 @@ u16 tcp_checksum(ip_hdr_t *ip, tcp_hdr_t *tcp, int tcp_len) {
     pseudo.dst_ip = ip->dst;
     pseudo.zero = 0;
     pseudo.protocol = IP_PROTO_TCP;
-    pseudo.tcp_len = tcp_htons(tcp_len);
+    pseudo.tcp_len = (tcp_len << 8) | (tcp_len >> 8);
     
     p = (u16*)&pseudo;
     for (int i = 0; i < sizeof(pseudo)/2; i++) {
@@ -100,7 +80,7 @@ u16 tcp_checksum(ip_hdr_t *ip, tcp_hdr_t *tcp, int tcp_len) {
     return ~sum;
 }
 
-int tcp_send_packet(tcp_socket_t *s, u8 flags, u8 *data, int len) {
+static int tcp_send_packet(tcp_socket_t *s, u8 flags, u8 *data, int len) {
     int tcp_len = sizeof(tcp_hdr_t) + len;
     int ip_len = sizeof(ip_hdr_t) + tcp_len;
     
@@ -112,8 +92,8 @@ int tcp_send_packet(tcp_socket_t *s, u8 flags, u8 *data, int len) {
     
     ip->ver_ihl = 0x45;
     ip->tos = 0;
-    ip->total_len = tcp_htons(ip_len);
-    ip->id = tcp_htons(s->seq & 0xFFFF);
+    ip->total_len = (ip_len << 8) | (ip_len >> 8);
+    ip->id = (s->seq << 8) | (s->seq >> 8);
     ip->frag_off = 0;
     ip->ttl = 64;
     ip->protocol = IP_PROTO_TCP;
@@ -121,13 +101,13 @@ int tcp_send_packet(tcp_socket_t *s, u8 flags, u8 *data, int len) {
     ip->src = s->local_ip;
     ip->dst = s->remote_ip;
     
-    tcp->src_port = tcp_htons(s->local_port);
-    tcp->dst_port = tcp_htons(s->remote_port);
-    tcp->seq = tcp_htonl(s->seq);
-    tcp->ack = tcp_htonl(s->ack);
+    tcp->src_port = (s->local_port << 8) | (s->local_port >> 8);
+    tcp->dst_port = (s->remote_port << 8) | (s->remote_port >> 8);
+    tcp->seq = (s->seq << 24) | ((s->seq << 8) & 0xFF0000) | ((s->seq >> 8) & 0xFF00) | (s->seq >> 24);
+    tcp->ack = (s->ack << 24) | ((s->ack << 8) & 0xFF0000) | ((s->ack >> 8) & 0xFF00) | (s->ack >> 24);
     tcp->offset = (sizeof(tcp_hdr_t)/4) << 4;
     tcp->flags = flags;
-    tcp->window = tcp_htons(TCP_WINDOW);
+    tcp->window = (TCP_WINDOW << 8) | (TCP_WINDOW >> 8);
     tcp->checksum = 0;
     tcp->urg_ptr = 0;
     
@@ -209,10 +189,10 @@ void tcp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip) {
     if (len < sizeof(tcp_hdr_t)) return;
     
     tcp_hdr_t *tcp = (tcp_hdr_t*)packet;
-    u16 src_port = tcp_htons(tcp->src_port);
-    u16 dst_port = tcp_htons(tcp->dst_port);
-    u32 seq = tcp_htonl(tcp->seq);
-    u32 ack = tcp_htonl(tcp->ack);
+    u16 src_port = (tcp->src_port << 8) | (tcp->src_port >> 8);
+    u16 dst_port = (tcp->dst_port << 8) | (tcp->dst_port >> 8);
+    u32 seq = (tcp->seq << 24) | ((tcp->seq << 8) & 0xFF0000) | ((tcp->seq >> 8) & 0xFF00) | (tcp->seq >> 24);
+    u32 ack = (tcp->ack << 24) | ((tcp->ack << 8) & 0xFF0000) | ((tcp->ack >> 8) & 0xFF00) | (tcp->ack >> 24);
     int header_len = (tcp->offset >> 4) * 4;
     int data_len = len - header_len;
     u8 *data = packet + header_len;
@@ -237,7 +217,7 @@ void tcp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip) {
     
     switch (s->state) {
         case TCP_STATE_SYN_SENT:
-            if (flags & TCP_FLAG_SYN && flags & TCP_FLAG_ACK) {
+            if ((flags & TCP_FLAG_SYN) && (flags & TCP_FLAG_ACK)) {
                 s->state = TCP_STATE_ESTABLISHED;
                 s->ack = seq + 1;
                 tcp_send_packet(s, TCP_FLAG_ACK, NULL, 0);

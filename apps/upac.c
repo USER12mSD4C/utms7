@@ -1,9 +1,9 @@
-#include "../../include/string.h"
-#include "../../kernel/memory.h"
-#include "../../fs/ufs.h"
-#include "../../net/http.h"
-#include "../../lib/zlib.h"
-#include "../../drivers/vga.h"
+#include "../include/string.h"
+#include "../kernel/memory.h"
+#include "../fs/ufs.h"
+#include "../net/http.h"
+#include "../lib/zlib.h"
+#include "../drivers/vga.h"
 
 #define UPAC_ROOT "/var/lib/upac"
 #define UPAC_DB UPAC_ROOT "/core.db"
@@ -209,6 +209,7 @@ static int upac_install_deps(upac_pkg_t *pkg) {
             upac_print(pkg->deps[i]);
             upac_print("\n");
             
+            extern int upac_install(const char *name);
             if (upac_install(pkg->deps[i]) != 0) return -1;
         }
     }
