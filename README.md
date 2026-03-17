@@ -5,7 +5,6 @@
 x86-64 operating system written in C and NASM assembly.
 
 i dont recommend use it, still untested
-( finally repaired UFS, yay :D )
 
 ## Project structure
 
@@ -22,7 +21,7 @@ i dont recommend use it, still untested
 
 ## last huge update
 
-- working UWR (utms write-reader)
+- kapi and syscalls for bin files
 - working mbr/gpt
 - udisk instead of straight gpt
 - livecd install (in work)
