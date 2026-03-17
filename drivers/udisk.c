@@ -395,13 +395,35 @@ int udisk_set_type(const char* devname, partition_type_t type) {
 
 int udisk_format_partition(const char* devname, const char* fstype) {
     partition_t* p = udisk_get_partition(devname);
-    if (!p) return -1;
+    if (!p) {
+        shell_print("partition not found\n");
+        return -1;
+    }
+    
+    shell_print("start_lba=");
+    shell_print_num(p->start_lba);
+    shell_print(" blocks=");
+    shell_print_num(p->end_lba - p->start_lba + 1);
+    shell_print(" disk=");
+    shell_print_num(p->disk_num);
+    shell_print("\n");
     
     if (strcmp(fstype, "ufs") == 0) {
         u32 blocks = (p->end_lba - p->start_lba + 1);
-        return ufs_format(p->start_lba, blocks, p->disk_num);
+        int res = ufs_format(p->start_lba, blocks, p->disk_num);
+        
+        if (res == 0) {
+            shell_print("OK\n");
+            return 0;
+        } else {
+            shell_print("FAILED (code ");
+            shell_print_num(res);
+            shell_print(")\n");
+            return -1;
+        }
     }
     
+    shell_print("unknown fs type\n");
     return -1;
 }
 
@@ -410,10 +432,12 @@ static int cmd_disks(int argc, char** argv) {
     
     udisk_scan();
     
+    int disk_found = 0;
     for (int i = 0; i < 4; i++) {
         disk_info_t* d = udisk_get_info(i);
         if (!d || !d->present) continue;
         
+        disk_found = 1;
         char name[16] = "/dev/sdX";
         name[7] = 'a' + i;
         
@@ -432,12 +456,14 @@ static int cmd_disks(int argc, char** argv) {
             char pname[16] = "/dev/sdX";
             pname[7] = 'a' + i;
             
-            if (p->partition_num < 10) {
-                pname[8] = '0' + p->partition_num;
+            // Правильное формирование имени раздела
+            int part_num = p->partition_num;
+            if (part_num < 10) {
+                pname[8] = '0' + part_num;
                 pname[9] = '\0';
             } else {
-                pname[8] = '0' + p->partition_num / 10;
-                pname[9] = '0' + p->partition_num % 10;
+                pname[8] = '0' + part_num / 10;
+                pname[9] = '0' + part_num % 10;
                 pname[10] = '\0';
             }
             
@@ -460,6 +486,10 @@ static int cmd_disks(int argc, char** argv) {
             }
             shell_print("\n");
         }
+    }
+    
+    if (!disk_found) {
+        shell_print("No disks found\n");
     }
     
     return 0;
@@ -679,7 +709,7 @@ static int cmd_mkfs_ufs(int argc, char** argv) {
 
 static int cmd_mount(int argc, char** argv) {
     if (argc < 2) {
-        shell_print("Usage: mount /dev/sdX[1-16]\n");
+        shell_print("Usage: mount /dev/sdX[1-16] [mountpoint]\n");
         return -1;
     }
     
@@ -690,15 +720,28 @@ static int cmd_mount(int argc, char** argv) {
     }
     
     if (ufs_ismounted()) {
-        shell_print("already mounted\n");
+        shell_print("already mounted on ");
+        shell_print(ufs_get_mount_point());
+        shell_print("\n");
         return -1;
+    }
+    
+    const char* mount_point = "/";
+    if (argc >= 3) {
+        mount_point = argv[2];
     }
     
     shell_print("Mounting ");
     shell_print(argv[1]);
+    shell_print(" to ");
+    shell_print(mount_point);
     shell_print("... ");
     
-    if (ufs_mount(p->start_lba, p->disk_num) == 0) {
+    // Используем новую функцию
+    char dev[32];
+    strcpy(dev, argv[1]);
+    
+    if (ufs_mount_to(dev, mount_point) == 0) {
         shell_print("OK\n");
         return 0;
     } else {
