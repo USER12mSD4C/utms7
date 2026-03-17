@@ -107,7 +107,7 @@ static int tcp_send_packet(tcp_socket_t *s, u8 flags, u8 *data, int len) {
     tcp->ack = (s->ack << 24) | ((s->ack << 8) & 0xFF0000) | ((s->ack >> 8) & 0xFF00) | (s->ack >> 24);
     tcp->offset = (sizeof(tcp_hdr_t)/4) << 4;
     tcp->flags = flags;
-    tcp->window = (TCP_WINDOW << 8) | (TCP_WINDOW >> 8);
+    tcp->window = (u16)((TCP_WINDOW << 8) | (TCP_WINDOW >> 8));
     tcp->checksum = 0;
     tcp->urg_ptr = 0;
     

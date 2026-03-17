@@ -6,6 +6,7 @@
 #include "sched.h"
 #include "kapi.h"
 #include "../drivers/pci.h"
+#include "../drivers/disk.h"  // ← ДОБАВИТЬ ЭТУ СТРОКУ
 #include "../net/rtl8139.h"
 #include "../net/net.h"
 #include "../fs/ufs.h"
@@ -43,6 +44,10 @@ void kernel_main(void *mb_info) {
     }
     vga_write("OK\n");
     
+    vga_write("[7.5/8] Disk... ");
+    disk_init();
+    vga_write("OK\n");
+    
     vga_write("[5/8] Scheduler... ");
     sched_init();
     vga_write("OK\n");
@@ -67,6 +72,11 @@ void kernel_main(void *mb_info) {
     } else {
         vga_write("FAILED\n");
     }
+    
+    // disk_get_disk_count() теперь доступна
+    vga_write("Disks found: ");
+    vga_write_num(disk_get_disk_count());
+    vga_write("\n");
     
     vga_write("\nShell init... ");
     shell_init();

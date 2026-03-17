@@ -8,7 +8,7 @@
 #include "../include/shell_api.h"
 #include "../fs/ufs.h"
 #include "../drivers/keyboard.h"
-#include "../drivers/disk.h"
+#include "../drivers/disk.h"  // ← ДОБАВИТЬ ЭТУ СТРОКУ
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 #include "../apps/installer.h"
@@ -67,6 +67,10 @@ void kernel_main(void *mb_info) {
     } else {
         vga_write("FAILED\n");
     }
+    
+    vga_write("Disks found: ");
+    vga_write_num(disk_get_disk_count());  // ← ТЕПЕРЬ РАБОТАЕТ
+    vga_write("\n");
     
     kinit_run_all();
     

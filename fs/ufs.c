@@ -21,6 +21,8 @@ static u32 part_start = 0;
 static int current_disk = 0;
 static char mounted_device[16] = "";
 
+// ==================== БАЗОВЫЕ ОПЕРАЦИИ ====================
+
 static int read_block(u32 b, u8* buf) {
     if (!buf) return -1;
     disk_set_disk(current_disk);
@@ -39,6 +41,16 @@ static int save_superblock(void) {
     return write_block(SUPERBLOCK_BLOCK, buf);
 }
 
+static int load_superblock(void) {
+    u8 buf[UFS_BLOCK_SIZE] = {0};
+    if (read_block(SUPERBLOCK_BLOCK, buf) != 0) return -1;
+    memcpy(&sb, buf, sizeof(sb));
+    if (sb.magic != UFS_MAGIC) return -1;
+    return 0;
+}
+
+// ==================== УПРАВЛЕНИЕ БЛОКАМИ ====================
+
 static u32 find_free_block(void) {
     for (u32 i = 2; i < sb.total_blocks; i++) {
         u8 buf[UFS_BLOCK_SIZE];
@@ -46,7 +58,10 @@ static u32 find_free_block(void) {
         
         int empty = 1;
         for (int j = 0; j < UFS_BLOCK_SIZE; j++) {
-            if (buf[j]) { empty = 0; break; }
+            if (buf[j] != 0) {
+                empty = 0;
+                break;
+            }
         }
         
         if (empty) {
@@ -61,14 +76,26 @@ static u32 find_free_block(void) {
 static void free_block(u32 b) {
     if (b == 0 || b >= sb.total_blocks) return;
     u8 zero[UFS_BLOCK_SIZE] = {0};
-    write_block(b, zero);
-    sb.free_blocks++;
-    save_superblock();
+    if (write_block(b, zero) == 0) {
+        sb.free_blocks++;
+        save_superblock();
+    }
 }
+
+static void free_file_blocks(u32 first_block, u32 size) {
+    if (first_block == 0) return;
+    u32 blocks = (size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
+    for (u32 i = 0; i < blocks; i++) {
+        free_block(first_block + i);
+    }
+}
+
+// ==================== РАБОТА С ПУТЯМИ ====================
 
 static int get_path_component(const char **path, char *comp) {
     while (**path == '/') (*path)++;
     if (**path == '\0') return 0;
+    
     int i = 0;
     while (**path && **path != '/' && i < UFS_MAX_NAME-1) {
         comp[i++] = **path;
@@ -93,17 +120,17 @@ static u32 resolve_path(const char* path) {
             u8 buf[UFS_BLOCK_SIZE];
             if (read_block(current, buf) != 0) return 0;
             FSNode* e = (FSNode*)buf;
-            if (e[1].is_dir && strcmp(e[1].name, "..") == 0) {
-                current = e[1].first_block;
-            }
+            current = e[1].first_block;  // ".." это вторая запись
             continue;
         }
         
         u32 found = 0;
         u32 block = current;
+        
         while (block) {
             u8 buf[UFS_BLOCK_SIZE];
             if (read_block(block, buf) != 0) return 0;
+            
             FSNode* e = (FSNode*)buf;
             for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
                 if (e[i].name[0] && strcmp(e[i].name, comp) == 0) {
@@ -124,27 +151,34 @@ static u32 resolve_path(const char* path) {
 static int get_parent(const char* path, u32* parent, char* name) {
     const char* p = path;
     const char* last_slash = NULL;
+    
     while (*p) {
         if (*p == '/') last_slash = p;
         p++;
     }
+    
     if (!last_slash) {
         strcpy(name, path);
         *parent = sb.root_dir;
         return 0;
     }
+    
     int dir_len = last_slash - path;
     char dir[256];
+    
     if (dir_len == 0) {
         strcpy(dir, "/");
     } else {
         strncpy(dir, path, dir_len);
         dir[dir_len] = '\0';
     }
+    
     strcpy(name, last_slash + 1);
     *parent = resolve_path(dir);
     return (*parent == 0) ? -1 : 0;
 }
+
+// ==================== РАБОТА С ДИРЕКТОРИЯМИ ====================
 
 static int find_in_dir(u32 dir_block, const char* name, FSNode* out) {
     if (!name || name[0] == '\0') return -1;
@@ -179,12 +213,14 @@ static int add_to_dir(u32 dir_block, FSNode* new_entry) {
         
         FSNode* e = (FSNode*)buf;
         
+        // Проверяем дубликаты
         for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
             if (e[i].name[0] && strcmp(e[i].name, new_entry->name) == 0) {
-                return -1;
+                return -1;  // Уже существует
             }
         }
         
+        // Ищем свободное место
         for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
             if (e[i].name[0] == 0) {
                 memcpy(&e[i], new_entry, sizeof(FSNode));
@@ -196,6 +232,7 @@ static int add_to_dir(u32 dir_block, FSNode* new_entry) {
         current = e[0].next_block;
     }
     
+    // Нужен новый блок
     u32 new_block = find_free_block();
     if (!new_block) return -1;
     
@@ -203,16 +240,20 @@ static int add_to_dir(u32 dir_block, FSNode* new_entry) {
     memset(buf, 0, sizeof(buf));
     FSNode* e = (FSNode*)buf;
     
+    // Создаем служебные записи
     strcpy(e[0].name, ".");
     e[0].first_block = new_block;
-    e[0].is_dir = 1;
+    e[0].is_dir = (new_entry->is_dir) ? 1 : 0;
     e[0].next_block = 0;
+    e[0].size = 0;
     
     strcpy(e[1].name, "..");
     e[1].first_block = dir_block;
     e[1].is_dir = 1;
     e[1].next_block = 0;
+    e[1].size = 0;
     
+    // Добавляем новую запись
     memcpy(&e[2], new_entry, sizeof(FSNode));
     
     if (write_block(new_block, buf) != 0) {
@@ -220,12 +261,19 @@ static int add_to_dir(u32 dir_block, FSNode* new_entry) {
         return -1;
     }
     
+    // Связываем с предыдущим блоком
     if (last != 0) {
         u8 last_buf[UFS_BLOCK_SIZE];
-        if (read_block(last, last_buf) != 0) return -1;
+        if (read_block(last, last_buf) != 0) {
+            free_block(new_block);
+            return -1;
+        }
         FSNode* last_e = (FSNode*)last_buf;
         last_e[0].next_block = new_block;
-        if (write_block(last, last_buf) != 0) return -1;
+        if (write_block(last, last_buf) != 0) {
+            free_block(new_block);
+            return -1;
+        }
     }
     
     return 0;
@@ -253,17 +301,35 @@ static int remove_from_dir(u32 dir_block, const char* name) {
     return -1;
 }
 
+static int update_in_dir(u32 dir_block, const char* name, FSNode* new_data) {
+    u32 current = dir_block;
+    
+    while (current != 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(current, buf) != 0) return -1;
+        
+        FSNode* e = (FSNode*)buf;
+        
+        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
+            if (e[i].name[0] && strcmp(e[i].name, name) == 0) {
+                memcpy(&e[i], new_data, sizeof(FSNode));
+                return write_block(current, buf);
+            }
+        }
+        
+        current = e[0].next_block;
+    }
+    
+    return -1;
+}
+
+// ==================== ОСНОВНЫЕ ФУНКЦИИ ====================
+
 int ufs_mount(u32 start_lba, int disk) {
     part_start = start_lba;
     current_disk = disk;
-    disk_set_disk(disk);
     
-    u8 buf[UFS_BLOCK_SIZE];
-    if (disk_read(start_lba, buf) != 0) return -1;
-    
-    memcpy(&sb, buf, sizeof(sb));
-    
-    if (sb.magic != UFS_MAGIC) return -1;
+    if (load_superblock() != 0) return -1;
     
     mounted = 1;
     snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
@@ -289,18 +355,26 @@ const char* ufs_get_device(void) {
 int ufs_format(u32 start_lba, u32 blocks, int disk) {
     part_start = start_lba;
     current_disk = disk;
-    disk_set_disk(disk);
     
+    // Очищаем все блоки
+    u8 zero[UFS_BLOCK_SIZE] = {0};
+    for (u32 i = 0; i < blocks; i++) {
+        disk_set_disk(disk);
+        if (disk_write(start_lba + i, zero) != 0) return -1;
+    }
+    
+    // Создаем суперблок
     memset(&sb, 0, sizeof(sb));
     sb.magic = UFS_MAGIC;
     sb.total_blocks = blocks;
-    sb.free_blocks = blocks - 2;
+    sb.free_blocks = blocks - 2;  // Суперблок + корневая директория
     sb.root_dir = ROOTDIR_BLOCK;
     
-    u8 buf[UFS_BLOCK_SIZE];
+    u8 buf[UFS_BLOCK_SIZE] = {0};
     memcpy(buf, &sb, sizeof(sb));
-    if (disk_write(start_lba, buf) != 0) return -1;
+    if (disk_write(start_lba + SUPERBLOCK_BLOCK, buf) != 0) return -1;
     
+    // Создаем корневую директорию
     memset(buf, 0, UFS_BLOCK_SIZE);
     FSNode* e = (FSNode*)buf;
     
@@ -308,11 +382,13 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     e[0].first_block = ROOTDIR_BLOCK;
     e[0].is_dir = 1;
     e[0].next_block = 0;
+    e[0].size = 0;
     
     strcpy(e[1].name, "..");
     e[1].first_block = ROOTDIR_BLOCK;
     e[1].is_dir = 1;
     e[1].next_block = 0;
+    e[1].size = 0;
     
     if (disk_write(start_lba + ROOTDIR_BLOCK, buf) != 0) return -1;
     
@@ -331,6 +407,7 @@ int ufs_mkdir(const char* path) {
     if (get_parent(path, &parent_block, name) != 0) return -1;
     if (name[0] == '\0') return -1;
     
+    // Проверяем, не существует ли уже
     if (find_in_dir(parent_block, name, NULL) == 0) return -1;
     
     u32 new_block = find_free_block();
@@ -344,11 +421,13 @@ int ufs_mkdir(const char* path) {
     new_e[0].first_block = new_block;
     new_e[0].is_dir = 1;
     new_e[0].next_block = 0;
+    new_e[0].size = 0;
     
     strcpy(new_e[1].name, "..");
     new_e[1].first_block = parent_block;
     new_e[1].is_dir = 1;
     new_e[1].next_block = 0;
+    new_e[1].size = 0;
     
     if (write_block(new_block, new_buf) != 0) {
         free_block(new_block);
@@ -361,13 +440,21 @@ int ufs_mkdir(const char* path) {
     entry.first_block = new_block;
     entry.is_dir = 1;
     entry.next_block = 0;
+    entry.size = 0;
     
-    return add_to_dir(parent_block, &entry);
+    int res = add_to_dir(parent_block, &entry);
+    if (res != 0) {
+        free_block(new_block);
+        return -1;
+    }
+    
+    return 0;
 }
 
 int ufs_write(const char* path, u8* data, u32 size) {
     if (!mounted) return -1;
     
+    // Если файл существует и это не директория - удаляем
     if (ufs_exists(path) && !ufs_isdir(path)) {
         ufs_delete(path);
     }
@@ -378,14 +465,19 @@ int ufs_write(const char* path, u8* data, u32 size) {
     if (get_parent(path, &parent_block, name) != 0) return -1;
     if (name[0] == '\0') return -1;
     
+    // Пустой файл
     if (size == 0) {
         FSNode entry;
         memset(&entry, 0, sizeof(entry));
         strcpy(entry.name, name);
+        entry.first_block = 0;
+        entry.is_dir = 0;
         entry.next_block = 0;
+        entry.size = 0;
         return add_to_dir(parent_block, &entry);
     }
     
+    // Выделяем блоки
     u32 blocks = (size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
     if (sb.free_blocks < blocks) return -1;
     
@@ -393,6 +485,7 @@ int ufs_write(const char* path, u8* data, u32 size) {
     for (u32 i = 0; i < blocks; i++) {
         u32 b = find_free_block();
         if (!b) {
+            // Откат
             for (u32 j = 0; j < i; j++) free_block(first_block + j);
             return -1;
         }
@@ -407,41 +500,24 @@ int ufs_write(const char* path, u8* data, u32 size) {
         if (data) memcpy(block_buf, data + offset, chunk);
         
         if (write_block(b, block_buf) != 0) {
+            // Откат
             for (u32 j = 0; j <= i; j++) free_block(first_block + j);
             return -1;
         }
     }
     
+    // Создаем запись в директории
     FSNode entry;
     memset(&entry, 0, sizeof(entry));
     strcpy(entry.name, name);
     entry.size = size;
     entry.first_block = first_block;
+    entry.is_dir = 0;
     entry.next_block = 0;
     
     return add_to_dir(parent_block, &entry);
 }
-static int update_in_dir(u32 dir_block, const char* name, FSNode* new_data) {
-    u32 current = dir_block;
-    
-    while (current != 0) {
-        u8 buf[UFS_BLOCK_SIZE];
-        if (read_block(current, buf) != 0) return -1;
-        
-        FSNode* e = (FSNode*)buf;
-        
-        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
-            if (e[i].name[0] && strcmp(e[i].name, name) == 0) {
-                memcpy(&e[i], new_data, sizeof(FSNode));
-                return write_block(current, buf);
-            }
-        }
-        
-        current = e[0].next_block;
-    }
-    
-    return -1;
-}
+
 int ufs_rewrite(const char* path, u8* data, u32 size) {
     if (!mounted) return -1;
     
@@ -455,19 +531,19 @@ int ufs_rewrite(const char* path, u8* data, u32 size) {
     if (find_in_dir(parent_block, name, &e) != 0) return -1;
     if (e.is_dir) return -1;
     
+    // Освобождаем старые блоки
     if (e.first_block != 0) {
-        u32 blocks = (e.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
-        for (u32 i = 0; i < blocks; i++) {
-            free_block(e.first_block + i);
-        }
+        free_file_blocks(e.first_block, e.size);
     }
     
+    // Пустой файл
     if (size == 0) {
         e.size = 0;
         e.first_block = 0;
         return update_in_dir(parent_block, name, &e);
     }
     
+    // Выделяем новые блоки
     u32 blocks = (size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
     if (sb.free_blocks < blocks) return -1;
     
@@ -475,6 +551,7 @@ int ufs_rewrite(const char* path, u8* data, u32 size) {
     for (u32 i = 0; i < blocks; i++) {
         u32 b = find_free_block();
         if (!b) {
+            // Откат
             for (u32 j = 0; j < i; j++) free_block(first_block + j);
             return -1;
         }
@@ -489,113 +566,22 @@ int ufs_rewrite(const char* path, u8* data, u32 size) {
         if (data) memcpy(block_buf, data + offset, chunk);
         
         if (write_block(b, block_buf) != 0) {
+            // Откат
             for (u32 j = 0; j <= i; j++) free_block(first_block + j);
             return -1;
         }
     }
     
+    // Обновляем запись
     e.size = size;
     e.first_block = first_block;
     
     return update_in_dir(parent_block, name, &e);
 }
 
-int ufs_write_at(const char* path, u8* data, u32 size, u32 offset) {
-    if (!mounted) return -1;
-    
-    char name[UFS_MAX_NAME];
-    u32 parent_block;
-    
-    if (get_parent(path, &parent_block, name) != 0) return -1;
-    if (name[0] == '\0') return -1;
-    
-    FSNode e;
-    if (find_in_dir(parent_block, name, &e) != 0) {
-        if (offset == 0) {
-            return ufs_write(path, data, size);
-        }
-        return -1;
-    }
-    if (e.is_dir) return -1;
-    
-    u32 new_size = (offset + size > e.size) ? offset + size : e.size;
-    u32 old_blocks = (e.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
-    u32 new_blocks = (new_size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
-    
-    if (new_blocks > old_blocks) {
-        if (sb.free_blocks < (new_blocks - old_blocks)) return -1;
-    }
-    
-    u8 *full_data = kmalloc(new_size);
-    if (!full_data) return -1;
-    memset(full_data, 0, new_size);
-    
-    if (e.size > 0) {
-        u32 block = e.first_block;
-        u32 pos = 0;
-        u32 left = e.size;
-        
-        while (left > 0 && block != 0) {
-            u8 buf[UFS_BLOCK_SIZE];
-            if (read_block(block, buf) != 0) {
-                kfree(full_data);
-                return -1;
-            }
-            
-            u32 chunk = (left < UFS_BLOCK_SIZE) ? left : UFS_BLOCK_SIZE;
-            memcpy(full_data + pos, buf, chunk);
-            
-            pos += chunk;
-            left -= chunk;
-            block++;
-        }
-    }
-    
-    memcpy(full_data + offset, data, size);
-    
-    for (u32 i = 0; i < old_blocks; i++) {
-        free_block(e.first_block + i);
-    }
-    
-    u32 first_block = 0;
-    for (u32 i = 0; i < new_blocks; i++) {
-        u32 b = find_free_block();
-        if (!b) {
-            for (u32 j = 0; j < i; j++) free_block(first_block + j);
-            kfree(full_data);
-            return -1;
-        }
-        
-        if (i == 0) first_block = b;
-        
-        u8 block_buf[UFS_BLOCK_SIZE] = {0};
-        u32 block_offset = i * UFS_BLOCK_SIZE;
-        u32 chunk = new_size - block_offset;
-        if (chunk > UFS_BLOCK_SIZE) chunk = UFS_BLOCK_SIZE;
-        
-        memcpy(block_buf, full_data + block_offset, chunk);
-        
-        if (write_block(b, block_buf) != 0) {
-            for (u32 j = 0; j <= i; j++) free_block(first_block + j);
-            kfree(full_data);
-            return -1;
-        }
-    }
-    
-    kfree(full_data);
-    
-    e.size = new_size;
-    e.first_block = first_block;
-    
-    if (update_in_dir(parent_block, name, &e) != 0) return -1;
-    
-    return size;
-}
-
 int ufs_read(const char* path, u8** data, u32* size) {
     if (!mounted) return -1;
-    if (!path || path[0] == '\0') return -1;
-    if (strcmp(path, "/") == 0) return -1;
+    if (!path || path[0] == '\0' || strcmp(path, "/") == 0) return -1;
     
     char name[UFS_MAX_NAME];
     u32 parent_block;
@@ -682,6 +668,51 @@ int ufs_read_at(const char* path, u8* data, u32 size, u32 offset) {
     return to_read;
 }
 
+int ufs_write_at(const char* path, u8* data, u32 size, u32 offset) {
+    if (!mounted) return -1;
+    
+    char name[UFS_MAX_NAME];
+    u32 parent_block;
+    
+    if (get_parent(path, &parent_block, name) != 0) return -1;
+    if (name[0] == '\0') return -1;
+    
+    FSNode e;
+    if (find_in_dir(parent_block, name, &e) != 0) {
+        if (offset == 0) {
+            return ufs_write(path, data, size);
+        }
+        return -1;
+    }
+    if (e.is_dir) return -1;
+    
+    // Нужно прочитать весь файл, изменить и перезаписать
+    u32 new_size = (offset + size > e.size) ? offset + size : e.size;
+    
+    u8 *full_data = kmalloc(new_size);
+    if (!full_data) return -1;
+    memset(full_data, 0, new_size);
+    
+    // Читаем существующие данные
+    if (e.size > 0) {
+        u8 *old_data;
+        u32 old_size;
+        if (ufs_read(path, &old_data, &old_size) == 0) {
+            memcpy(full_data, old_data, old_size);
+            kfree(old_data);
+        }
+    }
+    
+    // Записываем новые данные
+    memcpy(full_data + offset, data, size);
+    
+    // Перезаписываем файл
+    int res = ufs_rewrite(path, full_data, new_size);
+    kfree(full_data);
+    
+    return (res == 0) ? size : -1;
+}
+
 u32 ufs_file_size(const char* path) {
     if (!mounted) return 0;
     
@@ -697,6 +728,27 @@ u32 ufs_file_size(const char* path) {
     return e.size;
 }
 
+int ufs_delete(const char* path) {
+    if (!mounted) return -1;
+    if (!path || path[0] == '\0' || strcmp(path, "/") == 0) return -1;
+    
+    char name[UFS_MAX_NAME];
+    u32 parent;
+    
+    if (get_parent(path, &parent, name) != 0) return -1;
+    
+    FSNode e;
+    if (find_in_dir(parent, name, &e) != 0) return -1;
+    if (e.is_dir) return -1;
+    
+    // Освобождаем блоки
+    if (e.first_block != 0) {
+        free_file_blocks(e.first_block, e.size);
+    }
+    
+    return remove_from_dir(parent, name);
+}
+
 int ufs_readdir(const char* path, FSNode** entries, u32* count) {
     if (!mounted) return -1;
     
@@ -709,6 +761,7 @@ int ufs_readdir(const char* path, FSNode** entries, u32* count) {
         if (dir_block == 0) return -1;
     }
     
+    // Сначала считаем количество записей
     u32 total = 0;
     u32 current = dir_block;
     
@@ -723,11 +776,14 @@ int ufs_readdir(const char* path, FSNode** entries, u32* count) {
         current = e[0].next_block;
     }
     
+    // Выделяем память
     *entries = kmalloc(total * sizeof(FSNode));
     if (!*entries) return -1;
     
+    // Читаем записи
     u32 idx = 0;
     current = dir_block;
+    
     while (current != 0) {
         u8 buf[UFS_BLOCK_SIZE];
         if (read_block(current, buf) != 0) {
@@ -748,29 +804,6 @@ int ufs_readdir(const char* path, FSNode** entries, u32* count) {
     return 0;
 }
 
-int ufs_delete(const char* path) {
-    if (!mounted) return -1;
-    if (!path || path[0] == '\0' || strcmp(path, "/") == 0) return -1;
-    
-    char name[UFS_MAX_NAME];
-    u32 parent;
-    
-    if (get_parent(path, &parent, name) != 0) return -1;
-    
-    FSNode e;
-    if (find_in_dir(parent, name, &e) != 0) return -1;
-    if (e.is_dir) return -1;
-    
-    if (e.first_block != 0) {
-        u32 blocks = (e.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
-        for (u32 i = 0; i < blocks; i++) {
-            free_block(e.first_block + i);
-        }
-    }
-    
-    return remove_from_dir(parent, name);
-}
-
 int ufs_rmdir(const char* path) {
     if (!mounted) return -1;
     if (!path || path[0] == '\0' || strcmp(path, "/") == 0) return -1;
@@ -784,17 +817,29 @@ int ufs_rmdir(const char* path) {
     if (find_in_dir(parent, name, &e) != 0) return -1;
     if (!e.is_dir) return -1;
     
+    // Проверяем, пустая ли директория
     u32 current = e.first_block;
+    while (current != 0) {
+        u8 buf[UFS_BLOCK_SIZE];
+        if (read_block(current, buf) != 0) return -1;
+        
+        FSNode* be = (FSNode*)buf;
+        
+        // Проверяем все записи, кроме . и ..
+        for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
+            if (be[i].name[0] != 0) return -1;  // Не пусто
+        }
+        
+        current = be[0].next_block;
+    }
+    
+    // Освобождаем блоки директории
+    current = e.first_block;
     while (current != 0) {
         u32 next = 0;
         u8 buf[UFS_BLOCK_SIZE];
         if (read_block(current, buf) == 0) {
             FSNode* be = (FSNode*)buf;
-            
-            for (int i = 2; i < ENTRIES_PER_BLOCK; i++) {
-                if (be[i].name[0] != 0) return -1;
-            }
-            
             next = be[0].next_block;
         }
         free_block(current);

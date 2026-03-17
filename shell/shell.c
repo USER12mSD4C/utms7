@@ -83,67 +83,6 @@ void shell_print(const char *str) { vga_write(str); }
 void shell_print_num(u32 num) { vga_write_num(num); }
 void shell_print_hex(u32 num) { vga_write_hex(num); }
 
-static int complete_command(const char *prefix, char *buffer) {
-    int matches = 0;
-    int first = -1;
-    for (int i = 0; i < cmd_count; i++) {
-        if (strncmp(commands[i].name, prefix, strlen(prefix)) == 0) {
-            if (matches == 0) {
-                first = i;
-                strcpy(buffer, commands[i].name);
-            }
-            matches++;
-        }
-    }
-    if (matches == 1) return 1;
-    if (matches > 1) {
-        vga_putchar('\n');
-        for (int i = 0; i < cmd_count; i++) {
-            if (strncmp(commands[i].name, prefix, strlen(prefix)) == 0) {
-                shell_print("  ");
-                shell_print(commands[i].name);
-                vga_putchar('\n');
-            }
-        }
-    }
-    return matches;
-}
-
-static int complete_filename(const char *prefix, char *buffer) {
-    FSNode *entries;
-    u32 count;
-    int matches = 0;
-    int first = -1;
-    const char *cwd = fs_get_current_dir();
-    if (ufs_readdir(cwd, &entries, &count) != 0) return 0;
-    for (u32 i = 0; i < count; i++) {
-        if (strncmp(entries[i].name, prefix, strlen(prefix)) == 0) {
-            if (matches == 0) {
-                first = i;
-                strcpy(buffer, entries[i].name);
-            }
-            matches++;
-        }
-    }
-    if (matches == 1) {
-        kfree(entries);
-        return 1;
-    }
-    if (matches > 1) {
-        vga_putchar('\n');
-        for (u32 i = 0; i < count; i++) {
-            if (strncmp(entries[i].name, prefix, strlen(prefix)) == 0) {
-                shell_print("  ");
-                shell_print(entries[i].name);
-                if (entries[i].is_dir) vga_putchar('/');
-                vga_putchar('\n');
-            }
-        }
-    }
-    kfree(entries);
-    return matches;
-}
-
 int shell_execute(const char *cmd_line) {
     if (!cmd_line || !cmd_line[0]) return 0;
     char buf[MAX_LINE_LEN];
@@ -163,7 +102,12 @@ int shell_execute(const char *cmd_line) {
 }
 
 static void print_prompt(void) {
-    shell_print(fs_get_current_dir());
+    const char *cwd = fs_get_current_dir();
+    if (cwd && cwd[0]) {
+        shell_print(cwd);
+    } else {
+        shell_print("/");
+    }
     shell_print("> ");
 }
 
@@ -234,49 +178,11 @@ void shell_run(void) {
                 continue;
             }
             
-            if (k == 0xE4) {
-                cursor_x = input_x;
-                vga_setpos(cursor_x, input_y);
-                continue;
-            }
-            
-            if (k == 0xE5) {
-                cursor_x = input_x + pos;
-                vga_setpos(cursor_x, input_y);
-                continue;
-            }
-            
             if (k == '\t') {
-                if (pos > 0) {
-                    char completion[256];
-                    int is_first_word = 1;
-                    for (int i = 0; i < pos; i++) {
-                        if (line[i] == ' ') {
-                            is_first_word = 0;
-                            break;
-                        }
-                    }
-                    int result;
-                    if (is_first_word) result = complete_command(line, completion);
-                    else result = complete_filename(line, completion);
-                    
-                    if (result == 1) {
-                        strcpy(line, completion);
-                        pos = strlen(line);
-                        redraw_line(line, pos, input_x, input_y, &cursor_x);
-                    } else if (result > 1) {
-                        vga_setpos(0, input_y + 1);
-                        print_prompt();
-                        for (int i = 0; i < pos; i++) vga_putchar(line[i]);
-                        vga_getpos(&cursor_x, &cursor_y);
-                        input_x = cursor_x - pos;
-                        input_y = cursor_y;
-                    }
-                }
                 continue;
             }
             
-            if (k == '\b') {
+            if (k == '\b' || k == 0x7F) {
                 if (cursor_x > input_x) {
                     int idx = cursor_x - input_x - 1;
                     for (int i = idx; i < pos; i++) line[i] = line[i+1];
