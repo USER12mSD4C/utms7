@@ -6,19 +6,6 @@ x86-64 operating system written in C and NASM assembly.
 
 i dont recommend use it, still untested
 
-## Project structure
-
-- `kernel/` – core kernel code
-- `drivers/` – hardware drivers source (keyboard, mouse, VGA, VESA, disk, etc.)
-- `fs/` – file system implementations (UFS, FAT, EXT4)
-- `apps/` – user applications (UWR text editor)
-- `shell/` – command shell (USS interpreter)
-- `include/` – public headers
-- `lib/` – standard library replacements
-- `usb/` – USB support (XHCI)
-- `commands/` – shell command implementations
-- `modules/` - compiled drivers into .ko
-
 ## last huge update
 
 - kapi and syscalls for bin files
@@ -41,6 +28,7 @@ i dont recommend use it, still untested
 make
 make run #with qemu
 make runD #with logs
+make rundisk #run only disk, without ISO
 make kom #kernel objects/tools
 make livecd #kernel with installing on disk with grub programm
 make iso
@@ -48,7 +36,7 @@ make iso
 
 ## What is that?
 
-thats ultra modular operating system, where you can change or add absolutely anything you want
+thats an operating system with hybrid kernel that im doing because why not
 
 ## driver/.ko modules
 
@@ -61,11 +49,17 @@ static int (*__vesa_entry)(void) __attribute__((section(".module_entry"))) = ves
 ## useful
 - how to prepare disk?
 
-write
-
 ```
 udisk mbr /dev/sdX
 udisk create /dev/sdX {amount of MB in partition}
 mkfs.ufs /dev/sdX1
 mount /dev/sdX1 /
+```
+
+- how to update system or install packages?
+
+```
+upac -Sy #updating
+upac -S #installing
+upac -R #deleting
 ```
