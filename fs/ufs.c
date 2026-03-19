@@ -328,24 +328,23 @@ int ufs_mount(u32 start_lba, int disk) {
     
     mounted = 1;
     snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
-    // mount_point оставляем как есть - он может быть изменен позже через ufs_mount_to
+    strcpy(mount_point, "/");
     return 0;
 }
 
-int ufs_mount_to(const char* dev, const char* point) {
-    int disk, part;
+int ufs_mount_with_point(u32 start_lba, int disk, const char* point) {
+    part_start = start_lba;
+    current_disk = disk;
     
-    if (parse_devname(dev, &disk, &part) != 0) return -1;
+    if (load_superblock() != 0) return -1;
     
-    u32 start_lba = 2048; // FIXME: получить из таблицы разделов
-    if (ufs_mount(start_lba, disk) != 0) return -1;
-    
+    mounted = 1;
+    snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
     if (point && point[0]) {
         strcpy(mount_point, point);
     } else {
         strcpy(mount_point, "/");
     }
-    
     return 0;
 }
 
@@ -374,12 +373,14 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     part_start = start_lba;
     current_disk = disk;
     
+    // Очищаем первые 10 блоков
     u8 zero[UFS_BLOCK_SIZE] = {0};
     for (u32 i = 0; i < 10 && i < blocks; i++) {
         disk_set_disk(disk);
         if (disk_write(start_lba + i, zero) != 0) return -1;
     }
     
+    // Создаем суперблок
     memset(&sb, 0, sizeof(sb));
     sb.magic = UFS_MAGIC;
     sb.total_blocks = blocks;
@@ -390,6 +391,7 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     memcpy(buf, &sb, sizeof(sb));
     if (disk_write(start_lba + SUPERBLOCK_BLOCK, buf) != 0) return -1;
     
+    // Создаем корневую директорию
     memset(buf, 0, UFS_BLOCK_SIZE);
     FSNode* e = (FSNode*)buf;
     
@@ -407,9 +409,7 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     
     if (disk_write(start_lba + ROOTDIR_BLOCK, buf) != 0) return -1;
     
-    mounted = 1;
-    snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
-    strcpy(mount_point, "/");
+    // mounted НЕ СТАВИМ! ФС отформатирована но не смонтирована
     return 0;
 }
 
@@ -795,6 +795,21 @@ int ufs_isdir(const char* path) {
     FSNode e;
     if (find_in_dir(parent, name, &e) != 0) return 0;
     return e.is_dir;
+}
+
+u32 ufs_file_size(const char* path) {
+    if (!mounted) return 0;
+    
+    char name[UFS_MAX_NAME];
+    u32 parent_block;
+    
+    if (get_parent(path, &parent_block, name) != 0) return 0;
+    
+    FSNode e;
+    if (find_in_dir(parent_block, name, &e) != 0) return 0;
+    if (e.is_dir) return 0;
+    
+    return e.size;
 }
 
 int ufs_stat(u32* total, u32* used, u32* free) {

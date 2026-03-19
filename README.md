@@ -57,3 +57,15 @@ to make your own driver you need to add at the end of the file:
 static const char __vesa_name[] __attribute__((section(".module_name"))) = "vesa";
 static int (*__vesa_entry)(void) __attribute__((section(".module_entry"))) = vesa_init;
 ```
+
+## useful
+- how to prepare disk?
+
+write
+
+```
+udisk mbr /dev/sdX
+udisk create /dev/sdX {amount of MB in partition}
+mkfs.ufs /dev/sdX1
+mount /dev/sdX1 /
+```

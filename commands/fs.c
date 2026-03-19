@@ -33,19 +33,36 @@ static int cmd_ls(int argc, char** argv) {
     }
     
     if (argc <= 1 || (argc == 2 && argv[1][0] == '-')) {
-        strcpy(path, current_dir);
+        strcpy(path, fs_get_current_dir());
     }
-    
-    if (path[0] == '\0') strcpy(path, "/");
     
     FSNode *entries = NULL;
     u32 count = 0;
     
-    if (ufs_readdir(path, &entries, &count) != 0) {
-        shell_print("ls: cannot access '");
-        shell_print(path);
-        shell_print("'\n");
+    int res = ufs_readdir(path, &entries, &count);
+    
+    if (res != 0) {
+        // Если директория не существует
+        if (!ufs_exists(path)) {
+            shell_print("ls: cannot access '");
+            shell_print(path);
+            shell_print("': No such file or directory\n");
+        } else if (!ufs_isdir(path)) {
+            shell_print("ls: ");
+            shell_print(path);
+            shell_print(": Not a directory\n");
+        } else {
+            shell_print("ls: cannot access '");
+            shell_print(path);
+            shell_print("'\n");
+        }
         return -1;
+    }
+    
+    if (count == 0) {
+        // Пустая директория - ничего не выводим
+        if (entries) kfree(entries);
+        return 0;
     }
     
     for (u32 i = 0; i < count; i++) {

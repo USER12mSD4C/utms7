@@ -3,6 +3,10 @@
 
 #include "../include/types.h"
 
+#define MAX_COMMANDS 64
+#define MAX_LINE_LEN 512
+#define MAX_HISTORY 16
+
 typedef struct {
     char name[32];
     int (*func)(int argc, char** argv);

@@ -124,11 +124,9 @@ static void scan_disk(int disk_num) {
     d->total_sectors = sectors;
     d->sector_size = 512;
     
-    // Получаем модель диска
     u8 identify[512];
     disk_set_disk(disk_num);
     if (disk_read(0, identify) == 0) {
-        // Модель из IDENTIFY (с правильным порядком байт)
         for (int i = 0; i < 40; i+=2) {
             d->model[i] = identify[54 + i/2*2 + 1];
             d->model[i+1] = identify[54 + i/2*2];
@@ -144,10 +142,7 @@ static void scan_disk(int disk_num) {
         strcpy(d->model, "Unknown");
     }
     
-    // Пробуем GPT
     read_gpt_partitions(disk_num, d);
-    
-    // Если GPT не сработал, пробуем MBR
     if (d->partition_count == 0) {
         read_mbr_partitions(disk_num, d);
     }
@@ -155,49 +150,71 @@ static void scan_disk(int disk_num) {
 
 static int mbr_add_partition(int disk, u64 start, u64 size, partition_type_t type) {
     u8 sector[512];
+    u8 verify[512];
+    
     disk_set_disk(disk);
     
-    if (disk_read(0, sector) != 0) return -1;
+    // Читаем текущий MBR
+    if (disk_read(0, sector) != 0) {
+        shell_print("disk_read failed\n");
+        return -1;
+    }
     
+    // Ищем свободную запись
     int free_entry = -1;
     for (int i = 0; i < 4; i++) {
         u8* entry = sector + 446 + i * 16;
-        if (entry[4] == 0) {
+        if (entry[4] == 0) {  // тип раздела = 0 значит свободно
             free_entry = i;
             break;
         }
     }
     
-    if (free_entry == -1) return -1;
+    if (free_entry == -1) {
+        shell_print("no free entry\n");
+        return -1;
+    }
+    
+    shell_print("Writing to entry ");
+    shell_print_num(free_entry);
+    shell_print("\n");
     
     u8* entry = sector + 446 + free_entry * 16;
     memset(entry, 0, 16);
     
-    // CHS адреса (оставляем как 0xFF для LBA)
-    entry[0] = 0x00;
-    entry[1] = 0xFF;
+    entry[0] = 0x00;        // не загрузочный
+    entry[1] = 0xFF;        // CHS начало
     entry[2] = 0xFF;
     entry[3] = 0xFF;
-    
-    // Тип раздела
-    if (type == PARTITION_UFS) {
-        entry[4] = 0x83;  // Linux
-    } else if (type == PARTITION_FAT32) {
-        entry[4] = 0x0C;  // FAT32 LBA
-    } else {
-        entry[4] = 0x83;
-    }
-    
-    // CHS конца
-    entry[5] = 0xFF;
+    entry[4] = 0x83;        // тип Linux (UFS)
+    entry[5] = 0xFF;        // CHS конец
     entry[6] = 0xFF;
     entry[7] = 0xFF;
     
-    // LBA адреса
-    *(u32*)(entry + 8) = start;
-    *(u32*)(entry + 12) = size;
+    *(u32*)(entry + 8) = (u32)start;   // LBA начало
+    *(u32*)(entry + 12) = (u32)size;    // размер
     
-    if (disk_write(0, sector) != 0) return -1;
+    shell_print("Writing MBR at LBA 0\n");
+    
+    // Записываем
+    if (disk_write(0, sector) != 0) {
+        shell_print("disk_write failed\n");
+        return -1;
+    }
+    
+    // ПРОВЕРЯЕМ ЧТО ЗАПИСАЛОСЬ
+    if (disk_read(0, verify) != 0) {
+        shell_print("verify read failed\n");
+        return -1;
+    }
+    
+    // Сравниваем
+    if (memcmp(sector, verify, 512) != 0) {
+        shell_print("VERIFY FAILED - data mismatch\n");
+        return -1;
+    }
+    
+    shell_print("Write verified OK\n");
     
     return 0;
 }
@@ -209,7 +226,6 @@ int udisk_init(void) {
 }
 
 int udisk_scan(void) {
-    // Не сканируем слишком часто
     if (scanned && system_ticks - last_scan_tick < 50) {
         return 0;
     }
@@ -224,7 +240,7 @@ int udisk_scan(void) {
 
 disk_info_t* udisk_get_info(int disk_num) {
     if (disk_num < 0 || disk_num > 3) return NULL;
-    udisk_scan();  // Обновляем информацию
+    udisk_scan();
     return &disks[disk_num];
 }
 
@@ -232,13 +248,13 @@ partition_t* udisk_get_partition(const char* devname) {
     int disk, part;
     if (parse_devname(devname, &disk, &part) != 0) return NULL;
     
-    udisk_scan();  // Обновляем информацию
+    udisk_scan();
     
     if (disk < 0 || disk > 3) return NULL;
     disk_info_t* d = &disks[disk];
     if (!d || !d->present) return NULL;
     
-    if (part == 0) return NULL;  // Это диск, а не раздел
+    if (part == 0) return NULL;
     
     for (int i = 0; i < d->partition_count; i++) {
         if (d->partitions[i].present && d->partitions[i].partition_num == part) {
@@ -257,13 +273,15 @@ int udisk_create_mbr(int disk) {
     
     if (disk_write(0, sector) != 0) return -1;
     
-    scanned = 0;  // Нужно пересканировать
+    scanned = 0;
+    udisk_scan();
     return 0;
 }
 
 int udisk_create_gpt(int disk) {
     if (gpt_create_table(0x80 + disk) != 0) return -1;
     scanned = 0;
+    udisk_scan();
     return 0;
 }
 
@@ -271,15 +289,14 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
     int disk, part;
     if (parse_devname(devname, &disk, &part) != 0 || part != 0) return -1;
     
-    udisk_scan();  // Обновляем информацию
+    udisk_scan();
     
-    disk_info_t* d = &disks[disk];
+    disk_info_t* d = &disks[disk];  // ← ЭТО ОДНО ОПРЕДЕЛЕНИЕ
     if (!d || !d->present) return -1;
     
     u64 size_sectors = (size_mb * 1024 * 1024) / 512;
-    u64 start_lba = 2048;  // Оставляем место для MBR/GPT
+    u64 start_lba = 2048;
     
-    // Ищем свободное место после последнего раздела
     for (int i = 0; i < d->partition_count; i++) {
         if (d->partitions[i].present) {
             if (d->partitions[i].end_lba + 1 > start_lba) {
@@ -288,26 +305,27 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
         }
     }
     
-    // Проверяем, хватит ли места
     if (start_lba + size_sectors > d->total_sectors) return -1;
     
+    int res;
     if (d->is_gpt) {
         const u8* guid;
-        if (type == PARTITION_UFS) {
-            guid = gpt_get_ufs_guid();
-        } else if (type == PARTITION_FAT32) {
-            guid = gpt_get_efi_guid();  // FAT32 обычно EFI
-        } else {
-            guid = gpt_get_linux_guid();
-        }
+        if (type == PARTITION_UFS) guid = gpt_get_ufs_guid();
+        else if (type == PARTITION_FAT32) guid = gpt_get_efi_guid();
+        else guid = gpt_get_linux_guid();
         
-        if (gpt_add_partition(0x80 + disk, start_lba, size_sectors, guid) != 0) return -1;
+        res = gpt_add_partition(0x80 + disk, start_lba, size_sectors, guid);
     } else {
-        if (mbr_add_partition(disk, start_lba, size_sectors, type) != 0) return -1;
+        res = mbr_add_partition(disk, start_lba, size_sectors, type);
     }
     
-    scanned = 0;  // Нужно пересканировать
-    udisk_scan();  // Обновляем сразу
+    if (res != 0) return -1;
+    
+    scanned = 0;
+    udisk_scan();
+    
+    // d уже определен выше, не надо переопределять!
+    
     return 0;
 }
 
@@ -321,7 +339,6 @@ int udisk_delete_partition(const char* devname) {
     if (!d || !d->present) return -1;
     
     if (d->is_gpt) {
-        // В GPT удаляем, записывая пустой GUID
         if (gpt_add_partition(0x80 + disk, 0, 0, gpt_get_empty_guid()) != 0) return -1;
     } else {
         u8 sector[512];
@@ -355,13 +372,9 @@ int udisk_set_type(const char* devname, partition_type_t type) {
     
     if (d->is_gpt) {
         const u8* guid;
-        if (type == PARTITION_UFS) {
-            guid = gpt_get_ufs_guid();
-        } else if (type == PARTITION_FAT32) {
-            guid = gpt_get_efi_guid();
-        } else {
-            guid = gpt_get_linux_guid();
-        }
+        if (type == PARTITION_UFS) guid = gpt_get_ufs_guid();
+        else if (type == PARTITION_FAT32) guid = gpt_get_efi_guid();
+        else guid = gpt_get_linux_guid();
         
         if (gpt_add_partition(0x80 + disk, p->start_lba, p->end_lba - p->start_lba + 1, guid) != 0) {
             return -1;
@@ -374,13 +387,9 @@ int udisk_set_type(const char* devname, partition_type_t type) {
         for (int i = 0; i < 4; i++) {
             u8* entry = sector + 446 + i * 16;
             if (entry[4] != 0 && (i + 1) == part) {
-                if (type == PARTITION_UFS) {
-                    entry[4] = 0x83;
-                } else if (type == PARTITION_FAT32) {
-                    entry[4] = 0x0C;
-                } else {
-                    entry[4] = 0x83;
-                }
+                if (type == PARTITION_UFS) entry[4] = 0x83;
+                else if (type == PARTITION_FAT32) entry[4] = 0x0C;
+                else entry[4] = 0x83;
                 break;
             }
         }
@@ -395,49 +404,26 @@ int udisk_set_type(const char* devname, partition_type_t type) {
 
 int udisk_format_partition(const char* devname, const char* fstype) {
     partition_t* p = udisk_get_partition(devname);
-    if (!p) {
-        shell_print("partition not found\n");
-        return -1;
-    }
-    
-    shell_print("start_lba=");
-    shell_print_num(p->start_lba);
-    shell_print(" blocks=");
-    shell_print_num(p->end_lba - p->start_lba + 1);
-    shell_print(" disk=");
-    shell_print_num(p->disk_num);
-    shell_print("\n");
+    if (!p) return -1;
     
     if (strcmp(fstype, "ufs") == 0) {
         u32 blocks = (p->end_lba - p->start_lba + 1);
-        int res = ufs_format(p->start_lba, blocks, p->disk_num);
-        
-        if (res == 0) {
-            shell_print("OK\n");
-            return 0;
-        } else {
-            shell_print("FAILED (code ");
-            shell_print_num(res);
-            shell_print(")\n");
-            return -1;
-        }
+        return ufs_format(p->start_lba, blocks, p->disk_num);
     }
     
-    shell_print("unknown fs type\n");
     return -1;
 }
 
 static int cmd_disks(int argc, char** argv) {
     (void)argc; (void)argv;
     
+    // Принудительное сканирование перед выводом
     udisk_scan();
     
-    int disk_found = 0;
     for (int i = 0; i < 4; i++) {
-        disk_info_t* d = udisk_get_info(i);
-        if (!d || !d->present) continue;
+        disk_info_t* d = &disks[i];  // используй напрямую, без udisk_get_info
+        if (!d->present) continue;
         
-        disk_found = 1;
         char name[16] = "/dev/sdX";
         name[7] = 'a' + i;
         
@@ -449,6 +435,7 @@ static int cmd_disks(int argc, char** argv) {
         shell_print(d->is_gpt ? "  GPT" : "  MBR");
         shell_print("\n");
         
+        // Выводим разделы
         for (int j = 0; j < d->partition_count; j++) {
             partition_t* p = &d->partitions[j];
             if (!p->present) continue;
@@ -456,14 +443,12 @@ static int cmd_disks(int argc, char** argv) {
             char pname[16] = "/dev/sdX";
             pname[7] = 'a' + i;
             
-            // Правильное формирование имени раздела
-            int part_num = p->partition_num;
-            if (part_num < 10) {
-                pname[8] = '0' + part_num;
+            if (p->partition_num < 10) {
+                pname[8] = '0' + p->partition_num;
                 pname[9] = '\0';
             } else {
-                pname[8] = '0' + part_num / 10;
-                pname[9] = '0' + part_num % 10;
+                pname[8] = '0' + p->partition_num / 10;
+                pname[9] = '0' + p->partition_num % 10;
                 pname[10] = '\0';
             }
             
@@ -479,17 +464,8 @@ static int cmd_disks(int argc, char** argv) {
                 case PARTITION_EXT4: shell_print("EXT4"); break;
                 default: shell_print("unknown"); break;
             }
-            
-            if (p->name[0]) {
-                shell_print("  ");
-                shell_print(p->name);
-            }
             shell_print("\n");
         }
-    }
-    
-    if (!disk_found) {
-        shell_print("No disks found\n");
     }
     
     return 0;
@@ -497,6 +473,89 @@ static int cmd_disks(int argc, char** argv) {
 
 static int cmd_lsblk(int argc, char** argv) {
     return cmd_disks(argc, argv);
+}
+
+static int cmd_mount(int argc, char** argv) {
+    if (argc < 2) {
+        shell_print("Usage: mount /dev/sdX[1-16] [mountpoint]\n");
+        return -1;
+    }
+    
+    if (ufs_ismounted()) {
+        shell_print("already mounted on ");
+        shell_print(ufs_get_mount_point());
+        shell_print("\n");
+        return -1;
+    }
+    
+    partition_t* p = udisk_get_partition(argv[1]);
+    if (!p) {
+        shell_print("invalid partition\n");
+        return -1;
+    }
+    
+    const char* mount_point = "/";
+    if (argc >= 3) {
+        mount_point = argv[2];
+    }
+    
+    shell_print("Mounting ");
+    shell_print(argv[1]);
+    if (argc >= 3) {
+        shell_print(" to ");
+        shell_print(mount_point);
+    }
+    shell_print("... ");
+    
+    if (ufs_mount_with_point(p->start_lba, p->disk_num, mount_point) == 0) {
+        shell_print("OK\n");
+        extern void fs_set_current_dir(const char*);
+        fs_set_current_dir(mount_point);
+        return 0;
+    } else {
+        shell_print("FAILED\n");
+        return -1;
+    }
+}
+
+static int cmd_umount(int argc, char** argv) {
+    (void)argc; (void)argv;
+    
+    if (!ufs_ismounted()) {
+        shell_print("not mounted\n");
+        return -1;
+    }
+    
+    if (ufs_umount() == 0) {
+        shell_print("unmounted\n");
+        return 0;
+    }
+    return -1;
+}
+
+static int cmd_mkfs_ufs(int argc, char** argv) {
+    if (argc < 2) {
+        shell_print("Usage: mkfs.ufs /dev/sdX[1-16]\n");
+        return -1;
+    }
+    
+    partition_t* p = udisk_get_partition(argv[1]);
+    if (!p) {
+        shell_print("invalid partition\n");
+        return -1;
+    }
+    
+    shell_print("Formatting ");
+    shell_print(argv[1]);
+    shell_print("... ");
+    
+    if (udisk_format_partition(argv[1], "ufs") == 0) {
+        shell_print("OK\n");
+        return 0;
+    } else {
+        shell_print("FAILED\n");
+        return -1;
+    }
 }
 
 static int cmd_udisk(int argc, char** argv) {
@@ -679,89 +738,6 @@ static int cmd_udisk(int argc, char** argv) {
     }
     
     shell_print("unknown udisk command\n");
-    return -1;
-}
-
-static int cmd_mkfs_ufs(int argc, char** argv) {
-    if (argc < 2) {
-        shell_print("Usage: mkfs.ufs /dev/sdX[1-16]\n");
-        return -1;
-    }
-    
-    partition_t* p = udisk_get_partition(argv[1]);
-    if (!p) {
-        shell_print("invalid partition\n");
-        return -1;
-    }
-    
-    shell_print("Formatting ");
-    shell_print(argv[1]);
-    shell_print("... ");
-    
-    if (udisk_format_partition(argv[1], "ufs") == 0) {
-        shell_print("OK\n");
-        return 0;
-    } else {
-        shell_print("FAILED\n");
-        return -1;
-    }
-}
-
-static int cmd_mount(int argc, char** argv) {
-    if (argc < 2) {
-        shell_print("Usage: mount /dev/sdX[1-16] [mountpoint]\n");
-        return -1;
-    }
-    
-    partition_t* p = udisk_get_partition(argv[1]);
-    if (!p) {
-        shell_print("invalid partition\n");
-        return -1;
-    }
-    
-    if (ufs_ismounted()) {
-        shell_print("already mounted on ");
-        shell_print(ufs_get_mount_point());
-        shell_print("\n");
-        return -1;
-    }
-    
-    const char* mount_point = "/";
-    if (argc >= 3) {
-        mount_point = argv[2];
-    }
-    
-    shell_print("Mounting ");
-    shell_print(argv[1]);
-    shell_print(" to ");
-    shell_print(mount_point);
-    shell_print("... ");
-    
-    // Используем новую функцию
-    char dev[32];
-    strcpy(dev, argv[1]);
-    
-    if (ufs_mount_to(dev, mount_point) == 0) {
-        shell_print("OK\n");
-        return 0;
-    } else {
-        shell_print("FAILED\n");
-        return -1;
-    }
-}
-
-static int cmd_umount(int argc, char** argv) {
-    (void)argc; (void)argv;
-    
-    if (!ufs_ismounted()) {
-        shell_print("not mounted\n");
-        return -1;
-    }
-    
-    if (ufs_umount() == 0) {
-        shell_print("unmounted\n");
-        return 0;
-    }
     return -1;
 }
 

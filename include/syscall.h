@@ -60,14 +60,22 @@
 #define SYS_gettime     52
 
 static inline long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
-    long ret;
+    register long rax asm("rax") = num;
+    register long rdi asm("rdi") = a1;
+    register long rsi asm("rsi") = a2;
+    register long rdx asm("rdx") = a3;
+    register long r10 asm("r10") = a4;
+    register long r8 asm("r8") = a5;
+    register long r9 asm("r9") = a6;
+    
     __asm__ volatile (
         "syscall"
-        : "=a"(ret)
-        : "a"(num), "D"(a1), "S"(a2), "d"(a3), "r10"(a4), "r8"(a5), "r9"(a6)
+        : "+r"(rax)
+        : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8), "r"(r9)
         : "rcx", "r11", "memory"
     );
-    return ret;
+    
+    return rax;
 }
 
 // Обертки для системных вызовов

@@ -34,5 +34,7 @@ int ufs_ismounted(void);
 const char* ufs_get_device(void);
 const char* ufs_get_mount_point(void);
 int ufs_umount(void);
+u32 ufs_file_size(const char* path);
+int ufs_mount_with_point(u32 start_lba, int disk, const char* point);
 
 #endif
