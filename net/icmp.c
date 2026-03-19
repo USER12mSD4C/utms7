@@ -82,12 +82,14 @@ int icmp_ping(u32 dst_ip, int timeout_ms) {
     for (int tries = 0; tries < 3; tries++) {
         icmp_send_request(dst_ip, icmp_id, icmp_seq++);
         
-        // Ждем ответ
-        for (int i = 0; i < timeout_ms * 100; i++) {
-            __asm__ volatile ("pause");
+        // Ждем ответ - timeout_ms в миллисекундах
+        int waited = 0;
+        while (waited < timeout_ms) {
+            for (int i = 0; i < 1000; i++) __asm__ volatile ("pause"); // ~1 мс
             if (ping_received) {
                 return 0;
             }
+            waited++;
         }
     }
     

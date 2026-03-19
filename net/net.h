@@ -13,5 +13,6 @@ void net_set_netmask(u32 mask);
 void net_set_gateway(u32 gw);
 void net_set_dns(u32 dns);
 u32 net_get_dns(void);
+int net_is_ready(void);
 
 #endif

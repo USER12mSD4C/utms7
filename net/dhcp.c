@@ -160,5 +160,6 @@ void dhcp_handle_packet(u8 *packet, int len) {
 }
 
 void dhcp_start(void) {
+    udp_bind(68);
     dhcp_send_discover(net_get_mac(), dhcp_xid);
 }

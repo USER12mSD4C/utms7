@@ -33,13 +33,13 @@ static void copy_file(const char* src, const char* dst) {
 
 static void copy_kernel(void) {
     shell_print("  kernel...\n");
-    copy_file("/system/boot/kernel.bin", "/boot/kernel.bin");
+    copy_file("/boot/kernel.bin", "/boot/kernel.bin");
 }
 
 static void copy_modules(void) {
     FSNode* entries;
     u32 count;
-    if (ufs_readdir("/system/modules", &entries, &count) != 0) {
+    if (ufs_readdir("/modules", &entries, &count) != 0) {
         shell_print("  no modules\n");
         return;
     }
@@ -49,7 +49,7 @@ static void copy_modules(void) {
         
         char src[256];
         char dst[256];
-        snprintf(src, sizeof(src), "/system/modules/%s", entries[i].name);
+        snprintf(src, sizeof(src), "/modules/%s", entries[i].name);
         snprintf(dst, sizeof(dst), "/modules/%s", entries[i].name);
         copy_file(src, dst);
     }

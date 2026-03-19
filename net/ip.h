@@ -36,6 +36,7 @@ u16 ip_checksum(u16 *data, int len);
 int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len, u8 *src_mac, u32 src_ip);
 void ip_handle_packet(u8 *packet, int len, 
                       void (*tcp_handler)(u8*, int, u32, u32),
+                      void (*udp_handler)(u8*, int, u32, u32),
                       void (*icmp_handler)(u8*, int, u32, u32));
 
 // ICMP функции

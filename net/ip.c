@@ -24,12 +24,32 @@ u16 ip_checksum(u16 *data, int len) {
 
 int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len, u8 *src_mac, u32 src_ip) {
     u8 dst_mac[6];
+    int attempts = 0;
     
-    if (arp_cache_lookup(dst_ip, dst_mac) != 0) {
+    // Пробуем получить MAC через ARP (до 3 раз)
+    while (attempts < 3) {
+        if (arp_cache_lookup(dst_ip, dst_mac) == 0) {
+            break; // MAC найден
+        }
+        
+        // Отправляем ARP запрос
         arp_send_request(dst_ip, src_mac, src_ip);
-        return -1;
+        
+        // Ждем ответ (до 1 секунды)
+        for (int wait = 0; wait < 1000; wait++) {
+            __asm__ volatile ("pause");
+            if (arp_cache_lookup(dst_ip, dst_mac) == 0) {
+                break;
+            }
+        }
+        attempts++;
     }
     
+    if (attempts >= 3) {
+        return -1; // ARP timeout
+    }
+    
+    // Отправляем IP пакет
     int total_len = sizeof(ip_hdr_t) + len;
     u8 *packet = kmalloc(total_len);
     if (!packet) return -1;
@@ -59,6 +79,7 @@ int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len, u8 *src_mac, u32 
 
 void ip_handle_packet(u8 *packet, int len, 
                       void (*tcp_handler)(u8*, int, u32, u32),
+                      void (*udp_handler)(u8*, int, u32, u32),
                       void (*icmp_handler)(u8*, int, u32, u32)) {
     if (len < sizeof(ip_hdr_t)) return;
     
@@ -79,6 +100,9 @@ void ip_handle_packet(u8 *packet, int len,
     
     if (ip->protocol == IP_PROTO_TCP && tcp_handler) {
         tcp_handler(data, data_len, ip->src, ip->dst);
+    }
+    else if (ip->protocol == IP_PROTO_UDP && udp_handler) {
+        udp_handler(data, data_len, ip->src, ip->dst);
     }
     else if (ip->protocol == IP_PROTO_ICMP && icmp_handler) {
         icmp_handler(data, data_len, ip->src, ip->dst);

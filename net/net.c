@@ -7,6 +7,7 @@
 #include "arp.h"
 #include "ip.h"
 #include "tcp.h"
+#include "udp.h"
 #include "dhcp.h"
 #include "dns.h"
 #include "../drivers/pci.h"
@@ -60,6 +61,7 @@ void net_init(void) {
     vga_write("\n");
     
     arp_cache_init();
+    udp_init();
     tcp_init();
     
     if (network_ready) {
@@ -112,7 +114,9 @@ void net_handle_packet(u8 *packet, int len) {
             break;
         case 0x0008:
             ip_handle_packet(packet + sizeof(eth_hdr_t), len - sizeof(eth_hdr_t), 
-                           tcp_handle_packet, icmp_handle_packet);
+                           tcp_handle_packet, 
+                           udp_handle_packet,
+                           icmp_handle_packet);
             break;
     }
 }
