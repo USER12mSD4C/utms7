@@ -111,11 +111,19 @@ static void print_prompt(void) {
     shell_print("> ");
 }
 
+static void clear_line(u8 input_x, u8 input_y) {
+    vga_setpos(input_x, input_y);
+    for (int i = 0; i < 80 - input_x; i++) {
+        vga_putchar(' ');
+    }
+    vga_setpos(input_x, input_y);
+}
+
 static void redraw_line(const char *line, int pos, u8 input_x, u8 input_y) {
-    vga_setpos(input_x, input_y);
-    for (int i = 0; i < 80 - input_x; i++) vga_putchar(' ');
-    vga_setpos(input_x, input_y);
-    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
+    clear_line(input_x, input_y);
+    for (int i = 0; i < pos; i++) {
+        vga_putchar(line[i]);
+    }
     vga_setpos(input_x + pos, input_y);
 }
 
@@ -138,50 +146,52 @@ void shell_run(void) {
             
             key = keyboard_getc();
             
-            // Специальные клавиши (0xE0-0xEF) - обрабатываем без вывода на экран
-            if (key >= 0xE0 && key <= 0xEF) {
-                // Стрелка вверх
-                if (key == 0xE0) {
-                    if (history_pos < history_count - 1) {
-                        history_pos++;
-                        strcpy(line, history[history_pos]);
-                        pos = strlen(line);
-                        redraw_line(line, pos, input_x, input_y);
-                    }
+            // Стрелка вверх
+            if (key == 0xE0) {
+                if (history_pos < history_count - 1) {
+                    history_pos++;
+                    strcpy(line, history[history_pos]);
+                    pos = strlen(line);
+                    redraw_line(line, pos, input_x, input_y);
                 }
-                // Стрелка вниз
-                else if (key == 0xE1) {
-                    if (history_pos > 0) {
-                        history_pos--;
-                        strcpy(line, history[history_pos]);
-                        pos = strlen(line);
-                        redraw_line(line, pos, input_x, input_y);
-                    } else if (history_pos == 0) {
-                        history_pos = -1;
-                        line[0] = '\0';
-                        pos = 0;
-                        redraw_line(line, pos, input_x, input_y);
-                    }
-                }
-                // Стрелка влево
-                else if (key == 0xE2) {
-                    if (cursor_x > input_x) {
-                        cursor_x--;
-                        vga_setpos(cursor_x, input_y);
-                    }
-                }
-                // Стрелка вправо
-                else if (key == 0xE3) {
-                    if (cursor_x - input_x < pos) {
-                        cursor_x++;
-                        vga_setpos(cursor_x, input_y);
-                    }
-                }
-                // Остальные специальные клавиши игнорируем
                 continue;
             }
             
-            // Tab - игнорируем
+            // Стрелка вниз
+            if (key == 0xE1) {
+                if (history_pos > 0) {
+                    history_pos--;
+                    strcpy(line, history[history_pos]);
+                    pos = strlen(line);
+                    redraw_line(line, pos, input_x, input_y);
+                } else if (history_pos == 0) {
+                    history_pos = -1;
+                    line[0] = '\0';
+                    pos = 0;
+                    redraw_line(line, pos, input_x, input_y);
+                }
+                continue;
+            }
+            
+            // Стрелка влево
+            if (key == 0xE2) {
+                if (cursor_x > input_x) {
+                    cursor_x--;
+                    vga_setpos(cursor_x, input_y);
+                }
+                continue;
+            }
+            
+            // Стрелка вправо
+            if (key == 0xE3) {
+                if (cursor_x - input_x < pos) {
+                    cursor_x++;
+                    vga_setpos(cursor_x, input_y);
+                }
+                continue;
+            }
+            
+            // Tab
             if (key == '\t') {
                 continue;
             }
@@ -200,10 +210,10 @@ void shell_run(void) {
                 continue;
             }
             
-            // Enter - только тут печатаем \n
+            // Enter
             if (key == '\n' || key == '\r') {
                 line[pos] = '\0';
-                vga_putchar('\n');  // Единственное место где печатается \n
+                vga_putchar('\n');
                 if (pos > 0) {
                     add_to_history(line);
                     shell_execute(line);
@@ -211,7 +221,7 @@ void shell_run(void) {
                 break;
             }
             
-            // Обычные печатные символы
+            // Обычные символы
             if (key >= 32 && key <= 126) {
                 if (pos < MAX_LINE_LEN - 1) {
                     int idx = cursor_x - input_x;
@@ -221,7 +231,12 @@ void shell_run(void) {
                     line[idx] = key;
                     pos++;
                     cursor_x++;
-                    redraw_line(line, pos, input_x, input_y);
+                    vga_putchar(key);
+                    // Дорисовываем остаток строки если нужно
+                    for (int i = idx + 1; i < pos; i++) {
+                        vga_putchar(line[i]);
+                    }
+                    vga_setpos(cursor_x, input_y);
                 }
                 continue;
             }

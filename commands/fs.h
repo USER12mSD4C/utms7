@@ -3,5 +3,6 @@
 
 void fs_commands_init(void);
 const char* fs_get_current_dir(void);
+void fs_set_current_dir(const char* path);
 
 #endif

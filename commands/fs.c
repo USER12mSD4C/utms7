@@ -8,6 +8,16 @@
 
 static char current_dir[256] = "/";
 
+const char* fs_get_current_dir(void) {
+    return current_dir;
+}
+
+void fs_set_current_dir(const char* path) {
+    if (path && path[0]) {
+        strcpy(current_dir, path);
+    }
+}
+
 static int cmd_ls(int argc, char** argv) {
     char path[256] = "/";
     int show_all = 0;
@@ -25,6 +35,8 @@ static int cmd_ls(int argc, char** argv) {
     if (argc <= 1 || (argc == 2 && argv[1][0] == '-')) {
         strcpy(path, current_dir);
     }
+    
+    if (path[0] == '\0') strcpy(path, "/");
     
     FSNode *entries = NULL;
     u32 count = 0;
@@ -59,7 +71,7 @@ static int cmd_cd(int argc, char** argv) {
     char path[256];
     
     if (argc < 2) {
-        strcpy(current_dir, "/");
+        fs_set_current_dir("/");
         return 0;
     }
     
@@ -70,12 +82,8 @@ static int cmd_cd(int argc, char** argv) {
         return -1;
     }
     
-    strcpy(current_dir, path);
+    fs_set_current_dir(path);
     return 0;
-}
-
-const char* fs_get_current_dir(void) {
-    return current_dir;
 }
 
 static int cmd_pwd(int argc, char** argv) {
@@ -201,134 +209,14 @@ static int cmd_df(int argc, char** argv) {
     
     shell_print("UFS on ");
     shell_print(ufs_get_device());
+    shell_print(" mounted on ");
+    shell_print(ufs_get_mount_point());
     shell_print("\n");
     shell_print("  total: "); shell_print_num(total / 1024); shell_print(" KB\n");
     shell_print("  used:  "); shell_print_num(used / 1024); shell_print(" KB\n");
     shell_print("  free:  "); shell_print_num(free / 1024); shell_print(" KB\n");
     
     return 0;
-}
-
-static int cmd_mkfs_ufs(int argc, char** argv) {
-    if (argc < 2) {
-        shell_print("Usage: mkfs.ufs /dev/sdX [blocks]\n");
-        return -1;
-    }
-    
-    char* dev = argv[1];
-    if (dev[0] != '/' || dev[1] != 'd' || dev[2] != 'e' || dev[3] != 'v' ||
-        dev[4] != '/' || dev[5] != 's' || dev[6] != 'd') {
-        shell_print("invalid device\n");
-        return -1;
-    }
-    
-    int disk = dev[7] - 'a';
-    if (disk < 0 || disk > 3) {
-        shell_print("invalid disk\n");
-        return -1;
-    }
-    
-    u32 blocks = 0;
-    u64 sectors = disk_get_sectors(0x80 + disk);
-    if (sectors == 0) {
-        shell_print("disk not found\n");
-        return -1;
-    }
-    
-    if (argc >= 3) {
-        blocks = 0;
-        char* p = argv[2];
-        while (*p) {
-            if (*p < '0' || *p > '9') {
-                shell_print("invalid block count\n");
-                return -1;
-            }
-            blocks = blocks * 10 + (*p - '0');
-            p++;
-        }
-    } else {
-        blocks = sectors - 2048;
-    }
-    
-    if (blocks < 100 || blocks > sectors - 2048) {
-        shell_print("invalid block count\n");
-        return -1;
-    }
-    
-    shell_print("Formatting ");
-    shell_print(dev);
-    shell_print("... ");
-    
-    if (ufs_format(2048, blocks, disk) == 0) {
-        shell_print("OK\n");
-        return 0;
-    } else {
-        shell_print("FAILED\n");
-        return -1;
-    }
-}
-
-static int cmd_mount(int argc, char** argv) {
-    if (argc < 2) {
-        shell_print("Usage: mount /dev/sdX\n");
-        return -1;
-    }
-    
-    char* dev = argv[1];
-    if (dev[0] != '/' || dev[1] != 'd' || dev[2] != 'e' || dev[3] != 'v' ||
-        dev[4] != '/' || dev[5] != 's' || dev[6] != 'd') {
-        shell_print("invalid device\n");
-        return -1;
-    }
-    
-    int disk = dev[7] - 'a';
-    if (disk < 0 || disk > 3) {
-        shell_print("invalid disk\n");
-        return -1;
-    }
-    
-    if (ufs_ismounted()) {
-        shell_print("already mounted on ");
-        shell_print(ufs_get_device());
-        shell_print("\n");
-        return -1;
-    }
-    
-    shell_print("Mounting ");
-    shell_print(dev);
-    shell_print("... ");
-    
-    if (ufs_mount(2048, disk) == 0) {
-        strcpy(current_dir, "/");
-        shell_print("OK\n");
-        return 0;
-    } else {
-        shell_print("FAILED\n");
-        return -1;
-    }
-}
-
-static int cmd_umount(int argc, char** argv) {
-    (void)argc; (void)argv;
-    
-    if (!ufs_ismounted()) {
-        shell_print("umount: not mounted\n");
-        return -1;
-    }
-    
-    if (strcmp(current_dir, "/") != 0) {
-        shell_print("umount: device busy\n");
-        return -1;
-    }
-    
-    shell_print("Unmounting... ");
-    if (ufs_umount() == 0) {
-        shell_print("OK\n");
-        return 0;
-    } else {
-        shell_print("FAILED\n");
-        return -1;
-    }
 }
 
 void fs_commands_init(void) {
@@ -340,7 +228,4 @@ void fs_commands_init(void) {
     shell_register_command("rm", cmd_rm, "remove file/dir");
     shell_register_command("cat", cmd_cat, "show file");
     shell_register_command("df", cmd_df, "fs usage");
-    shell_register_command("mkfs.ufs", cmd_mkfs_ufs, "format disk");
-    shell_register_command("mount", cmd_mount, "mount ufs");
-    shell_register_command("umount", cmd_umount, "unmount ufs");
 }

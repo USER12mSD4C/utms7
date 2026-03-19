@@ -328,29 +328,24 @@ int ufs_mount(u32 start_lba, int disk) {
     
     mounted = 1;
     snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
+    // mount_point оставляем как есть - он может быть изменен позже через ufs_mount_to
     return 0;
 }
 
 int ufs_mount_to(const char* dev, const char* point) {
     int disk, part;
     
-    if (dev[0] != '/' || dev[1] != 'd' || dev[2] != 'e' || dev[3] != 'v' ||
-        dev[4] != '/' || dev[5] != 's' || dev[6] != 'd') {
-        return -1;
-    }
+    if (parse_devname(dev, &disk, &part) != 0) return -1;
     
-    disk = dev[7] - 'a';
-    if (disk < 0 || disk > 3) return -1;
-    
-    u32 start_lba = 2048;
-    if (dev[8] != '\0') {
-        // Это раздел, нужно вычислить start_lba
-        // Для простоты пока используем 2048
-    }
-    
+    u32 start_lba = 2048; // FIXME: получить из таблицы разделов
     if (ufs_mount(start_lba, disk) != 0) return -1;
     
-    strcpy(mount_point, point);
+    if (point && point[0]) {
+        strcpy(mount_point, point);
+    } else {
+        strcpy(mount_point, "/");
+    }
+    
     return 0;
 }
 
@@ -379,14 +374,12 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     part_start = start_lba;
     current_disk = disk;
     
-    // Очищаем первые 10 блоков (суперблок и корневая директория)
     u8 zero[UFS_BLOCK_SIZE] = {0};
     for (u32 i = 0; i < 10 && i < blocks; i++) {
         disk_set_disk(disk);
         if (disk_write(start_lba + i, zero) != 0) return -1;
     }
     
-    // Создаем суперблок
     memset(&sb, 0, sizeof(sb));
     sb.magic = UFS_MAGIC;
     sb.total_blocks = blocks;
@@ -397,7 +390,6 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     memcpy(buf, &sb, sizeof(sb));
     if (disk_write(start_lba + SUPERBLOCK_BLOCK, buf) != 0) return -1;
     
-    // Создаем корневую директорию
     memset(buf, 0, UFS_BLOCK_SIZE);
     FSNode* e = (FSNode*)buf;
     
@@ -417,6 +409,7 @@ int ufs_format(u32 start_lba, u32 blocks, int disk) {
     
     mounted = 1;
     snprintf(mounted_device, sizeof(mounted_device), "/dev/sd%c", 'a' + disk);
+    strcpy(mount_point, "/");
     return 0;
 }
 

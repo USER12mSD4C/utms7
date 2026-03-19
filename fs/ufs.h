@@ -16,7 +16,6 @@ typedef struct {
 } __attribute__((packed)) FSNode;
 
 int ufs_mount(u32 start_lba, int disk);
-int ufs_mount_to(const char* dev, const char* point);  // НОВОЕ
 int ufs_format(u32 start_lba, u32 blocks, int disk);
 int ufs_write(const char* path, u8* data, u32 size);
 int ufs_read(const char* path, u8** data, u32* size);
@@ -33,7 +32,7 @@ int ufs_mv(const char* src, const char* dst);
 int ufs_rewrite(const char* path, u8* data, u32 size);
 int ufs_ismounted(void);
 const char* ufs_get_device(void);
-const char* ufs_get_mount_point(void);  // НОВОЕ
+const char* ufs_get_mount_point(void);
 int ufs_umount(void);
 
 #endif
