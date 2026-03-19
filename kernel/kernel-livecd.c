@@ -12,7 +12,7 @@
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 #include "../apps/installer.h"
-#include "../drivers/udisk.h"
+#include "../include/udisk.h"
 
 void disk_commands_init(void);
 

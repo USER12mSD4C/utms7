@@ -5,11 +5,11 @@
 #include "../lib/zlib.h"
 #include "../drivers/vga.h"
 
-#define UPAC_ROOT "/var/lib/upac"
+#define UPAC_ROOT "/etc/upac"
 #define UPAC_DB UPAC_ROOT "/core.db"
 #define UPAC_INSTALLED UPAC_ROOT "/installed"
 #define UPAC_REPO "raw.githubusercontent.com"
-#define UPAC_REPO_PATH "/user12ms/upac-repo/main"
+#define UPAC_REPO_PATH "/USER12mSD4C/g-rep-upac/main"
 
 typedef struct {
     char name[64];
@@ -31,6 +31,10 @@ static void upac_print(const char *s) {
 
 static void upac_print_num(u32 n) {
     vga_write_num(n);
+}
+
+static void upac_putchar(char c) {
+    vga_putchar(c);
 }
 
 static int upac_mkdir_recursive(const char *path) {
@@ -58,13 +62,43 @@ static int upac_mkdir_recursive(const char *path) {
 
 static int upac_download(const char *host, const char *path, u8 **data, u32 *size) {
     char url[512];
-    snprintf(url, sizeof(url), "http://%s%s", host, path);
+    char host_buf[128];
+    char path_buf[256];
+    
+    memset(host_buf, 0, sizeof(host_buf));
+    memset(path_buf, 0, sizeof(path_buf));
+    
+    if (host) {
+        strncpy(host_buf, host, sizeof(host_buf) - 1);
+    } else {
+        strcpy(host_buf, "NULL");
+    }
+    
+    if (path) {
+        strncpy(path_buf, path, sizeof(path_buf) - 1);
+    } else {
+        strcpy(path_buf, "NULL");
+    }
+    
+    // Очищаем возможные невидимые символы
+    for (int i = 0; path_buf[i]; i++) {
+        if (path_buf[i] < 32 || path_buf[i] > 126) {
+            path_buf[i] = '?';
+        }
+    }
+    
+    snprintf(url, sizeof(url), "http://%s%s", host_buf, path_buf);
     
     upac_print("  Downloading ");
     upac_print(url);
     upac_print("... ");
     
-    if (http_get(url, data, size) != 0) {
+    *data = NULL;
+    *size = 0;
+    
+    int result = http_get(url, data, size);
+    
+    if (result != 0 || *data == NULL) {
         upac_print("FAILED\n");
         return -1;
     }
@@ -76,19 +110,82 @@ static int upac_download(const char *host, const char *path, u8 **data, u32 *siz
     return 0;
 }
 
+static int upac_is_installed(const char *name) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", UPAC_INSTALLED, name);
+    return ufs_exists(path);
+}
+
+static int upac_mark_installed(upac_pkg_t *pkg) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", UPAC_INSTALLED, pkg->name);
+    
+    char info[2048];
+    int pos = 0;
+    
+    pos += snprintf(info + pos, sizeof(info) - pos, "name=%s\n", pkg->name);
+    pos += snprintf(info + pos, sizeof(info) - pos, "version=%s\n", pkg->version);
+    pos += snprintf(info + pos, sizeof(info) - pos, "desc=%s\n", pkg->desc);
+    
+    for (u32 i = 0; i < pkg->deps_count; i++) {
+        pos += snprintf(info + pos, sizeof(info) - pos, "dep=%s\n", pkg->deps[i]);
+    }
+    
+    for (u32 i = 0; i < pkg->files_count; i++) {
+        pos += snprintf(info + pos, sizeof(info) - pos, "file=%s\n", pkg->files[i].path);
+    }
+    
+    return ufs_write(path, (u8*)info, pos);
+}
+
+static int upac_unmark_installed(const char *name) {
+    char path[256];
+    snprintf(path, sizeof(path), "%s/%s", UPAC_INSTALLED, name);
+    return ufs_delete(path);
+}
+
 static int upac_sync(void) {
     upac_print(":: Synchronizing package database...\n");
     
-    ufs_mkdir(UPAC_ROOT);
-    ufs_mkdir(UPAC_INSTALLED);
+    if (upac_mkdir_recursive(UPAC_ROOT) != 0) {
+        upac_print("  Failed to create " UPAC_ROOT "\n");
+        return -1;
+    }
+    
+    if (upac_mkdir_recursive(UPAC_INSTALLED) != 0) {
+        upac_print("  Failed to create " UPAC_INSTALLED "\n");
+        return -1;
+    }
     
     u8 *db_gz;
     u32 db_gz_len;
     
     char db_path[256];
-    snprintf(db_path, sizeof(db_path), "%s/core.db.tar.gz", UPAC_REPO_PATH);
+    memset(db_path, 0, sizeof(db_path));
+    
+    // Принудительно переписываем строку вручную, символ за символом
+    const char *repo_path = UPAC_REPO_PATH;
+    int pos = 0;
+    
+    // Копируем вручную, отбрасывая возможные невидимые символы
+    while (*repo_path && pos < sizeof(db_path) - 20) {
+        if (*repo_path >= 32 && *repo_path <= 126) {
+            db_path[pos++] = *repo_path;
+        }
+        repo_path++;
+    }
+    
+    // Добавляем "/core.db.tar.gz"
+    const char *suffix = "/core.db.tar.gz";
+    while (*suffix && pos < sizeof(db_path) - 1) {
+        db_path[pos++] = *suffix++;
+    }
+    db_path[pos] = '\0';
+    
+    upac_print("  Downloading database from GitHub...\n");
     
     if (upac_download(UPAC_REPO, db_path, &db_gz, &db_gz_len) != 0) {
+        upac_print("  Download failed\n");
         return -1;
     }
     
@@ -103,6 +200,12 @@ static int upac_sync(void) {
     }
     
     kfree(db_gz);
+    
+    upac_print("OK (");
+    upac_print_num(db_raw_len);
+    upac_print(" bytes)\n");
+    
+    upac_print("  Writing database... ");
     
     if (ufs_rewrite(UPAC_DB, db_raw, db_raw_len) != 0) {
         upac_print("FAILED\n");
@@ -120,6 +223,11 @@ static int upac_sync(void) {
 static int upac_db_find(const char *name, upac_pkg_t *pkg) {
     u8 *db_data;
     u32 db_len;
+    
+    if (!ufs_exists(UPAC_DB)) {
+        upac_print("  Database not synced. Run 'upac -Sy' first\n");
+        return -1;
+    }
     
     if (ufs_read(UPAC_DB, &db_data, &db_len) != 0) return -1;
     
@@ -201,10 +309,7 @@ static int upac_db_find(const char *name, upac_pkg_t *pkg) {
 
 static int upac_install_deps(upac_pkg_t *pkg) {
     for (u32 i = 0; i < pkg->deps_count; i++) {
-        char dep_path[256];
-        snprintf(dep_path, sizeof(dep_path), "%s/%s", UPAC_INSTALLED, pkg->deps[i]);
-        
-        if (!ufs_exists(dep_path)) {
+        if (!upac_is_installed(pkg->deps[i])) {
             upac_print("  Installing dependency: ");
             upac_print(pkg->deps[i]);
             upac_print("\n");
@@ -218,6 +323,13 @@ static int upac_install_deps(upac_pkg_t *pkg) {
 }
 
 int upac_install(const char *name) {
+    if (upac_is_installed(name)) {
+        upac_print(":: Package ");
+        upac_print(name);
+        upac_print(" is already installed\n");
+        return 0;
+    }
+    
     upac_pkg_t pkg;
     
     upac_print(":: Installing ");
@@ -242,10 +354,27 @@ int upac_install(const char *name) {
         return -1;
     }
     
-    char pkg_url[512];
     char pkg_path[256];
-    snprintf(pkg_path, sizeof(pkg_path), "%s/packages/%s-%s.upac", 
-             UPAC_REPO_PATH, pkg.name, pkg.version);
+    memset(pkg_path, 0, sizeof(pkg_path));
+    
+    const char *repo_path = UPAC_REPO_PATH;
+    int pos = 0;
+    
+    while (*repo_path && pos < sizeof(pkg_path) - 50) {
+        if (*repo_path >= 32 && *repo_path <= 126) {
+            pkg_path[pos++] = *repo_path;
+        }
+        repo_path++;
+    }
+    
+    char pkg_file[128];
+    snprintf(pkg_file, sizeof(pkg_file), "/packages/%s-%s.upac", pkg.name, pkg.version);
+    
+    const char *suffix = pkg_file;
+    while (*suffix && pos < sizeof(pkg_path) - 1) {
+        pkg_path[pos++] = *suffix++;
+    }
+    pkg_path[pos] = '\0';
     
     u8 *pkg_data;
     u32 pkg_len;
@@ -300,20 +429,7 @@ int upac_install(const char *name) {
     upac_print_num(installed_files);
     upac_print(" files)\n");
     
-    char installed_path[256];
-    snprintf(installed_path, sizeof(installed_path), "%s/%s", UPAC_INSTALLED, pkg.name);
-    
-    char info[1024];
-    int pos = 0;
-    pos += snprintf(info + pos, sizeof(info) - pos, "%s\n", pkg.name);
-    pos += snprintf(info + pos, sizeof(info) - pos, "%s\n", pkg.version);
-    pos += snprintf(info + pos, sizeof(info) - pos, "%s\n", pkg.desc);
-    
-    for (u32 i = 0; i < pkg.files_count; i++) {
-        pos += snprintf(info + pos, sizeof(info) - pos, "%s\n", pkg.files[i].path);
-    }
-    
-    ufs_write(installed_path, (u8*)info, pos);
+    upac_mark_installed(&pkg);
     
     upac_print(":: Done.\n");
     
@@ -321,38 +437,48 @@ int upac_install(const char *name) {
 }
 
 int upac_remove(const char *name) {
-    char path[256];
-    snprintf(path, sizeof(path), "%s/%s", UPAC_INSTALLED, name);
+    if (!upac_is_installed(name)) {
+        upac_print(":: Package ");
+        upac_print(name);
+        upac_print(" is not installed\n");
+        return -1;
+    }
     
     upac_print(":: Removing ");
     upac_print(name);
     upac_print("...\n");
     
-    if (!ufs_exists(path)) {
-        upac_print("  Package not installed\n");
-        return -1;
-    }
+    char info_path[256];
+    snprintf(info_path, sizeof(info_path), "%s/%s", UPAC_INSTALLED, name);
     
     u8 *info;
     u32 info_len;
-    if (ufs_read(path, &info, &info_len) != 0) {
+    if (ufs_read(info_path, &info, &info_len) != 0) {
         return -1;
     }
     
     char *p = (char*)info;
-    p += strlen(p) + 1;
-    p += strlen(p) + 1;
-    p += strlen(p) + 1;
-    
+    char *end = p + info_len;
     u32 removed = 0;
-    while (p < (char*)info + info_len && *p) {
-        if (ufs_delete(p) == 0) removed++;
-        p += strlen(p) + 1;
+    
+    while (p < end) {
+        if (strncmp(p, "file=", 5) == 0) {
+            char *filepath = p + 5;
+            char *nl = strchr(filepath, '\n');
+            if (nl) *nl = '\0';
+            
+            if (ufs_delete(filepath) == 0) removed++;
+            
+            p = nl ? nl + 1 : end;
+        } else {
+            p = strchr(p, '\n');
+            if (p) p++; else p = end;
+        }
     }
     
     kfree(info);
     
-    ufs_delete(path);
+    upac_unmark_installed(name);
     
     upac_print("  Removed ");
     upac_print_num(removed);
@@ -365,6 +491,11 @@ int upac_remove(const char *name) {
 int upac_query(void) {
     upac_print(":: Installed packages:\n");
     
+    if (!ufs_exists(UPAC_INSTALLED)) {
+        upac_print("  none\n");
+        return 0;
+    }
+    
     FSNode *entries;
     u32 count;
     
@@ -373,6 +504,7 @@ int upac_query(void) {
         return 0;
     }
     
+    int found = 0;
     for (u32 i = 0; i < count; i++) {
         if (!entries[i].is_dir) {
             char path[256];
@@ -382,22 +514,42 @@ int upac_query(void) {
             u32 info_len;
             if (ufs_read(path, &info, &info_len) == 0) {
                 char *p = (char*)info;
-                char *name = p;
-                p += strlen(p) + 1;
-                char *ver = p;
+                char name[64] = "";
+                char version[32] = "";
+                
+                while (p && *p) {
+                    if (strncmp(p, "name=", 5) == 0) {
+                        strcpy(name, p + 5);
+                        char *nl = strchr(name, '\n');
+                        if (nl) *nl = '\0';
+                    }
+                    else if (strncmp(p, "version=", 8) == 0) {
+                        strcpy(version, p + 8);
+                        char *nl = strchr(version, '\n');
+                        if (nl) *nl = '\0';
+                    }
+                    p = strchr(p, '\n');
+                    if (p) p++; else break;
+                }
                 
                 upac_print("  ");
                 upac_print(name);
                 upac_print(" ");
-                upac_print(ver);
+                upac_print(version);
                 upac_print("\n");
                 
+                found = 1;
                 kfree(info);
             }
         }
     }
     
     kfree(entries);
+    
+    if (!found) {
+        upac_print("  none\n");
+    }
+    
     return 0;
 }
 
@@ -405,6 +557,10 @@ int upac_upgrade(void) {
     upac_print(":: Starting full system upgrade...\n");
     
     if (upac_sync() != 0) return -1;
+    
+    if (!ufs_exists(UPAC_INSTALLED)) {
+        return 0;
+    }
     
     FSNode *entries;
     u32 count;
@@ -424,10 +580,20 @@ int upac_upgrade(void) {
                 u32 info_len;
                 if (ufs_read(path, &info, &info_len) == 0) {
                     char *p = (char*)info;
-                    p += strlen(p) + 1;
-                    char *old_ver = p;
+                    char old_ver[32] = "";
                     
-                    if (strcmp(old_ver, pkg.version) != 0) {
+                    while (p && *p) {
+                        if (strncmp(p, "version=", 8) == 0) {
+                            strcpy(old_ver, p + 8);
+                            char *nl = strchr(old_ver, '\n');
+                            if (nl) *nl = '\0';
+                            break;
+                        }
+                        p = strchr(p, '\n');
+                        if (p) p++; else break;
+                    }
+                    
+                    if (old_ver[0] && strcmp(old_ver, pkg.version) != 0) {
                         upac_print("  Upgrading: ");
                         upac_print(pkg.name);
                         upac_print(" ");
@@ -436,6 +602,7 @@ int upac_upgrade(void) {
                         upac_print(pkg.version);
                         upac_print("\n");
                         
+                        upac_remove(pkg.name);
                         upac_install(pkg.name);
                     }
                     

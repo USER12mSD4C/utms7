@@ -59,14 +59,14 @@ SHELL_OBJS = shell/shell.o \
              commands/builtin.o \
              commands/fs.o
 
-# Приложения (БЕЗ UWR)
+# Приложения
 APP_OBJS = apps/installer.o \
            apps/upac.o
 
 # Все объекты
 NORMAL_OBJS = $(CORE_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(LIB_OBJS) $(FS_OBJS) $(SHELL_OBJS) $(APP_OBJS)
 
-# LiveCD объекты (БЕЗ UWR)
+# LiveCD объекты
 LIVECD_OBJS = kernel/entry.o \
               kernel/kernel-livecd.o \
               kernel/kinit.o \
@@ -107,24 +107,34 @@ LIVECD_OBJS = kernel/entry.o \
               shell/uss.o \
               commands/builtin.o \
               commands/fs.o \
-              apps/installer.o
+              apps/installer.o \
+              apps/upac.o
+
+# ==================== ЦЕЛИ ====================
 
 all: kernel.bin kom
 
+# Основное ядро
 kernel.bin: $(NORMAL_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^
 
+# LiveCD ядро
 kernel-livecd.bin: $(LIVECD_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^
 
+# Инструмент для создания модулей
 $(MKMOD): tools/mkmod.c
 	@mkdir -p tools
 	gcc -o $(MKMOD) tools/mkmod.c
 
+# Сборка модулей
 kom: $(MKMOD)
 	@mkdir -p modules
 	@echo "=== MODULES BUILT ==="
 
+# ==================== ОБРАЗЫ ====================
+
+# Создание ISO образа
 iso: kernel.bin kom
 	@mkdir -p iso/boot/grub iso/modules
 	cp kernel.bin iso/boot/kernel.bin
@@ -133,6 +143,7 @@ iso: kernel.bin kom
 	echo 'menuentry "UTMS" { multiboot2 /boot/kernel.bin; boot }' >> iso/boot/grub/grub.cfg
 	grub-mkrescue -o utms.iso iso/
 
+# Создание LiveCD образа
 livecd: kernel-livecd.bin kom
 	@mkdir -p livecd/boot/grub livecd/modules livecd/system/boot livecd/system/modules
 	cp kernel-livecd.bin livecd/boot/kernel.bin
@@ -146,20 +157,52 @@ livecd: kernel-livecd.bin kom
 	echo '}' >> livecd/boot/grub/grub.cfg
 	grub-mkrescue -o utms-livecd.iso livecd/
 
+# Создание дисков
 disk5g.img:
 	dd if=/dev/zero of=disk5g.img bs=1M count=5120
 
-run: iso disk5g.img
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user
+disk2.img:
+	dd if=/dev/zero of=disk2.img bs=1M count=100
 
+# ==================== ЗАПУСК ====================
+
+# Запуск с ISO (грузится с CD)
+run: iso disk5g.img
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -boot d
+
+# Запуск с LiveCD
 run-livecd: livecd disk5g.img
 	qemu-system-x86_64 -cdrom utms-livecd.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -boot d -net nic,model=rtl8139 -net user
 
+# Запуск с диском напрямую (без CD)
+rundisk: kernel.bin disk5g.img
+	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user
+
+# Запуск с двумя дисками
+run-dual: iso disk5g.img disk2.img
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -hdb disk2.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -boot d
+
+# Запуск с сетью
 run-net: kernel.bin disk5g.img
 	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -append "console=ttyS0"
 
+# Отладка
 debug: kernel.bin
 	qemu-system-x86_64 -kernel kernel.bin -m 512 -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -s -S
+
+# Запуск с UEFI (если нужно)
+run-uefi: iso disk5g.img
+	qemu-system-x86_64 -bios /usr/share/ovmf/x64/OVMF.fd -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -boot d
+
+# ==================== ОЧИСТКА ====================
+
+clean:
+	rm -rf *.o */*.o *.bin *.iso iso/ livecd/
+
+distclean: clean
+	rm -rf modules/ tools/mkmod disk*.img
+
+# ==================== ПРАВИЛА КОМПИЛЯЦИИ ====================
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -176,10 +219,4 @@ kernel/idt_irq.o: kernel/idt_irq.asm
 kernel/sched_asm.o: kernel/sched_asm.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 
-clean:
-	rm -rf *.o */*.o *.bin *.iso iso/ livecd/ disk5g.img
-
-distclean: clean
-	rm -rf modules/ tools/mkmod
-
-.PHONY: all clean distclean run run-livecd run-net debug iso livecd kom
+.PHONY: all clean distclean run run-livecd rundisk run-dual run-net debug run-uefi iso livecd kom
