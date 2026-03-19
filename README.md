@@ -8,10 +8,8 @@ i dont recommend use it, still untested
 
 ## last huge update
 
-- kapi and syscalls for bin files
-- working mbr/gpt
-- udisk instead of straight gpt
-- livecd install (in work)
+- kapi and syscalls for bin
+- upac package manager
 
 ## Requirements
 
