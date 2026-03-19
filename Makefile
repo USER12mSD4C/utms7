@@ -146,48 +146,30 @@ iso: kernel.bin kom
 
 # Создание LiveCD образа
 livecd: kernel-livecd.bin kernel.bin kom
-	@echo "Creating LiveCD directory structure..."
+	@echo "Creating LiveCD..."
 	@rm -rf livecd
 	@mkdir -p livecd/boot/grub
-	@mkdir -p livecd/system/boot
-	@mkdir -p livecd/system/modules
-	@mkdir -p livecd/modules
+	@mkdir -p livecd/install/modules
 	
 	@echo "Copying LiveCD kernel..."
 	cp kernel-livecd.bin livecd/boot/kernel.bin
 	
 	@echo "Copying installation kernel..."
-	cp kernel.bin livecd/system/boot/kernel.bin
+	cp kernel.bin livecd/install/kernel.bin
 	
 	@echo "Copying modules..."
-	-cp modules/*.ko livecd/modules/ 2>/dev/null || true
-	-cp modules/*.ko livecd/system/modules/ 2>/dev/null || true
-	
-	@echo "Copying additional files..."
-	-cp -r include livecd/include/ 2>/dev/null || true
-	-cp -r apps livecd/apps/ 2>/dev/null || true
-	-cp -r commands livecd/commands/ 2>/dev/null || true
-	-cp README.md livecd/ 2>/dev/null || true
+	cp modules/*.ko livecd/install/modules/ 2>/dev/null || true
 	
 	@echo "Creating grub.cfg..."
 	echo 'set timeout=5' > livecd/boot/grub/grub.cfg
-	echo 'set default=0' >> livecd/boot/grub/grub.cfg
-	echo '' >> livecd/boot/grub/grub.cfg
 	echo 'menuentry "UTMS LiveCD" {' >> livecd/boot/grub/grub.cfg
 	echo '    multiboot2 /boot/kernel.bin' >> livecd/boot/grub/grub.cfg
 	echo '    boot' >> livecd/boot/grub/grub.cfg
 	echo '}' >> livecd/boot/grub/grub.cfg
-	echo '' >> livecd/boot/grub/grub.cfg
-	echo 'menuentry "UTMS LiveCD (verbose)" {' >> livecd/boot/grub/grub.cfg
-	echo '    multiboot2 /boot/kernel.bin verbose' >> livecd/boot/grub/grub.cfg
-	echo '    boot' >> livecd/boot/grub/grub.cfg
-	echo '}' >> livecd/boot/grub/grub.cfg
 	
-	@echo "Creating ISO image..."
+	@echo "Building ISO..."
 	grub-mkrescue -o utms-livecd.iso livecd/
-	
-	@echo "LiveCD created: utms-livecd.iso"
-	@echo "Size: `du -h utms-livecd.iso | cut -f1`"
+	@echo "Done: utms-livecd.iso"
 
 # Создание дисков
 disk5g.img:

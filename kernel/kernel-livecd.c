@@ -70,55 +70,28 @@ void kernel_main(void *mb_info) {
     vga_write("\nScanning disks...\n");
     udisk_scan();
     
-    int disk_count = disk_get_disk_count();
+// Создаём папку для монтирования
+ufs_mkdir("/mnt");
+ufs_mkdir("/mnt/livecd");
+
+// Теперь монтируем
+vga_write("Mounting LiveCD to /mnt/livecd... ");
+if (ufs_mount_with_point(2048, 2, "/mnt/livecd") == 0) {
+    vga_write("OK\n");
+} else {
+    vga_write("FAILED (trying primary master)...\n");
+    if (ufs_mount_with_point(2048, 0, "/mnt/livecd") == 0) {
+        vga_write("Mounted LiveCD on primary master\n");
+    } else {
+        vga_write("Failed to mount LiveCD\n");
+    }
+}
+    
     vga_write("Disks found: ");
-    vga_write_num(disk_count);
+    vga_write_num(disk_get_disk_count());
     vga_write("\n\n");
     
-    vga_write("Looking for UFS partitions...\n");
-    int mounted = 0;
-    
-    for (int i = 0; i < 4; i++) {
-        disk_info_t* d = udisk_get_info(i);
-        if (!d || !d->present) continue;
-        
-        for (int j = 0; j < d->partition_count; j++) {
-            partition_t* p = &d->partitions[j];
-            if (!p->present) continue;
-            
-            if (p->type == PARTITION_UFS) {
-                char pname[16] = "/dev/sdX";
-                pname[7] = 'a' + i;
-                if (p->partition_num < 10) {
-                    pname[8] = '0' + p->partition_num;
-                    pname[9] = '\0';
-                }
-                
-                vga_write("  Found UFS on ");
-                vga_write(pname);
-                vga_write("... ");
-                
-                if (ufs_mount(p->start_lba, i) == 0) {
-                    vga_write("mounted to /\n");
-                    mounted = 1;
-                    extern void fs_set_current_dir(const char*);
-                    fs_set_current_dir("/");
-                    break;
-                } else {
-                    vga_write("mount failed\n");
-                }
-            }
-        }
-        if (mounted) break;
-    }
-    
-    if (!mounted) {
-        vga_write("  No UFS partition found\n");
-        vga_write("  Create one with: udisk create /dev/sda 100\n");
-        vga_write("  Then: mkfs.ufs /dev/sda1 && mount /dev/sda1 /\n");
-    }
-    
-    vga_write("\nLoading modules...\n");
+    vga_write("Loading modules...\n");
     kinit_run_all();
     
     vga_write("\nInitializing shell... ");
