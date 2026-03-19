@@ -57,7 +57,9 @@ int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len, u8 *src_mac, u32 
     return len;
 }
 
-void ip_handle_packet(u8 *packet, int len, void (*tcp_handler)(u8*, int, u32, u32)) {
+void ip_handle_packet(u8 *packet, int len, 
+                      void (*tcp_handler)(u8*, int, u32, u32),
+                      void (*icmp_handler)(u8*, int, u32, u32)) {
     if (len < sizeof(ip_hdr_t)) return;
     
     ip_hdr_t *ip = (ip_hdr_t*)packet;
@@ -77,5 +79,8 @@ void ip_handle_packet(u8 *packet, int len, void (*tcp_handler)(u8*, int, u32, u3
     
     if (ip->protocol == IP_PROTO_TCP && tcp_handler) {
         tcp_handler(data, data_len, ip->src, ip->dst);
+    }
+    else if (ip->protocol == IP_PROTO_ICMP && icmp_handler) {
+        icmp_handler(data, data_len, ip->src, ip->dst);
     }
 }

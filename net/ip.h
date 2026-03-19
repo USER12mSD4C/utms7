@@ -20,8 +20,27 @@ typedef struct {
     u32 dst;
 } ip_hdr_t;
 
+// ICMP структуры
+#define ICMP_ECHO_REPLY 0
+#define ICMP_ECHO_REQUEST 8
+
+typedef struct {
+    u8 type;
+    u8 code;
+    u16 checksum;
+    u16 id;
+    u16 seq;
+} icmp_hdr_t;
+
 u16 ip_checksum(u16 *data, int len);
 int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len, u8 *src_mac, u32 src_ip);
-void ip_handle_packet(u8 *packet, int len, void (*tcp_handler)(u8*, int, u32, u32));
+void ip_handle_packet(u8 *packet, int len, 
+                      void (*tcp_handler)(u8*, int, u32, u32),
+                      void (*icmp_handler)(u8*, int, u32, u32));
+
+// ICMP функции
+int icmp_send_request(u32 dst_ip, u16 id, u16 seq);
+void icmp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip);
+int icmp_ping(u32 dst_ip, int timeout_ms);
 
 #endif

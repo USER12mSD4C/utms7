@@ -2,6 +2,8 @@
 #include "../kernel/memory.h"
 #include "../fs/ufs.h"
 #include "../net/http.h"
+#include "../net/dns.h"
+#include "../net/net.h"
 #include "../lib/zlib.h"
 #include "../drivers/vga.h"
 
@@ -33,10 +35,6 @@ static void upac_print_num(u32 n) {
     vga_write_num(n);
 }
 
-static void upac_putchar(char c) {
-    vga_putchar(c);
-}
-
 static int upac_mkdir_recursive(const char *path) {
     char tmp[256];
     char *p = NULL;
@@ -60,34 +58,26 @@ static int upac_mkdir_recursive(const char *path) {
     return 0;
 }
 
-static int upac_download(const char *host, const char *path, u8 **data, u32 *size) {
+static int upac_download(const char *path, u8 **data, u32 *size) {
     char url[512];
-    char host_buf[128];
-    char path_buf[256];
+    u32 ip;
     
-    memset(host_buf, 0, sizeof(host_buf));
-    memset(path_buf, 0, sizeof(path_buf));
+    upac_print("  Resolving ");
+    upac_print(UPAC_REPO);
+    upac_print("... ");
     
-    if (host) {
-        strncpy(host_buf, host, sizeof(host_buf) - 1);
+    ip = dns_lookup(UPAC_REPO, net_get_dns());
+    if (ip == 0) {
+        upac_print("FAILED\n");
+        upac_print("  Trying fallback IP...\n");
+        ip = 0xB8C46C85;
     } else {
-        strcpy(host_buf, "NULL");
+        upac_print("OK\n");
     }
     
-    if (path) {
-        strncpy(path_buf, path, sizeof(path_buf) - 1);
-    } else {
-        strcpy(path_buf, "NULL");
-    }
-    
-    // Очищаем возможные невидимые символы
-    for (int i = 0; path_buf[i]; i++) {
-        if (path_buf[i] < 32 || path_buf[i] > 126) {
-            path_buf[i] = '?';
-        }
-    }
-    
-    snprintf(url, sizeof(url), "http://%s%s", host_buf, path_buf);
+    snprintf(url, sizeof(url), "http://%d.%d.%d.%d%s", 
+             (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, 
+             (ip >> 8) & 0xFF, ip & 0xFF, path);
     
     upac_print("  Downloading ");
     upac_print(url);
@@ -99,8 +89,20 @@ static int upac_download(const char *host, const char *path, u8 **data, u32 *siz
     int result = http_get(url, data, size);
     
     if (result != 0 || *data == NULL) {
-        upac_print("FAILED\n");
-        return -1;
+        upac_print("FAILED (error ");
+        upac_print_num(result);
+        upac_print(")\n");
+        
+        snprintf(url, sizeof(url), "http://%s%s", UPAC_REPO, path);
+        upac_print("  Retrying with domain: ");
+        upac_print(url);
+        upac_print("... ");
+        
+        result = http_get(url, data, size);
+        if (result != 0 || *data == NULL) {
+            upac_print("FAILED\n");
+            return -1;
+        }
     }
     
     upac_print("OK (");
@@ -120,7 +122,7 @@ static int upac_mark_installed(upac_pkg_t *pkg) {
     char path[256];
     snprintf(path, sizeof(path), "%s/%s", UPAC_INSTALLED, pkg->name);
     
-    char info[2048];
+    char info[8192];
     int pos = 0;
     
     pos += snprintf(info + pos, sizeof(info) - pos, "name=%s\n", pkg->name);
@@ -142,82 +144,6 @@ static int upac_unmark_installed(const char *name) {
     char path[256];
     snprintf(path, sizeof(path), "%s/%s", UPAC_INSTALLED, name);
     return ufs_delete(path);
-}
-
-static int upac_sync(void) {
-    upac_print(":: Synchronizing package database...\n");
-    
-    if (upac_mkdir_recursive(UPAC_ROOT) != 0) {
-        upac_print("  Failed to create " UPAC_ROOT "\n");
-        return -1;
-    }
-    
-    if (upac_mkdir_recursive(UPAC_INSTALLED) != 0) {
-        upac_print("  Failed to create " UPAC_INSTALLED "\n");
-        return -1;
-    }
-    
-    u8 *db_gz;
-    u32 db_gz_len;
-    
-    char db_path[256];
-    memset(db_path, 0, sizeof(db_path));
-    
-    // Принудительно переписываем строку вручную, символ за символом
-    const char *repo_path = UPAC_REPO_PATH;
-    int pos = 0;
-    
-    // Копируем вручную, отбрасывая возможные невидимые символы
-    while (*repo_path && pos < sizeof(db_path) - 20) {
-        if (*repo_path >= 32 && *repo_path <= 126) {
-            db_path[pos++] = *repo_path;
-        }
-        repo_path++;
-    }
-    
-    // Добавляем "/core.db.tar.gz"
-    const char *suffix = "/core.db.tar.gz";
-    while (*suffix && pos < sizeof(db_path) - 1) {
-        db_path[pos++] = *suffix++;
-    }
-    db_path[pos] = '\0';
-    
-    upac_print("  Downloading database from GitHub...\n");
-    
-    if (upac_download(UPAC_REPO, db_path, &db_gz, &db_gz_len) != 0) {
-        upac_print("  Download failed\n");
-        return -1;
-    }
-    
-    upac_print("  Extracting database... ");
-    
-    u8 *db_raw;
-    u32 db_raw_len;
-    if (zlib_inflate(db_gz, db_gz_len, &db_raw, &db_raw_len) != 0) {
-        upac_print("FAILED\n");
-        kfree(db_gz);
-        return -1;
-    }
-    
-    kfree(db_gz);
-    
-    upac_print("OK (");
-    upac_print_num(db_raw_len);
-    upac_print(" bytes)\n");
-    
-    upac_print("  Writing database... ");
-    
-    if (ufs_rewrite(UPAC_DB, db_raw, db_raw_len) != 0) {
-        upac_print("FAILED\n");
-        kfree(db_raw);
-        return -1;
-    }
-    
-    kfree(db_raw);
-    upac_print("OK\n");
-    upac_print(":: Database updated\n");
-    
-    return 0;
 }
 
 static int upac_db_find(const char *name, upac_pkg_t *pkg) {
@@ -307,6 +233,10 @@ static int upac_db_find(const char *name, upac_pkg_t *pkg) {
     return -1;
 }
 
+// Прототипы функций
+int upac_install(const char *name);
+int upac_sync(void);
+
 static int upac_install_deps(upac_pkg_t *pkg) {
     for (u32 i = 0; i < pkg->deps_count; i++) {
         if (!upac_is_installed(pkg->deps[i])) {
@@ -314,10 +244,82 @@ static int upac_install_deps(upac_pkg_t *pkg) {
             upac_print(pkg->deps[i]);
             upac_print("\n");
             
-            extern int upac_install(const char *name);
-            if (upac_install(pkg->deps[i]) != 0) return -1;
+            int res = upac_install(pkg->deps[i]);
+            if (res != 0) return -1;
         }
     }
+    
+    return 0;
+}
+
+int upac_sync(void) {
+    upac_print(":: Synchronizing package database...\n");
+    
+    if (net_get_ip() == 0) {
+        upac_print("  Network not configured!\n");
+        upac_print("  Check your network connection\n");
+        return -1;
+    }
+    
+    upac_print("  Current IP: ");
+    u32 ip = net_get_ip();
+    upac_print_num((ip >> 24) & 0xFF);
+    upac_print(".");
+    upac_print_num((ip >> 16) & 0xFF);
+    upac_print(".");
+    upac_print_num((ip >> 8) & 0xFF);
+    upac_print(".");
+    upac_print_num(ip & 0xFF);
+    upac_print("\n");
+    
+    if (upac_mkdir_recursive(UPAC_ROOT) != 0) {
+        upac_print("  Failed to create " UPAC_ROOT "\n");
+        return -1;
+    }
+    
+    if (upac_mkdir_recursive(UPAC_INSTALLED) != 0) {
+        upac_print("  Failed to create " UPAC_INSTALLED "\n");
+        return -1;
+    }
+    
+    u8 *db_gz;
+    u32 db_gz_len;
+    
+    char db_path[512];
+    snprintf(db_path, sizeof(db_path), "%s/core.db.tar.gz", UPAC_REPO_PATH);
+    
+    if (upac_download(db_path, &db_gz, &db_gz_len) != 0) {
+        upac_print("  Download failed\n");
+        return -1;
+    }
+    
+    upac_print("  Extracting database... ");
+    
+    u8 *db_raw;
+    u32 db_raw_len;
+    if (zlib_inflate(db_gz, db_gz_len, &db_raw, &db_raw_len) != 0) {
+        upac_print("FAILED\n");
+        kfree(db_gz);
+        return -1;
+    }
+    
+    kfree(db_gz);
+    
+    upac_print("OK (");
+    upac_print_num(db_raw_len);
+    upac_print(" bytes)\n");
+    
+    upac_print("  Writing database... ");
+    
+    if (ufs_rewrite(UPAC_DB, db_raw, db_raw_len) != 0) {
+        upac_print("FAILED\n");
+        kfree(db_raw);
+        return -1;
+    }
+    
+    kfree(db_raw);
+    upac_print("OK\n");
+    upac_print(":: Database updated\n");
     
     return 0;
 }
@@ -354,31 +356,13 @@ int upac_install(const char *name) {
         return -1;
     }
     
-    char pkg_path[256];
-    memset(pkg_path, 0, sizeof(pkg_path));
-    
-    const char *repo_path = UPAC_REPO_PATH;
-    int pos = 0;
-    
-    while (*repo_path && pos < sizeof(pkg_path) - 50) {
-        if (*repo_path >= 32 && *repo_path <= 126) {
-            pkg_path[pos++] = *repo_path;
-        }
-        repo_path++;
-    }
-    
-    char pkg_file[128];
-    snprintf(pkg_file, sizeof(pkg_file), "/packages/%s-%s.upac", pkg.name, pkg.version);
-    
-    const char *suffix = pkg_file;
-    while (*suffix && pos < sizeof(pkg_path) - 1) {
-        pkg_path[pos++] = *suffix++;
-    }
-    pkg_path[pos] = '\0';
+    char pkg_path[512];
+    snprintf(pkg_path, sizeof(pkg_path), "%s/packages/%s-%s.upac", 
+             UPAC_REPO_PATH, pkg.name, pkg.version);
     
     u8 *pkg_data;
     u32 pkg_len;
-    if (upac_download(UPAC_REPO, pkg_path, &pkg_data, &pkg_len) != 0) {
+    if (upac_download(pkg_path, &pkg_data, &pkg_len) != 0) {
         return -1;
     }
     

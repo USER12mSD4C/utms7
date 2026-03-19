@@ -1,4 +1,5 @@
 #include "../include/string.h"
+#include "../include/stdarg.h"
 
 void* memcpy(void* dest, const void* src, u64 n) {
     u8* d = (u8*)dest;
@@ -266,16 +267,219 @@ int sprintf(char* str, const char* format, ...) {
     *buf = '\0';
     return buf - str;
 }
-
-int snprintf(char* str, u64 size, const char* format, ...) {
-    char buf[1024];
-    u64* arg = (u64*)(&format + 1);
-    int len = sprintf(buf, format, *arg, *(arg+1), *(arg+2), *(arg+3), *(arg+4), *(arg+5));
+int sscanf(const char *str, const char *format, ...) {
+    va_list args;
+    int count = 0;
+    const char *f = format;
+    const char *s = str;
     
-    u64 copy_len = (len < (int)size - 1) ? len : size - 1;
-    for (u64 i = 0; i < copy_len; i++) {
-        str[i] = buf[i];
+    va_start(args, format);
+    
+    while (*f && *s) {
+        if (*f == '%') {
+            f++;
+            switch (*f) {
+                case 'd': {
+                    int *out = va_arg(args, int*);
+                    int sign = 1;
+                    int val = 0;
+                    
+                    while (*s == ' ') s++;
+                    
+                    if (*s == '-') {
+                        sign = -1;
+                        s++;
+                    } else if (*s == '+') {
+                        s++;
+                    }
+                    
+                    while (*s >= '0' && *s <= '9') {
+                        val = val * 10 + (*s - '0');
+                        s++;
+                    }
+                    
+                    *out = val * sign;
+                    count++;
+                    break;
+                }
+                
+                case 'u': {
+                    unsigned int *out = va_arg(args, unsigned int*);
+                    unsigned int val = 0;
+                    
+                    while (*s == ' ') s++;
+                    
+                    while (*s >= '0' && *s <= '9') {
+                        val = val * 10 + (*s - '0');
+                        s++;
+                    }
+                    
+                    *out = val;
+                    count++;
+                    break;
+                }
+                
+                case 'x':
+                case 'X': {
+                    unsigned int *out = va_arg(args, unsigned int*);
+                    unsigned int val = 0;
+                    
+                    while (*s == ' ') s++;
+                    
+                    if (*s == '0' && (*(s+1) == 'x' || *(s+1) == 'X')) {
+                        s += 2;
+                    }
+                    
+                    while ((*s >= '0' && *s <= '9') || 
+                           (*s >= 'a' && *s <= 'f') || 
+                           (*s >= 'A' && *s <= 'F')) {
+                        val <<= 4;
+                        if (*s >= '0' && *s <= '9') {
+                            val |= (*s - '0');
+                        } else if (*s >= 'a' && *s <= 'f') {
+                            val |= (*s - 'a' + 10);
+                        } else {
+                            val |= (*s - 'A' + 10);
+                        }
+                        s++;
+                    }
+                    
+                    *out = val;
+                    count++;
+                    break;
+                }
+                
+                case 's': {
+                    char *out = va_arg(args, char*);
+                    
+                    while (*s == ' ') s++;
+                    
+                    while (*s && *s != ' ' && *s != '\t' && *s != '\n') {
+                        *out++ = *s++;
+                    }
+                    *out = '\0';
+                    count++;
+                    break;
+                }
+                
+                case 'c': {
+                    char *out = va_arg(args, char*);
+                    
+                    while (*s == ' ') s++;
+                    
+                    *out = *s++;
+                    count++;
+                    break;
+                }
+                
+                default:
+                    if (*f == *s) {
+                        s++;
+                    }
+                    break;
+            }
+            f++;
+        } else if (*f == ' ') {
+            while (*s == ' ') s++;
+            f++;
+        } else {
+            if (*f != *s) break;
+            f++;
+            s++;
+        }
     }
-    str[copy_len] = '\0';
-    return len;
+    
+    va_end(args);
+    return count;
+}
+int snprintf(char* str, u64 size, const char* format, ...) {
+    va_list args;
+    int i = 0;
+    char c;
+    
+    if (size == 0) return 0;
+    
+    va_start(args, format);
+    
+    while ((c = *format++) && i < size - 1) {
+        if (c != '%') {
+            str[i++] = c;
+            continue;
+        }
+        
+        c = *format++;
+        if (c == 's') {
+            const char *s = va_arg(args, const char*);
+            if (s) {
+                while (*s && i < size - 1) {
+                    str[i++] = *s++;
+                }
+            } else {
+                const char *nullstr = "(null)";
+                while (*nullstr && i < size - 1) {
+                    str[i++] = *nullstr++;
+                }
+            }
+        }
+        else if (c == 'd' || c == 'u') {
+            int num = va_arg(args, int);
+            char numbuf[32];
+            int len = 0;
+            
+            if (num == 0) {
+                numbuf[len++] = '0';
+            } else {
+                int n = (num < 0 && c == 'd') ? -num : num;
+                while (n > 0) {
+                    numbuf[len++] = '0' + (n % 10);
+                    n /= 10;
+                }
+                if (num < 0 && c == 'd') {
+                    numbuf[len++] = '-';
+                }
+            }
+            
+            for (int j = len - 1; j >= 0 && i < size - 1; j--) {
+                str[i++] = numbuf[j];
+            }
+        }
+        else if (c == 'x' || c == 'X') {
+            unsigned int num = va_arg(args, unsigned int);
+            char hexbuf[32];
+            int len = 0;
+            
+            if (num == 0) {
+                hexbuf[len++] = '0';
+            } else {
+                while (num > 0) {
+                    int digit = num % 16;
+                    if (digit < 10) {
+                        hexbuf[len++] = '0' + digit;
+                    } else {
+                        hexbuf[len++] = (c == 'x') ? 'a' + digit - 10 : 'A' + digit - 10;
+                    }
+                    num /= 16;
+                }
+            }
+            
+            for (int j = len - 1; j >= 0 && i < size - 1; j--) {
+                str[i++] = hexbuf[j];
+            }
+        }
+        else if (c == 'c') {
+            char ch = (char)va_arg(args, int);
+            if (i < size - 1) {
+                str[i++] = ch;
+            }
+        }
+        else if (c == '%') {
+            if (i < size - 1) {
+                str[i++] = '%';
+            }
+        }
+    }
+    
+    va_end(args);
+    str[i] = '\0';
+    return i;
 }

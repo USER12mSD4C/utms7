@@ -32,9 +32,9 @@ DRIVER_OBJS = drivers/vga.o \
               drivers/udisk.o \
               drivers/pci.o
 
-# Сеть
 NET_OBJS = net/arp.o \
            net/ip.o \
+           net/icmp.o \
            net/tcp.o \
            net/udp.o \
            net/dhcp.o \

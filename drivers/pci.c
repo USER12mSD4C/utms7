@@ -19,6 +19,39 @@ void pci_write_config(u8 bus, u8 slot, u8 func, u8 offset, u32 value) {
 
 void pci_init(void) {
     vga_write("PCI: scanning...\n");
+    
+    for (int bus = 0; bus < 256; bus++) {
+        for (int slot = 0; slot < 32; slot++) {
+            u32 id = pci_read_config(bus, slot, 0, 0);
+            if (id == 0xFFFFFFFF) continue;
+            
+            u16 vendor = id & 0xFFFF;
+            u16 device = (id >> 16) & 0xFFFF;
+            
+            u32 class_reg = pci_read_config(bus, slot, 0, 8);
+            u8 class = (class_reg >> 24) & 0xFF;
+            u8 subclass = (class_reg >> 16) & 0xFF;
+            
+            // Выводим найденные устройства
+            vga_write("  ");
+            vga_write_num(bus);
+            vga_write(":");
+            vga_write_num(slot);
+            vga_write(" ");
+            vga_write_hex(vendor);
+            vga_write(":");
+            vga_write_hex(device);
+            vga_write(" class=");
+            vga_write_num(class);
+            vga_write(".");
+            vga_write_num(subclass);
+            
+            if (class == 0x02) { // Network controller
+                vga_write(" NET");
+            }
+            vga_write("\n");
+        }
+    }
 }
 
 pci_dev_t* pci_find_device(u16 vendor, u16 device) {
@@ -33,6 +66,9 @@ pci_dev_t* pci_find_device(u16 vendor, u16 device) {
                 
                 dev.vendor_id = id & 0xFFFF;
                 dev.device_id = (id >> 16) & 0xFFFF;
+                dev.bus = bus;
+                dev.slot = slot;
+                dev.func = func;
                 
                 u32 class_reg = pci_read_config(bus, slot, func, 8);
                 dev.class_code = (class_reg >> 24) & 0xFF;
@@ -53,7 +89,7 @@ pci_dev_t* pci_find_device(u16 vendor, u16 device) {
                     return &dev;
                 }
                 
-                if (func == 0 && !(header & 0x800000)) {
+                if (func == 0 && !(dev.header_type & 0x80)) {
                     break;
                 }
             }
@@ -87,6 +123,8 @@ void pci_scan_network(void) {
                 
                 if (vendor == 0x10EC && device == 0x8139) {
                     vga_write("Realtek RTL8139");
+                } else if (vendor == 0x8086 && device == 0x100E) {
+                    vga_write("Intel PRO/1000");
                 } else {
                     vga_write("Unknown NIC");
                 }

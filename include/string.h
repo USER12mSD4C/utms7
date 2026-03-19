@@ -14,9 +14,10 @@ u64 strlen(const char* s);
 char* strstr(const char* haystack, const char* needle);
 char* strchr(const char* s, int c);
 char* strrchr(const char* s, int c);
-char* strcat(char* dest, const char* src);           // ДОБАВЛЕНО
-char* strtok(char* str, const char* delim);          // ДОБАВЛЕНО
+char* strcat(char* dest, const char* src);           
+char* strtok(char* str, const char* delim);          
 int sprintf(char* str, const char* format, ...);
 int snprintf(char* str, u64 size, const char* format, ...);
+int sscanf(const char *str, const char *format, ...);
 
 #endif
