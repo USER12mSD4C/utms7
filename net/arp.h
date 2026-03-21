@@ -1,3 +1,4 @@
+// net/arp.h
 #ifndef ARP_H
 #define ARP_H
 
@@ -20,7 +21,7 @@ typedef struct {
     u32 spa;
     u8 tha[6];
     u32 tpa;
-} arp_pkt_t;
+} __attribute__((packed)) arp_pkt_t;
 
 void arp_cache_init(void);
 int arp_cache_lookup(u32 ip, u8 *mac);

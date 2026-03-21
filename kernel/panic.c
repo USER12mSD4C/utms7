@@ -29,7 +29,7 @@ void panic(const char* message) {
     
     vga_setcolor(0x4F, 0);
     vga_clear();
-    vga_write("PANIC: ");
+    vga_write("d-tF&P handler: ");
     vga_write(message);
     vga_write("\n");
     
@@ -75,13 +75,4 @@ void panic_assert(const char* file, u32 line, const char* expr) {
 // Для двойной ошибки
 void double_fault_handler(void) {
     panic("DOUBLE FAULT");
-}
-
-// Для тройной ошибки (сюда управление уже не дойдёт, но пусть будет)
-void triple_fault_handler(void) {
-    __asm__ volatile ("cli");
-    vga_setcolor(0x1F, 0);
-    vga_clear();
-    vga_write("TRIPLE FAULT - CPU RESET");
-    while(1);
 }
