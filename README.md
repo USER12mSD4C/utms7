@@ -45,6 +45,7 @@ static int (*__vesa_entry)(void) __attribute__((section(".module_entry"))) = ves
 ```
 ## how it works?
 dunno, but kanye is holding my code
+<img width="1920" height="1051" alt="image" src="https://github.com/user-attachments/assets/2c1b2048-8db3-4630-86de-dd53eee5c871" />
 
 ## useful
 - how to prepare disk?
