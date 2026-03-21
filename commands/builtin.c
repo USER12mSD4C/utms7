@@ -1,3 +1,4 @@
+// commands/builtin.c
 #include "../include/shell_api.h"
 #include "../include/string.h"
 #include "../drivers/vga.h"
@@ -8,16 +9,20 @@
 #include "../net/net.h"
 #include "../net/dns.h"
 #include "../net/ip.h"
+#include "../net/arp.h"
 #include "../fs/ufs.h"
 
 extern int upac_main(int, char**);
+extern void rtl8139_dump_regs(void);
+extern int arp_cache_dump(char *buf, int max_len);
+extern int icmp_ping(u32 dst_ip, int timeout_ms);
+extern int http_get(const char* url, u8** data, u32* size);
+extern int shell_was_interrupted(void);
 
 static int cmd_help(int argc, char** argv) {
     (void)argc; (void)argv;
-    
     shell_print("\nUTMS Shell Commands\n");
     shell_print("==================\n\n");
-    
     shell_print("  help      - show help\n");
     shell_print("  clear     - clear screen\n");
     shell_print("  mem       - show memory\n");
@@ -42,9 +47,13 @@ static int cmd_help(int argc, char** argv) {
     shell_print("  upac      - package manager\n");
     shell_print("  ping      - ping a host\n");
     shell_print("  ifconfig  - show network config\n");
+    shell_print("  route     - show routing table\n");
+    shell_print("  arp       - show ARP cache\n");
+    shell_print("  nicinfo   - show NIC registers\n");
     shell_print("  dns       - resolve hostname\n");
+    shell_print("  nslookup  - DNS lookup\n");
     shell_print("  wget      - download file\n");
-    
+    shell_print("  time      - show uptime\n");
     return 0;
 }
 
@@ -84,23 +93,19 @@ static int cmd_ticks(int argc, char** argv) {
 
 static int cmd_ps(int argc, char** argv) {
     (void)argc; (void)argv;
-    
     int count = sched_get_processes(NULL, 0);
     if (count == 0) {
         shell_print("no processes\n");
         return 0;
     }
-    
     process_t* procs[count];
     sched_get_processes(procs, count);
-    
     shell_print("PID  PPID  STATE  NAME\n");
     for (int i = 0; i < count; i++) {
         shell_print_num(procs[i]->pid);
         shell_print("   ");
         shell_print_num(procs[i]->ppid);
         shell_print("   ");
-        
         switch(procs[i]->state) {
             case PROCESS_READY: shell_print("R     "); break;
             case PROCESS_RUNNING: shell_print("RUN   "); break;
@@ -108,7 +113,6 @@ static int cmd_ps(int argc, char** argv) {
             case PROCESS_ZOMBIE: shell_print("Z     "); break;
             default: shell_print("?     "); break;
         }
-        
         shell_print(procs[i]->name);
         shell_print("\n");
     }
@@ -120,7 +124,6 @@ static int cmd_kill(int argc, char** argv) {
         shell_print("usage: kill <pid>\n");
         return -1;
     }
-    
     int pid = 0;
     char* p = argv[1];
     while (*p) {
@@ -131,7 +134,6 @@ static int cmd_kill(int argc, char** argv) {
         pid = pid * 10 + (*p - '0');
         p++;
     }
-    
     if (sched_kill(pid) == 0) {
         shell_print("killed ");
         shell_print_num(pid);
@@ -162,7 +164,6 @@ static int cmd_ping(int argc, char** argv) {
         shell_print("Resolving ");
         shell_print(argv[1]);
         shell_print("... ");
-        
         ip = dns_lookup(argv[1], net_get_dns());
         if (ip == 0) {
             shell_print("FAILED\n");
@@ -175,26 +176,23 @@ static int cmd_ping(int argc, char** argv) {
     shell_print(argv[1]);
     shell_print(" (");
     shell_print_num((ip >> 24) & 0xFF);
-    shell_print(".");
-    shell_print_num((ip >> 16) & 0xFF);
-    shell_print(".");
-    shell_print_num((ip >> 8) & 0xFF);
-    shell_print(".");
-    shell_print_num(ip & 0xFF);
+    shell_print("."); shell_print_num((ip >> 16) & 0xFF);
+    shell_print("."); shell_print_num((ip >> 8) & 0xFF);
+    shell_print("."); shell_print_num(ip & 0xFF);
     shell_print("): 56 data bytes\n");
     
-    extern int icmp_ping(u32 dst_ip, int timeout_ms);
-    
     for (int i = 0; i < 4; i++) {
+        if (shell_was_interrupted()) {
+            shell_print("\nPing interrupted\n");
+            return -1;
+        }
+        
         if (icmp_ping(ip, 1000) == 0) {
             shell_print("  64 bytes from ");
             shell_print_num((ip >> 24) & 0xFF);
-            shell_print(".");
-            shell_print_num((ip >> 16) & 0xFF);
-            shell_print(".");
-            shell_print_num((ip >> 8) & 0xFF);
-            shell_print(".");
-            shell_print_num(ip & 0xFF);
+            shell_print("."); shell_print_num((ip >> 16) & 0xFF);
+            shell_print("."); shell_print_num((ip >> 8) & 0xFF);
+            shell_print("."); shell_print_num(ip & 0xFF);
             shell_print(": icmp_seq=");
             shell_print_num(i);
             shell_print("\n");
@@ -204,13 +202,11 @@ static int cmd_ping(int argc, char** argv) {
             shell_print("\n");
         }
     }
-    
     return 0;
 }
 
 static int cmd_ifconfig(int argc, char** argv) {
     (void)argc; (void)argv;
-    
     shell_print("Network configuration:\n");
     shell_print("  MAC: ");
     u8* mac = net_get_mac();
@@ -223,25 +219,84 @@ static int cmd_ifconfig(int argc, char** argv) {
     u32 ip = net_get_ip();
     shell_print("  IP:  ");
     shell_print_num((ip >> 24) & 0xFF);
-    shell_print(".");
-    shell_print_num((ip >> 16) & 0xFF);
-    shell_print(".");
-    shell_print_num((ip >> 8) & 0xFF);
-    shell_print(".");
-    shell_print_num(ip & 0xFF);
+    shell_print("."); shell_print_num((ip >> 16) & 0xFF);
+    shell_print("."); shell_print_num((ip >> 8) & 0xFF);
+    shell_print("."); shell_print_num(ip & 0xFF);
+    shell_print("\n");
+    
+    u32 gw = net_get_gateway();
+    shell_print("  GW:  ");
+    shell_print_num((gw >> 24) & 0xFF);
+    shell_print("."); shell_print_num((gw >> 16) & 0xFF);
+    shell_print("."); shell_print_num((gw >> 8) & 0xFF);
+    shell_print("."); shell_print_num(gw & 0xFF);
+    shell_print("\n");
+    
+    u32 mask = net_get_netmask();
+    shell_print("  MASK: ");
+    shell_print_num((mask >> 24) & 0xFF);
+    shell_print("."); shell_print_num((mask >> 16) & 0xFF);
+    shell_print("."); shell_print_num((mask >> 8) & 0xFF);
+    shell_print("."); shell_print_num(mask & 0xFF);
     shell_print("\n");
     
     u32 dns = net_get_dns();
     shell_print("  DNS: ");
     shell_print_num((dns >> 24) & 0xFF);
-    shell_print(".");
-    shell_print_num((dns >> 16) & 0xFF);
-    shell_print(".");
-    shell_print_num((dns >> 8) & 0xFF);
-    shell_print(".");
-    shell_print_num(dns & 0xFF);
+    shell_print("."); shell_print_num((dns >> 16) & 0xFF);
+    shell_print("."); shell_print_num((dns >> 8) & 0xFF);
+    shell_print("."); shell_print_num(dns & 0xFF);
     shell_print("\n");
     
+    return 0;
+}
+
+static int cmd_route(int argc, char** argv) {
+    (void)argc; (void)argv;
+    u32 ip = net_get_ip();
+    u32 gw = net_get_gateway();
+    u32 mask = net_get_netmask();
+    u32 network = ip & mask;
+    
+    shell_print("Kernel IP routing table\n");
+    shell_print("Destination     Gateway         Genmask         Iface\n");
+    
+    shell_print_num((network >> 24) & 0xFF);
+    shell_print("."); shell_print_num((network >> 16) & 0xFF);
+    shell_print("."); shell_print_num((network >> 8) & 0xFF);
+    shell_print("."); shell_print_num(network & 0xFF);
+    shell_print("    0.0.0.0         ");
+    shell_print_num((mask >> 24) & 0xFF);
+    shell_print("."); shell_print_num((mask >> 16) & 0xFF);
+    shell_print("."); shell_print_num((mask >> 8) & 0xFF);
+    shell_print("."); shell_print_num(mask & 0xFF);
+    shell_print("     eth0\n");
+    
+    shell_print("0.0.0.0         ");
+    shell_print_num((gw >> 24) & 0xFF);
+    shell_print("."); shell_print_num((gw >> 16) & 0xFF);
+    shell_print("."); shell_print_num((gw >> 8) & 0xFF);
+    shell_print("."); shell_print_num(gw & 0xFF);
+    shell_print("     0.0.0.0         eth0\n");
+    
+    return 0;
+}
+
+static int cmd_arp(int argc, char** argv) {
+    (void)argc; (void)argv;
+    char buf[512];
+    int len = arp_cache_dump(buf, sizeof(buf));
+    if (len > 0) {
+        shell_print(buf);
+    } else {
+        shell_print("ARP cache is empty\n");
+    }
+    return 0;
+}
+
+static int cmd_nicinfo(int argc, char** argv) {
+    (void)argc; (void)argv;
+    rtl8139_dump_regs();
     return 0;
 }
 
@@ -250,27 +305,40 @@ static int cmd_dns(int argc, char** argv) {
         shell_print("Usage: dns <hostname>\n");
         return -1;
     }
-    
     shell_print("Resolving ");
     shell_print(argv[1]);
     shell_print("... ");
-    
     u32 ip = dns_lookup(argv[1], net_get_dns());
     if (ip == 0) {
         shell_print("FAILED\n");
         return -1;
     }
-    
     shell_print("OK (");
     shell_print_num((ip >> 24) & 0xFF);
-    shell_print(".");
-    shell_print_num((ip >> 16) & 0xFF);
-    shell_print(".");
-    shell_print_num((ip >> 8) & 0xFF);
-    shell_print(".");
-    shell_print_num(ip & 0xFF);
+    shell_print("."); shell_print_num((ip >> 16) & 0xFF);
+    shell_print("."); shell_print_num((ip >> 8) & 0xFF);
+    shell_print("."); shell_print_num(ip & 0xFF);
     shell_print(")\n");
-    
+    return 0;
+}
+
+static int cmd_nslookup(int argc, char** argv) {
+    if (argc < 2) {
+        shell_print("Usage: nslookup <hostname>\n");
+        return -1;
+    }
+    u32 ip = dns_lookup(argv[1], net_get_dns());
+    if (ip == 0) {
+        shell_print("Not found\n");
+        return -1;
+    }
+    shell_print(argv[1]);
+    shell_print(" -> ");
+    shell_print_num((ip >> 24) & 0xFF);
+    shell_print("."); shell_print_num((ip >> 16) & 0xFF);
+    shell_print("."); shell_print_num((ip >> 8) & 0xFF);
+    shell_print("."); shell_print_num(ip & 0xFF);
+    shell_print("\n");
     return 0;
 }
 
@@ -279,7 +347,6 @@ static int cmd_wget(int argc, char** argv) {
         shell_print("Usage: wget <url>\n");
         return -1;
     }
-    
     shell_print("Downloading ");
     shell_print(argv[1]);
     shell_print("...\n");
@@ -287,7 +354,6 @@ static int cmd_wget(int argc, char** argv) {
     u8* data;
     u32 size;
     
-    extern int http_get(const char* url, u8** data, u32* size);
     if (http_get(argv[1], &data, &size) != 0) {
         shell_print("Download failed\n");
         return -1;
@@ -318,6 +384,24 @@ static int cmd_wget(int argc, char** argv) {
     }
 }
 
+static int cmd_time(int argc, char** argv) {
+    (void)argc; (void)argv;
+    extern u32 get_seconds(void);
+    extern u32 get_ticks(void);
+    
+    u32 sec = get_seconds();
+    u32 ms = get_ticks() % 1000;
+    
+    shell_print("Uptime: ");
+    shell_print_num(sec);
+    shell_print(".");
+    if (ms < 100) shell_print("0");
+    if (ms < 10) shell_print("0");
+    shell_print_num(ms);
+    shell_print(" seconds\n");
+    return 0;
+}
+
 void commands_init(void) {
     shell_register_command("help", cmd_help, "show help");
     shell_register_command("clear", cmd_clear, "clear screen");
@@ -329,6 +413,11 @@ void commands_init(void) {
     shell_register_command("upac", cmd_upac, "package manager");
     shell_register_command("ping", cmd_ping, "ping a host");
     shell_register_command("ifconfig", cmd_ifconfig, "show network config");
+    shell_register_command("route", cmd_route, "show routing table");
+    shell_register_command("arp", cmd_arp, "show ARP cache");
+    shell_register_command("nicinfo", cmd_nicinfo, "show NIC registers");
     shell_register_command("dns", cmd_dns, "resolve hostname");
+    shell_register_command("nslookup", cmd_nslookup, "DNS lookup");
     shell_register_command("wget", cmd_wget, "download file");
+    shell_register_command("time", cmd_time, "show system uptime");
 }

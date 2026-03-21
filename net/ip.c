@@ -23,9 +23,15 @@ int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len) {
     u32 gateway = net_get_gateway();
     u32 netmask = net_get_netmask();
     
+    // Определяем, в той же ли сети destination
     u32 target_ip = dst_ip;
-    if ((dst_ip & netmask) != (src_ip & netmask) && gateway != 0) {
-        target_ip = gateway;
+    int need_gateway = 0;
+    
+    if (gateway != 0) {
+        if ((dst_ip & netmask) != (src_ip & netmask)) {
+            target_ip = gateway;
+            need_gateway = 1;
+        }
     }
     
     while (attempts < 3) {
@@ -53,7 +59,7 @@ int ip_send_packet(u32 dst_ip, u8 protocol, u8 *data, int len) {
     ip->protocol = protocol;
     ip->checksum = 0;
     ip->src = src_ip;
-    ip->dst = dst_ip;
+    ip->dst = dst_ip;  // В IP-заголовке оригинальный destination
     ip->checksum = ip_checksum((u16*)ip, sizeof(ip_hdr_t));
     
     memcpy(packet + sizeof(ip_hdr_t), data, len);

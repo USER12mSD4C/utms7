@@ -10,6 +10,12 @@ static struct idt_entry idt[256] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
 u32 system_ticks = 0;
 
+static u32 timer_ticks = 0;
+static u32 seconds = 0;
+
+extern void rtl8139_handle_irq(void);
+extern int rtl8139_present(void);
+
 static void* irq_handlers[16] = {0};
 
 void idt_set_gate(u8 num, u64 base, u16 selector, u8 flags) {
@@ -29,8 +35,15 @@ void irq_register(int irq, void* handler) {
 }
 
 void irq_handler(int irq) {
-    if (irq_handlers[irq]) {
-        ((void(*)(void))irq_handlers[irq])();
+    switch(irq) {
+        case 1:
+            keyboard_handler_c();
+            break;
+        case 11:
+            if (rtl8139_present()) {
+                rtl8139_handle_irq();
+            }
+            break;
     }
     
     if (irq >= 8) outb(0xA0, 0x20);
@@ -87,7 +100,7 @@ int idt_init(void) {
     outb(0x21, 0x01);
     outb(0xA1, 0x01);
     
-    outb(0x21, ~0x02);
+    outb(0x21, ~(0x02 | 0x08));
     outb(0xA1, 0xFF);
     
     irq_register(1, keyboard_handler_c);
@@ -106,7 +119,20 @@ int timer_init(void) {
 }
 
 void timer_handler_c(void) {
-    system_ticks++;
+    timer_ticks++;
+    system_ticks = timer_ticks;
+    
+    if (timer_ticks % 100 == 0) {
+        seconds++;
+    }
+}
+
+u32 get_seconds(void) {
+    return seconds;
+}
+
+u32 get_ticks(void) {
+    return timer_ticks;
 }
 
 void double_fault_handler_c(void) {

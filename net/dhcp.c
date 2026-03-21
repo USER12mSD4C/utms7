@@ -1,7 +1,9 @@
+// net/dhcp.c
 #include "dhcp.h"
 #include "udp.h"
 #include "net.h"
 #include "../include/string.h"
+#include "../include/endian.h"
 #include "../kernel/memory.h"
 
 #define DHCP_SERVER_PORT 67
@@ -30,19 +32,10 @@ typedef struct {
     u8 file[128];
     u32 magic;
     u8 options[308];
-} dhcp_pkt_t;
+} __attribute__((packed)) dhcp_pkt_t;
 
 static u32 dhcp_xid = 0x12345678;
 static u32 dhcp_server = 0;
-static u32 dhcp_lease = 86400;
-
-static u32 dhcp_htonl(u32 h) {
-    return (h >> 24) | ((h >> 8) & 0xFF00) | ((h << 8) & 0xFF0000) | (h << 24);
-}
-
-static u16 dhcp_htons(u16 h) {
-    return (h >> 8) | (h << 8);
-}
 
 int dhcp_send_discover(u8 *mac, u32 xid) {
     dhcp_pkt_t pkt;
@@ -53,9 +46,9 @@ int dhcp_send_discover(u8 *mac, u32 xid) {
     pkt.op = 1;
     pkt.htype = 1;
     pkt.hlen = 6;
-    pkt.xid = dhcp_htonl(xid);
+    pkt.xid = htonl(xid);
     memcpy(pkt.chaddr, mac, 6);
-    pkt.magic = dhcp_htonl(DHCP_MAGIC_COOKIE);
+    pkt.magic = htonl(DHCP_MAGIC_COOKIE);
     
     opt = pkt.options;
     *opt++ = 53;
@@ -71,7 +64,7 @@ int dhcp_send_discover(u8 *mac, u32 xid) {
     
     *opt++ = 255;
     
-    return udp_send(0xFFFFFFFF, DHCP_CLIENT_PORT, 0xFFFFFFFF, DHCP_SERVER_PORT, (u8*)&pkt, opt - (u8*)&pkt);
+    return udp_send(0xFFFFFFFF, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, (u8*)&pkt, opt - (u8*)&pkt);
 }
 
 int dhcp_send_request(u8 *mac, u32 xid, u32 requested_ip, u32 server_ip) {
@@ -83,9 +76,9 @@ int dhcp_send_request(u8 *mac, u32 xid, u32 requested_ip, u32 server_ip) {
     pkt.op = 1;
     pkt.htype = 1;
     pkt.hlen = 6;
-    pkt.xid = dhcp_htonl(xid);
+    pkt.xid = htonl(xid);
     memcpy(pkt.chaddr, mac, 6);
-    pkt.magic = dhcp_htonl(DHCP_MAGIC_COOKIE);
+    pkt.magic = htonl(DHCP_MAGIC_COOKIE);
     
     opt = pkt.options;
     *opt++ = 53;
@@ -108,14 +101,14 @@ int dhcp_send_request(u8 *mac, u32 xid, u32 requested_ip, u32 server_ip) {
     
     *opt++ = 255;
     
-    return udp_send(0xFFFFFFFF, DHCP_CLIENT_PORT, 0xFFFFFFFF, DHCP_SERVER_PORT, (u8*)&pkt, opt - (u8*)&pkt);
+    return udp_send(0xFFFFFFFF, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, (u8*)&pkt, opt - (u8*)&pkt);
 }
 
 void dhcp_handle_packet(u8 *packet, int len) {
     dhcp_pkt_t *pkt = (dhcp_pkt_t*)packet;
     
     if (len < sizeof(dhcp_pkt_t) - sizeof(pkt->options)) return;
-    if (dhcp_htonl(pkt->magic) != DHCP_MAGIC_COOKIE) return;
+    if (ntohl(pkt->magic) != DHCP_MAGIC_COOKIE) return;
     
     u8 *opt = pkt->options;
     u8 *end = (u8*)packet + len;
@@ -148,7 +141,7 @@ void dhcp_handle_packet(u8 *packet, int len) {
     
     if (msg_type == DHCP_OFFER && pkt->yiaddr != 0) {
         dhcp_server = server_ip;
-        dhcp_send_request(net_get_mac(), dhcp_htonl(pkt->xid), pkt->yiaddr, server_ip);
+        dhcp_send_request(net_get_mac(), ntohl(pkt->xid), pkt->yiaddr, server_ip);
     }
     
     if (msg_type == DHCP_ACK && pkt->yiaddr != 0) {
@@ -160,6 +153,6 @@ void dhcp_handle_packet(u8 *packet, int len) {
 }
 
 void dhcp_start(void) {
-    udp_bind(68);
+    udp_bind(DHCP_CLIENT_PORT);
     dhcp_send_discover(net_get_mac(), dhcp_xid);
 }

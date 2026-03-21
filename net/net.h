@@ -1,3 +1,4 @@
+// net/net.h
 #ifndef NET_H
 #define NET_H
 
@@ -8,6 +9,8 @@ void net_handle_packet(u8 *packet, int len);
 void net_eth_send(u8 *dst_mac, u16 type, u8 *data, int len);
 u8* net_get_mac(void);
 u32 net_get_ip(void);
+u32 net_get_gateway(void);
+u32 net_get_netmask(void);
 void net_set_ip(u32 ip);
 void net_set_netmask(u32 mask);
 void net_set_gateway(u32 gw);

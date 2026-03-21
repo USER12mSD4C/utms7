@@ -1,3 +1,4 @@
+// shell/shell.c
 #include "../include/string.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
@@ -13,6 +14,9 @@ static char history[MAX_HISTORY][MAX_LINE_LEN];
 static int history_count = 0;
 static int history_pos = -1;
 
+// Флаг для прерывания текущей команды
+static int command_interrupted = 0;
+
 void shell_init(void) {
     cmd_count = 0;
     for (int i = 0; i < MAX_COMMANDS; i++) {
@@ -23,6 +27,11 @@ void shell_init(void) {
     for (int i = 0; i < MAX_HISTORY; i++) history[i][0] = '\0';
     history_count = 0;
     history_pos = -1;
+    command_interrupted = 0;
+}
+
+void shell_interrupt(void) {
+    command_interrupted = 1;
 }
 
 static void add_to_history(const char *line) {
@@ -81,14 +90,20 @@ void shell_print_hex(u32 num) { vga_write_hex(num); }
 
 int shell_execute(const char *cmd_line) {
     if (!cmd_line || !cmd_line[0]) return 0;
+    
     char buf[MAX_LINE_LEN];
     strcpy(buf, cmd_line);
     int argc;
     char **argv = shell_split_args(buf, &argc);
     if (argc == 0) return 0;
+    
+    // Сбрасываем флаг прерывания
+    command_interrupted = 0;
+    
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(argv[0], commands[i].name) == 0) {
-            return commands[i].func(argc, argv);
+            int result = commands[i].func(argc, argv);
+            return result;
         }
     }
     shell_print("unknown command: ");
@@ -134,13 +149,20 @@ void shell_run(void) {
             
             key = keyboard_getc();
             
-            // Стрелка вверх - ТОЛЬКО ДВИЖЕНИЕ, НИКАКИХ СИМВОЛОВ
+            // Ctrl+C — прерывание текущей операции
+            if (key == 3) {
+                vga_putchar('\n');
+                shell_print("^C\n");
+                command_interrupted = 1;
+                break;
+            }
+            
+            // Стрелка вверх
             if (key == 0xE0) {
                 if (history_pos < history_count - 1) {
                     history_pos++;
                     strcpy(line, history[history_pos]);
                     pos = strlen(line);
-                    // Полная перерисовка строки
                     clear_line(input_x, input_y);
                     vga_setpos(input_x, input_y);
                     for (int i = 0; i < pos; i++) {
@@ -152,7 +174,7 @@ void shell_run(void) {
                 continue;
             }
             
-            // Стрелка вниз - ТОЛЬКО ДВИЖЕНИЕ, НИКАКИХ СИМВОЛОВ
+            // Стрелка вниз
             if (key == 0xE1) {
                 if (history_pos > 0) {
                     history_pos--;
@@ -176,7 +198,7 @@ void shell_run(void) {
                 continue;
             }
             
-            // Стрелка влево - ТОЛЬКО ДВИЖЕНИЕ
+            // Стрелка влево
             if (key == 0xE2) {
                 if (cursor_x > input_x) {
                     cursor_x--;
@@ -185,7 +207,7 @@ void shell_run(void) {
                 continue;
             }
             
-            // Стрелка вправо - ТОЛЬКО ДВИЖЕНИЕ
+            // Стрелка вправо
             if (key == 0xE3) {
                 if (cursor_x - input_x < pos) {
                     cursor_x++;
@@ -194,24 +216,20 @@ void shell_run(void) {
                 continue;
             }
             
-            // Tab - игнорируем
+            // Tab
             if (key == '\t') {
                 continue;
             }
             
-            // Backspace - НИКАКОГО \n
+            // Backspace
             if (key == '\b' || key == 0x7F) {
                 if (cursor_x > input_x) {
                     int idx = cursor_x - input_x - 1;
-                    
-                    // Сдвигаем строку влево
                     for (int i = idx; i < pos; i++) {
                         line[i] = line[i+1];
                     }
                     pos--;
                     cursor_x--;
-                    
-                    // Перерисовываем всю строку с конца
                     vga_setpos(input_x, input_y);
                     for (int i = 0; i < pos; i++) {
                         vga_putchar(line[i]);
@@ -222,7 +240,7 @@ void shell_run(void) {
                 continue;
             }
             
-            // Enter - ТОЛЬКО ТУТ ПЕЧАТАЕТСЯ \n
+            // Enter
             if (key == '\n' || key == '\r') {
                 line[pos] = '\0';
                 vga_putchar('\n');
@@ -233,20 +251,16 @@ void shell_run(void) {
                 break;
             }
             
-            // Обычные символы - просто печатаем символ, НИКАКОГО \n
+            // Обычные символы
             if (key >= 32 && key <= 126) {
                 if (pos < MAX_LINE_LEN - 1) {
                     int idx = cursor_x - input_x;
-                    
-                    // Сдвигаем строку вправо
                     for (int i = pos; i > idx; i--) {
                         line[i] = line[i-1];
                     }
                     line[idx] = key;
                     pos++;
                     cursor_x++;
-                    
-                    // Перерисовываем всю строку заново
                     vga_setpos(input_x, input_y);
                     for (int i = 0; i < pos; i++) {
                         vga_putchar(line[i]);
@@ -257,4 +271,11 @@ void shell_run(void) {
             }
         }
     }
+}
+
+// Функция для проверки прерывания из команд
+int shell_was_interrupted(void) {
+    int ret = command_interrupted;
+    command_interrupted = 0;
+    return ret;
 }

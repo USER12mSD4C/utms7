@@ -25,6 +25,7 @@ typedef struct {
 
 void arp_cache_init(void);
 int arp_cache_lookup(u32 ip, u8 *mac);
+int arp_cache_dump(char *buf, int max_len);
 void arp_cache_add(u32 ip, u8 *mac);
 void arp_send_request(u32 target_ip, u8 *src_mac, u32 src_ip);
 void arp_handle_packet(u8 *packet, int len);

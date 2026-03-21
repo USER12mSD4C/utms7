@@ -3,6 +3,10 @@
 
 #include "../include/types.h"
 
+// kernel/idt.h — добавить в конец
+u32 get_seconds(void);
+u32 get_ticks(void);
+
 struct idt_entry {
     u16 base_low;
     u16 selector;

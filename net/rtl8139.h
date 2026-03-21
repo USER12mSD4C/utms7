@@ -1,3 +1,4 @@
+// net/rtl8139.h
 #ifndef RTL8139_H
 #define RTL8139_H
 
@@ -9,5 +10,6 @@ void rtl8139_send(u8 *data, u16 len);
 int rtl8139_recv(u8 *buffer, u16 max_len);
 void rtl8139_get_mac(u8 *mac);
 void rtl8139_handle_irq(void);
+int rtl8139_present(void);
 
 #endif
