@@ -94,12 +94,10 @@ int rtl8139_init(pci_dev_t *pci) {
     vga_write_hex(rtl->io_base);
     vga_write("\n");
     
-    // Включаем Bus Mastering
     u32 pci_cmd = pci_read_config(pci->bus, pci->slot, pci->func, 0x04);
     pci_cmd |= 0x07;
     pci_write_config(pci->bus, pci->slot, pci->func, 0x04, pci_cmd);
     
-    // Софт-резет
     rtl8139_write_reg(RTL8139_REG_CMD, RTL8139_CMD_RESET);
     
     int timeout = 10000;
@@ -114,7 +112,6 @@ int rtl8139_init(pci_dev_t *pci) {
         return -1;
     }
     
-    // Читаем MAC
     for (int i = 0; i < 6; i++) {
         rtl->mac[i] = rtl8139_read_reg(RTL8139_REG_MAC0 + i);
     }
@@ -126,7 +123,6 @@ int rtl8139_init(pci_dev_t *pci) {
     }
     vga_write("\n");
     
-    // Выделяем RX буфер (выровненный по 256 байт)
     rtl->rx_buffer = kmalloc(RX_BUF_SIZE + 256);
     if (!rtl->rx_buffer) {
         kfree(rtl);
@@ -136,7 +132,6 @@ int rtl8139_init(pci_dev_t *pci) {
     rx_addr = (rx_addr + 255) & ~255;
     rtl->rx_buffer = (u8*)rx_addr;
     
-    // Выделяем TX буферы
     for (int i = 0; i < 4; i++) {
         rtl->tx_buffer[i] = kmalloc(TX_BUF_SIZE);
         if (!rtl->tx_buffer[i]) {
@@ -148,17 +143,10 @@ int rtl8139_init(pci_dev_t *pci) {
         memset(rtl->tx_buffer[i], 0, TX_BUF_SIZE);
     }
     
-    // Настройка RX
     rtl8139_write_long(RTL8139_REG_RBSTART, (u32)rx_addr);
-    
-    // Настройка TX
     rtl8139_write_long(RTL8139_REG_TX_CONFIG, 0x600000);
-    
-    // Включаем прерывания
-    rtl8139_write_word(RTL8139_REG_IMR, 0x0005);  // RX OK, TX OK
-    rtl8139_write_word(RTL8139_REG_ISR, 0xFFFF);  // Очищаем все прерывания
-    
-    // Включаем прием и передачу
+    rtl8139_write_word(RTL8139_REG_IMR, 0x0005);
+    rtl8139_write_word(RTL8139_REG_ISR, 0xFFFF);
     rtl8139_write_reg(RTL8139_REG_CMD, RTL8139_CMD_RX_ENABLE | RTL8139_CMD_TX_ENABLE);
     
     vga_write("  RTL8139: OK\n");
@@ -169,41 +157,52 @@ void rtl8139_send(u8 *data, u16 len) {
     if (!rtl || !rtl->present) return;
     if (len == 0 || len > TX_BUF_SIZE) return;
     
-    // Ищем свободный дескриптор и сбрасываем зависшие
+    vga_write("RTL8139: send start, len=");
+    vga_write_num(len);
+    vga_write("\n");
+    
     int idx = -1;
-    for (int i = 0; i < 4; i++) {
-        u32 status = rtl8139_read_long(RTL8139_REG_TX_STATUS0 + i * 4);
-        if (!(status & 0x8000)) {
-            idx = i;
-            break;
+    int timeout = 100000;
+    
+    while (timeout-- > 0) {
+        for (int i = 0; i < 4; i++) {
+            u32 status = rtl8139_read_long(RTL8139_REG_TX_STATUS0 + i * 4);
+            if (!(status & 0x8000)) {
+                idx = i;
+                break;
+            }
         }
-        // Если статус висит слишком долго (бит 0x8000 не сбрасывается), сбрасываем принудительно
-        if ((status & 0x8000) && (status & 0x4000)) {
-            rtl8139_write_long(RTL8139_REG_TX_STATUS0 + i * 4, 0);
-            idx = i;
-            break;
-        }
+        if (idx != -1) break;
+        __asm__ volatile ("pause");
     }
     
     if (idx == -1) {
-        vga_write("RTL8139: no free TX desc\n");
-        // Сбрасываем все дескрипторы
-        for (int i = 0; i < 4; i++) {
-            rtl8139_write_long(RTL8139_REG_TX_STATUS0 + i * 4, 0);
-        }
-        idx = 0;
+        vga_write("RTL8139: TX timeout, no free desc\n");
+        return;
     }
     
-    // Копируем данные
+    vga_write("RTL8139: using desc ");
+    vga_write_num(idx);
+    vga_write("\n");
+    
+    rtl8139_write_long(RTL8139_REG_TX_STATUS0 + idx * 4, 0);
     memcpy(rtl->tx_buffer[idx], data, len);
-    
-    // Устанавливаем адрес буфера
     rtl8139_write_long(RTL8139_REG_TX_ADDR0 + idx * 4, (u32)(u64)rtl->tx_buffer[idx]);
-    
-    // Запускаем передачу
     rtl8139_write_long(RTL8139_REG_TX_STATUS0 + idx * 4, len);
     
-    rtl->tx_cur = (rtl->tx_cur + 1) % 4;
+    timeout = 100000;
+    while (timeout-- > 0) {
+        u32 status = rtl8139_read_long(RTL8139_REG_TX_STATUS0 + idx * 4);
+        if (!(status & 0x8000)) {
+            vga_write("RTL8139: send done, status=0x");
+            vga_write_hex(status);
+            vga_write("\n");
+            return;
+        }
+        __asm__ volatile ("pause");
+    }
+    
+    vga_write("RTL8139: send timeout\n");
 }
 
 int rtl8139_recv(u8 *buffer, u16 max_len) {

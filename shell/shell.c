@@ -15,6 +15,7 @@ static int history_count = 0;
 static int history_pos = -1;
 
 static volatile int command_interrupted = 0;
+static void (*interrupt_handler)(void) = NULL;
 
 void shell_init(void) {
     cmd_count = 0;
@@ -27,10 +28,18 @@ void shell_init(void) {
     history_count = 0;
     history_pos = -1;
     command_interrupted = 0;
+    interrupt_handler = NULL;
+}
+
+void shell_set_interrupt_handler(void (*handler)(void)) {
+    interrupt_handler = handler;
 }
 
 void shell_interrupt(void) {
     command_interrupted = 1;
+    if (interrupt_handler) {
+        interrupt_handler();
+    }
 }
 
 int shell_was_interrupted(void) {
@@ -152,11 +161,11 @@ void shell_run(void) {
             
             key = keyboard_getc();
             
-            // Ctrl+C
+            // Ctrl+C — прерывание текущей команды
             if (key == 3) {
                 vga_putchar('\n');
                 shell_print("^C\n");
-                command_interrupted = 1;
+                shell_interrupt();
                 break;
             }
             

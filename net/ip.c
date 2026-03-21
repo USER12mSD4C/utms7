@@ -6,6 +6,7 @@
 #include "../include/string.h"
 #include "../include/endian.h"
 #include "../kernel/memory.h"
+#include "../drivers/vga.h"
 
 u16 ip_checksum(u16 *data, int len) {
     u32 sum = 0;

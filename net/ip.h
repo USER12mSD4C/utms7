@@ -43,5 +43,7 @@ void ip_handle_packet(u8 *packet, int len,
 int icmp_send_request(u32 dst_ip, u16 id, u16 seq);
 void icmp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip);
 int icmp_ping(u32 dst_ip, int timeout_ms);
+// net/ip.h
+extern int icmp_ping_received;
 
 #endif

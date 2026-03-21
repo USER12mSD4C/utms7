@@ -23,5 +23,6 @@ void shell_print_hex(u32 num);
 void shell_init(void);
 int shell_was_interrupted(void);
 void shell_interrupt(void);
+void shell_set_interrupt_handler(void (*handler)(void));
 
 #endif
