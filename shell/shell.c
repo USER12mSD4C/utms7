@@ -14,8 +14,7 @@ static char history[MAX_HISTORY][MAX_LINE_LEN];
 static int history_count = 0;
 static int history_pos = -1;
 
-// Флаг для прерывания текущей команды
-static int command_interrupted = 0;
+static volatile int command_interrupted = 0;
 
 void shell_init(void) {
     cmd_count = 0;
@@ -32,6 +31,12 @@ void shell_init(void) {
 
 void shell_interrupt(void) {
     command_interrupted = 1;
+}
+
+int shell_was_interrupted(void) {
+    int ret = command_interrupted;
+    command_interrupted = 0;
+    return ret;
 }
 
 static void add_to_history(const char *line) {
@@ -97,13 +102,11 @@ int shell_execute(const char *cmd_line) {
     char **argv = shell_split_args(buf, &argc);
     if (argc == 0) return 0;
     
-    // Сбрасываем флаг прерывания
     command_interrupted = 0;
     
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(argv[0], commands[i].name) == 0) {
-            int result = commands[i].func(argc, argv);
-            return result;
+            return commands[i].func(argc, argv);
         }
     }
     shell_print("unknown command: ");
@@ -149,7 +152,7 @@ void shell_run(void) {
             
             key = keyboard_getc();
             
-            // Ctrl+C — прерывание текущей операции
+            // Ctrl+C
             if (key == 3) {
                 vga_putchar('\n');
                 shell_print("^C\n");
@@ -165,9 +168,7 @@ void shell_run(void) {
                     pos = strlen(line);
                     clear_line(input_x, input_y);
                     vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) {
-                        vga_putchar(line[i]);
-                    }
+                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
                     cursor_x = input_x + pos;
                     vga_setpos(cursor_x, input_y);
                 }
@@ -182,9 +183,7 @@ void shell_run(void) {
                     pos = strlen(line);
                     clear_line(input_x, input_y);
                     vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) {
-                        vga_putchar(line[i]);
-                    }
+                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
                     cursor_x = input_x + pos;
                     vga_setpos(cursor_x, input_y);
                 } else if (history_pos == 0) {
@@ -225,15 +224,11 @@ void shell_run(void) {
             if (key == '\b' || key == 0x7F) {
                 if (cursor_x > input_x) {
                     int idx = cursor_x - input_x - 1;
-                    for (int i = idx; i < pos; i++) {
-                        line[i] = line[i+1];
-                    }
+                    for (int i = idx; i < pos; i++) line[i] = line[i+1];
                     pos--;
                     cursor_x--;
                     vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) {
-                        vga_putchar(line[i]);
-                    }
+                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
                     vga_putchar(' ');
                     vga_setpos(cursor_x, input_y);
                 }
@@ -255,27 +250,16 @@ void shell_run(void) {
             if (key >= 32 && key <= 126) {
                 if (pos < MAX_LINE_LEN - 1) {
                     int idx = cursor_x - input_x;
-                    for (int i = pos; i > idx; i--) {
-                        line[i] = line[i-1];
-                    }
+                    for (int i = pos; i > idx; i--) line[i] = line[i-1];
                     line[idx] = key;
                     pos++;
                     cursor_x++;
                     vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) {
-                        vga_putchar(line[i]);
-                    }
+                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
                     vga_setpos(cursor_x, input_y);
                 }
                 continue;
             }
         }
     }
-}
-
-// Функция для проверки прерывания из команд
-int shell_was_interrupted(void) {
-    int ret = command_interrupted;
-    command_interrupted = 0;
-    return ret;
 }

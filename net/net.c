@@ -75,13 +75,13 @@ void net_init(void) {
         }
     }
     
-if (our_ip == 0) {
-    our_ip = 0x0A00020F;      // 10.0.2.15
-    our_gateway = 0x0A000202; // 10.0.2.2
-    our_netmask = 0xFFFFFF00; // 255.255.255.0  ← исправлено!
-    our_dns = 0x0A000202;     // 10.0.2.2
-    vga_write("Using static IP: 10.0.2.15 (QEMU mode)\n");
-}
+    if (our_ip == 0) {
+        our_ip = 0x0A00020F;
+        our_gateway = 0x0A000202;
+        our_netmask = 0xFFFFFF00;
+        our_dns = 0x0A000202;
+        vga_write("Using static IP: 10.0.2.15 (QEMU mode)\n");
+    }
     
     vga_write("\n=== Network Configuration ===\n");
     vga_write("IP:     ");
@@ -110,7 +110,8 @@ if (our_ip == 0) {
     vga_write("."); vga_write_num((our_dns >> 16) & 0xFF);
     vga_write("."); vga_write_num((our_dns >> 8) & 0xFF);
     vga_write("."); vga_write_num(our_dns & 0xFF);
-    vga_write("\n===========================\n\n");
+    vga_write("\n");
+    vga_write("===========================\n\n");
     
     vga_write("Network ready!\n");
 }

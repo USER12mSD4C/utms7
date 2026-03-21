@@ -2,19 +2,20 @@
 #include "udp.h"
 #include "ip.h"
 #include "net.h"
-#include "../kernel/memory.h"
 #include "../include/string.h"
 #include "../include/endian.h"
+#include "../kernel/memory.h"
 #include "../drivers/vga.h"
 
 #define UDP_MAX_PORTS 16
-#define UDP_BUFFER_SIZE 2048
+#define UDP_BUFFER_SIZE 8192
 
 typedef struct {
     int used;
     u16 port;
-    u8 buffer[UDP_BUFFER_SIZE];
+    u8 *buffer;
     u32 buffer_len;
+    u32 buffer_capacity;
 } udp_socket_t;
 
 static udp_socket_t udp_sockets[UDP_MAX_PORTS];
@@ -39,7 +40,10 @@ static u16 udp_checksum(ip_hdr_t *ip, udp_hdr_t *udp, int udp_len) {
 void udp_init(void) {
     for (int i = 0; i < UDP_MAX_PORTS; i++) {
         udp_sockets[i].used = 0;
+        udp_sockets[i].port = 0;
+        udp_sockets[i].buffer = NULL;
         udp_sockets[i].buffer_len = 0;
+        udp_sockets[i].buffer_capacity = 0;
     }
     vga_write("UDP initialized\n");
 }
@@ -70,7 +74,26 @@ int udp_send(u32 dst_ip, u16 src_port, u16 dst_port, u8 *data, int len) {
     return res;
 }
 
+int udp_bind(u16 port) {
+    for (int i = 0; i < UDP_MAX_PORTS; i++) {
+        if (!udp_sockets[i].used) {
+            udp_sockets[i].used = 1;
+            udp_sockets[i].port = port;
+            udp_sockets[i].buffer_len = 0;
+            udp_sockets[i].buffer_capacity = UDP_BUFFER_SIZE;
+            udp_sockets[i].buffer = kmalloc(udp_sockets[i].buffer_capacity);
+            if (!udp_sockets[i].buffer) {
+                udp_sockets[i].used = 0;
+                return -1;
+            }
+            return i;
+        }
+    }
+    return -1;
+}
+
 void udp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip) {
+    (void)src_ip;
     (void)dst_ip;
     if (len < sizeof(udp_hdr_t)) return;
     
@@ -84,25 +107,19 @@ void udp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip) {
     
     for (int i = 0; i < UDP_MAX_PORTS; i++) {
         if (udp_sockets[i].used && udp_sockets[i].port == dst_port) {
-            int copy_len = data_len;
-            if (copy_len > UDP_BUFFER_SIZE) copy_len = UDP_BUFFER_SIZE;
-            memcpy(udp_sockets[i].buffer, data, copy_len);
-            udp_sockets[i].buffer_len = copy_len;
+            if (data_len > udp_sockets[i].buffer_capacity) {
+                u8 *new_buf = kmalloc(data_len);
+                if (!new_buf) return;
+                if (udp_sockets[i].buffer) kfree(udp_sockets[i].buffer);
+                udp_sockets[i].buffer = new_buf;
+                udp_sockets[i].buffer_capacity = data_len;
+            }
+            
+            memcpy(udp_sockets[i].buffer, data, data_len);
+            udp_sockets[i].buffer_len = data_len;
             return;
         }
     }
-}
-
-int udp_bind(u16 port) {
-    for (int i = 0; i < UDP_MAX_PORTS; i++) {
-        if (!udp_sockets[i].used) {
-            udp_sockets[i].used = 1;
-            udp_sockets[i].port = port;
-            udp_sockets[i].buffer_len = 0;
-            return i;
-        }
-    }
-    return -1;
 }
 
 int udp_recv(u8 *buf, int len) {
@@ -110,8 +127,10 @@ int udp_recv(u8 *buf, int len) {
         if (udp_sockets[i].used && udp_sockets[i].buffer_len > 0) {
             int copy_len = udp_sockets[i].buffer_len;
             if (copy_len > len) copy_len = len;
+            
             memcpy(buf, udp_sockets[i].buffer, copy_len);
             udp_sockets[i].buffer_len = 0;
+            
             return copy_len;
         }
     }
