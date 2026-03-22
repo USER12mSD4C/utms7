@@ -1,12 +1,11 @@
 ; kernel/syscall.asm
-global syscall_handler
-
+global syscall_entry
 extern syscall_handler_c
 
 section .text
 bits 64
 
-syscall_handler:
+syscall_entry:
     swapgs
     
     ; Сохраняем пользовательские регистры
@@ -15,7 +14,7 @@ syscall_handler:
     
     ; Переключаемся на стек ядра
     mov rcx, rsp
-    mov rsp, [gs:8]       ; kernel rsp (должен быть установлен в gs)
+    mov rsp, [gs:8]       ; kernel rsp
     
     push rcx              ; user RSP
     push r11              ; user RFLAGS

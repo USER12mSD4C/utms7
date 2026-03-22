@@ -548,7 +548,7 @@ void syscall_init(void) {
     syscall_table[SYS_gettime] = sys_gettime;
 }
 
-long syscall_handler(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
+long syscall_handler_c(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     if (num < 0 || num >= 64 || !syscall_table[num]) {
         return -1;
     }

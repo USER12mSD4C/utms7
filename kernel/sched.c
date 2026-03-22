@@ -526,17 +526,6 @@ int sched_waitpid(u32 pid, int* status) {
     return pid;
 }
 
-void sched_kill(u32 pid) {
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (processes[i].pid == pid && processes[i].state != PROC_ZOMBIE) {
-            processes[i].state = PROC_ZOMBIE;
-            processes[i].exit_code = -1;
-            free_process(&processes[i]);
-            return;
-        }
-    }
-}
-
 process_t* sched_current(void) {
     return current;
 }

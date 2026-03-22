@@ -4,7 +4,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-// Определяем номера syscall вручную
+// Номера syscall
 #define SYS_exit        0
 #define SYS_read        1
 #define SYS_write       2
@@ -39,8 +39,7 @@
 #define SYS_fork        57
 #define SYS_gethostbyname 47
 
-// ==================== СИСТЕМНЫЕ ВЫЗОВЫ ====================
-
+// Системные вызовы
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     register long rax __asm__("rax") = num;
     register long rdi __asm__("rdi") = a1;
@@ -59,7 +58,6 @@ long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
 }
 
 // ==================== STDIO ====================
-
 int open(const char *path, int flags, ...) {
     int mode = 0;
     if (flags & 0x40) {
@@ -96,7 +94,6 @@ int fstat(int fd, struct stat *buf) {
 }
 
 // ==================== ФАЙЛОВАЯ СИСТЕМА ====================
-
 int mkdir(const char *path, int mode) {
     return syscall(SYS_mkdir, (long)path, mode, 0, 0, 0, 0);
 }
@@ -127,7 +124,6 @@ int readdir(const char *path, struct dirent *entries, int *count) {
 }
 
 // ==================== ПАМЯТЬ ====================
-
 typedef struct block_header {
     size_t size;
     struct block_header *next;
@@ -249,8 +245,9 @@ void free(void *ptr) {
 }
 
 // ==================== PRINTF ====================
-
 int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
+    // Эта функция уже есть в lib/string.c, но оставим её здесь
+    // Если есть конфликт, удалим отсюда
     char *start = str;
     const char *p = fmt;
     int count = 0;
@@ -258,19 +255,9 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
     while (*p && count < (int)size - 1) {
         if (*p == '%') {
             p++;
-            
-            int width = 0;
-            int left_justify = 0;
-            int zero_pad = 0;
-            
-            if (*p == '-') {
-                left_justify = 1;
-                p++;
-            }
-            if (*p == '0') {
-                zero_pad = 1;
-                p++;
-            }
+            int width = 0, left_justify = 0, zero_pad = 0;
+            if (*p == '-') { left_justify = 1; p++; }
+            if (*p == '0') { zero_pad = 1; p++; }
             while (*p >= '0' && *p <= '9') {
                 width = width * 10 + (*p - '0');
                 p++;
@@ -279,18 +266,10 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
             switch (*p) {
                 case 'd': {
                     int val = va_arg(args, int);
-                    if (val < 0) {
-                        *str++ = '-';
-                        count++;
-                        val = -val;
-                    }
-                    char num[16];
-                    int i = 0;
+                    if (val < 0) { *str++ = '-'; count++; val = -val; }
+                    char num[16]; int i = 0;
                     if (val == 0) num[i++] = '0';
-                    while (val > 0) {
-                        num[i++] = '0' + (val % 10);
-                        val /= 10;
-                    }
+                    while (val > 0) { num[i++] = '0' + (val % 10); val /= 10; }
                     int len = i;
                     if (!left_justify && width > len) {
                         int pad = width - len;
@@ -312,59 +291,11 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                     }
                     break;
                 }
-                case 'u': {
-                    unsigned int val = va_arg(args, unsigned int);
-                    char num[16];
-                    int i = 0;
-                    if (val == 0) num[i++] = '0';
-                    while (val > 0) {
-                        num[i++] = '0' + (val % 10);
-                        val /= 10;
-                    }
-                    while (i > 0 && count < (int)size - 1) {
-                        *str++ = num[--i];
-                        count++;
-                    }
-                    break;
-                }
-                case 'x': {
-                    unsigned int val = va_arg(args, unsigned int);
-                    char num[16];
-                    int i = 0;
-                    if (val == 0) num[i++] = '0';
-                    while (val > 0) {
-                        int d = val % 16;
-                        num[i++] = d < 10 ? '0' + d : 'a' + d - 10;
-                        val /= 16;
-                    }
-                    while (i > 0 && count < (int)size - 1) {
-                        *str++ = num[--i];
-                        count++;
-                    }
-                    break;
-                }
-                case 'X': {
-                    unsigned int val = va_arg(args, unsigned int);
-                    char num[16];
-                    int i = 0;
-                    if (val == 0) num[i++] = '0';
-                    while (val > 0) {
-                        int d = val % 16;
-                        num[i++] = d < 10 ? '0' + d : 'A' + d - 10;
-                        val /= 16;
-                    }
-                    while (i > 0 && count < (int)size - 1) {
-                        *str++ = num[--i];
-                        count++;
-                    }
-                    break;
-                }
                 case 's': {
                     char *s = va_arg(args, char*);
                     if (!s) s = "(null)";
                     int len = 0;
                     while (s[len]) len++;
-                    
                     if (!left_justify && width > len) {
                         int pad = width - len;
                         while (pad-- > 0 && count < (int)size - 1) {
@@ -413,22 +344,6 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
     return count;
 }
 
-int snprintf(char *str, size_t size, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    int res = vsnprintf(str, size, fmt, args);
-    va_end(args);
-    return res;
-}
-
-int sprintf(char *str, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    int res = vsnprintf(str, 65536, fmt, args);
-    va_end(args);
-    return res;
-}
-
 int printf(const char *fmt, ...) {
     char buf[4096];
     va_list args;
@@ -439,193 +354,7 @@ int printf(const char *fmt, ...) {
     return len;
 }
 
-// ==================== СТРОКОВЫЕ ФУНКЦИИ ====================
-
-char *strcpy(char *dest, const char *src) {
-    char *d = dest;
-    while ((*d++ = *src++));
-    return dest;
-}
-
-char *strncpy(char *dest, const char *src, size_t n) {
-    char *d = dest;
-    size_t i;
-    for (i = 0; i < n && src[i]; i++) d[i] = src[i];
-    for (; i < n; i++) d[i] = '\0';
-    return dest;
-}
-
-char *strcat(char *dest, const char *src) {
-    char *d = dest;
-    while (*d) d++;
-    while ((*d++ = *src++));
-    return dest;
-}
-
-char *strncat(char *dest, const char *src, size_t n) {
-    char *d = dest;
-    while (*d) d++;
-    size_t i;
-    for (i = 0; i < n && src[i]; i++) d[i] = src[i];
-    d[i] = '\0';
-    return dest;
-}
-
-int strcmp(const char *s1, const char *s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-    }
-    return *(unsigned char*)s1 - *(unsigned char*)s2;
-}
-
-int strncmp(const char *s1, const char *s2, size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        if (s1[i] != s2[i]) return s1[i] - s2[i];
-        if (s1[i] == '\0') return 0;
-    }
-    return 0;
-}
-
-char *strchr(const char *s, int c) {
-    while (*s) {
-        if (*s == (char)c) return (char*)s;
-        s++;
-    }
-    return (c == '\0') ? (char*)s : NULL;
-}
-
-char *strrchr(const char *s, int c) {
-    const char *last = NULL;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    return (char*)last;
-}
-
-char *strstr(const char *haystack, const char *needle) {
-    if (!*needle) return (char*)haystack;
-    
-    while (*haystack) {
-        const char *h = haystack;
-        const char *n = needle;
-        while (*h && *n && (*h == *n)) {
-            h++;
-            n++;
-        }
-        if (!*n) return (char*)haystack;
-        haystack++;
-    }
-    return NULL;
-}
-
-size_t strlen(const char *s) {
-    size_t len = 0;
-    while (s[len]) len++;
-    return len;
-}
-
-char *strdup(const char *s) {
-    size_t len = strlen(s) + 1;
-    char *dup = malloc(len);
-    if (dup) memcpy(dup, s, len);
-    return dup;
-}
-
-static char *strtok_pos = NULL;
-
-char *strtok(char *str, const char *delim) {
-    if (str) strtok_pos = str;
-    if (!strtok_pos || *strtok_pos == '\0') return NULL;
-    
-    while (*strtok_pos) {
-        const char *d = delim;
-        int is_delim = 0;
-        while (*d) {
-            if (*strtok_pos == *d) {
-                is_delim = 1;
-                break;
-            }
-            d++;
-        }
-        if (!is_delim) break;
-        strtok_pos++;
-    }
-    
-    char *start = strtok_pos;
-    if (*strtok_pos == '\0') {
-        strtok_pos = NULL;
-        return start;
-    }
-    
-    while (*strtok_pos) {
-        const char *d = delim;
-        int is_delim = 0;
-        while (*d) {
-            if (*strtok_pos == *d) {
-                is_delim = 1;
-                break;
-            }
-            d++;
-        }
-        if (is_delim) {
-            *strtok_pos = '\0';
-            strtok_pos++;
-            return start;
-        }
-        strtok_pos++;
-    }
-    
-    strtok_pos = NULL;
-    return start;
-}
-
-// ==================== MEMORY FUNCTIONS ====================
-
-void *memcpy(void *dest, const void *src, size_t n) {
-    char *d = dest;
-    const char *s = src;
-    for (size_t i = 0; i < n; i++) d[i] = s[i];
-    return dest;
-}
-
-void *memmove(void *dest, const void *src, size_t n) {
-    char *d = dest;
-    const char *s = src;
-    if (d < s) {
-        for (size_t i = 0; i < n; i++) d[i] = s[i];
-    } else {
-        for (size_t i = n; i > 0; i--) d[i-1] = s[i-1];
-    }
-    return dest;
-}
-
-void *memset(void *s, int c, size_t n) {
-    char *p = s;
-    for (size_t i = 0; i < n; i++) p[i] = (char)c;
-    return s;
-}
-
-int memcmp(const void *s1, const void *s2, size_t n) {
-    const char *p1 = s1;
-    const char *p2 = s2;
-    for (size_t i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) return p1[i] - p2[i];
-    }
-    return 0;
-}
-
-void *memchr(const void *s, int c, size_t n) {
-    const char *p = s;
-    for (size_t i = 0; i < n; i++) {
-        if (p[i] == (char)c) return (void*)(p + i);
-    }
-    return NULL;
-}
-
 // ==================== ПРОЦЕССЫ ====================
-
 int fork(void) {
     return syscall(SYS_fork, 0, 0, 0, 0, 0, 0);
 }
@@ -665,7 +394,6 @@ int kill(int pid, int sig) {
 }
 
 // ==================== ОКРУЖЕНИЕ ====================
-
 #define ENV_SIZE 64
 static char *environment[ENV_SIZE] = { NULL };
 static int env_count = 0;
@@ -733,17 +461,15 @@ void unsetenv(const char *name) {
 }
 
 // ==================== ВРЕМЯ ====================
-
 unsigned int time(void) {
     return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0) / 1000;
 }
 
-unsigned int get_ticks(void) {
+unsigned int get_ticks_libc(void) {
     return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0);
 }
 
 // ==================== СЕТЬ ====================
-
 int socket(int domain, int type, int protocol) {
     return syscall(SYS_socket, domain, type, protocol, 0, 0, 0);
 }
