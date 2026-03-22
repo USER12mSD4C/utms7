@@ -1,3 +1,4 @@
+// kernel/elf.h
 #ifndef ELF_H
 #define ELF_H
 
@@ -36,6 +37,11 @@ typedef struct {
     u64 align;
 } __attribute__((packed)) elf64_phdr_t;
 
-int elf_load_user(u8 *data, void *p);
+// Forward declaration
+struct process_t;
+
+// Прототипы
+u64 elf_load(u8 *data, u32 size, u64* pml4);
+int elf_load_current(u8 *data, u32 size, struct process_t *p);
 
 #endif

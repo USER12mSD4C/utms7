@@ -4,15 +4,16 @@ LD = ld
 MKMOD = tools/mkmod
 
 ASFLAGS = -f elf64
-CFLAGS = -m64 -ffreestanding -nostdlib -Iinclude -fno-stack-protector -mno-red-zone -mcmodel=large -mno-sse -O2
+CFLAGS = -m64 -ffreestanding -nostdlib -Iinclude -fno-stack-protector -mno-red-zone -mcmodel=large -mno-sse -O2 -g
 LDFLAGS = -m elf_x86_64 -T linker.ld -nostdlib
 
-# Ядро
+# ==================== ЯДРО (НОВЫЕ ФАЙЛЫ) ====================
 CORE_OBJS = kernel/entry.o \
             kernel/kernel.o \
             kernel/kinit.o \
             kernel/elf.o \
-            kernel/kapi.o \
+            kernel/syscall.o \
+            kernel/syscall_asm.o \
             kernel/gdt.o \
             kernel/idt.o \
             kernel/idt_irq.o \
@@ -32,7 +33,7 @@ DRIVER_OBJS = drivers/vga.o \
               drivers/udisk.o \
               drivers/pci.o
 
-# Сеть
+# Сеть (НОВЫЙ TCP)
 NET_OBJS = net/arp.o \
            net/ip.o \
            net/icmp.o \
@@ -43,13 +44,15 @@ NET_OBJS = net/arp.o \
            net/http.o \
            net/net.o \
            net/e1000.o \
-           net/rtl8139.o
+           net/rtl8139.o \
+           net/netconfig.o
 
 # Библиотеки
 LIB_OBJS = lib/string.o \
            lib/font.o \
            lib/path.o \
-           lib/zlib.o
+           lib/zlib.o \
+           lib/libc.o
 
 # Файловые системы
 FS_OBJS = fs/ufs.o \
@@ -73,7 +76,8 @@ LIVECD_OBJS = kernel/entry.o \
               kernel/kernel-livecd.o \
               kernel/kinit.o \
               kernel/elf.o \
-              kernel/kapi.o \
+              kernel/syscall.o \
+              kernel/syscall_asm.o \
               kernel/gdt.o \
               kernel/idt.o \
               kernel/idt_irq.o \
@@ -101,10 +105,12 @@ LIVECD_OBJS = kernel/entry.o \
               net/net.o \
               net/e1000.o \
               net/rtl8139.o \
+              net/netconfig.o \
               lib/string.o \
               lib/font.o \
               lib/path.o \
               lib/zlib.o \
+              lib/libc.o \
               fs/ufs.o \
               fs/fat.o \
               fs/isofs.o \
@@ -139,7 +145,6 @@ kom: $(MKMOD)
 
 # ==================== ОБРАЗЫ ====================
 
-# Создание образа установки
 install.img: kernel.bin kom
 	@echo "Creating install image..."
 	@rm -rf install_root
@@ -155,7 +160,6 @@ install.img: kernel.bin kom
 	 echo "RAW image created (placeholder)")
 	@echo "Install image created: install.img"
 
-# Создание ISO образа
 iso: kernel.bin kom
 	@mkdir -p iso/boot/grub iso/modules
 	cp kernel.bin iso/boot/kernel.bin
@@ -164,7 +168,6 @@ iso: kernel.bin kom
 	echo 'menuentry "UTMS" { multiboot2 /boot/kernel.bin; boot }' >> iso/boot/grub/grub.cfg
 	grub-mkrescue -o utms.iso iso/
 
-# Создание LiveCD образа
 livecd: kernel-livecd.bin install.img
 	@echo "Creating LiveCD..."
 	@rm -rf livecd
@@ -183,7 +186,6 @@ livecd: kernel-livecd.bin install.img
 	grub-mkrescue -o utms-livecd.iso livecd/
 	@echo "LiveCD created: utms-livecd.iso"
 
-# Создание дисков
 disk5g.img:
 	dd if=/dev/zero of=disk5g.img bs=1M count=5120
 
@@ -192,35 +194,27 @@ disk2.img:
 
 # ==================== ЗАПУСК ====================
 
-# Запуск с ISO (грузится с CD)
 run: iso disk5g.img
 	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d
 
-# Запуск с LiveCD
 run-livecd: livecd disk5g.img
 	qemu-system-x86_64 -cdrom utms-livecd.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d
 
-# Запуск с диском напрямую (без CD)
 rundisk: kernel.bin disk5g.img
 	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0
 
-# Запуск с RTL8139
 run-rtl: iso disk5g.img
 	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d
 
-# Запуск с последовательным портом для отладки
 run-serial: iso disk5g.img
 	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d -serial stdio
 
-# Отладка (с GDB)
 debug: kernel.bin
 	qemu-system-x86_64 -kernel kernel.bin -m 512 -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -s -S
 
-# Запуск с UEFI
 run-uefi: iso disk5g.img
 	qemu-system-x86_64 -bios /usr/share/ovmf/x64/OVMF.fd -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d
 
-# Запуск без графики (только консоль)
 run-nographic: iso disk5g.img
 	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -netdev user,id=net0 -device e1000,netdev=net0 -nographic -append "console=ttyS0"
 
@@ -247,6 +241,9 @@ kernel/idt_irq.o: kernel/idt_irq.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 
 kernel/sched_asm.o: kernel/sched_asm.asm
+	$(AS) $(ASFLAGS) -o $@ $<
+
+kernel/syscall_asm.o: kernel/syscall.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 
 .PHONY: all clean distclean run run-livecd rundisk run-rtl run-serial debug run-uefi run-nographic iso livecd kom

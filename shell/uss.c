@@ -1,8 +1,8 @@
+// shell/uss.c
 #include "../include/string.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
-#include "../kernel/kapi.h"
 #include "../kernel/memory.h"
 #include "../include/syscall.h"
 #include "../include/udisk.h"
@@ -1008,7 +1008,6 @@ static void uss_cmd_rm(char* line) {
 // ==================== ОСНОВНОЙ ИНТЕРПРЕТАТОР ====================
 
 void uss_init(void) {
-    // Инициализируем динамические массивы
     uss.vars = NULL;
     uss.var_count = 0;
     uss.var_capacity = 0;
@@ -1022,7 +1021,6 @@ void uss_init(void) {
     uss.position = 0;
     uss.running = 1;
     
-    // Выделяем начальную память
     uss_ensure_var_capacity(USS_INIT_VARS);
     uss_ensure_stack_capacity(USS_INIT_STACK);
     
@@ -1146,7 +1144,6 @@ int uss_execute(const char* path) {
     
     kfree(script);
     
-    // Очищаем память
     for (int i = 0; i < uss.var_count; i++) {
         if (uss.vars[i].type == VAL_STRING && uss.vars[i].data.str_val) {
             kfree(uss.vars[i].data.str_val);

@@ -6,8 +6,6 @@
 #include "../drivers/pci.h"
 #include "../drivers/vga.h"
 
-extern void net_handle_packet(u8 *packet, int len);
-
 #define E1000_VENDOR 0x8086
 #define E1000_DEVICE 0x100E
 
@@ -87,6 +85,18 @@ static inline void e1000_write32(u32 reg, u32 val) {
     *(volatile u32*)((u64)sc->mmio + reg) = val;
 }
 
+static void e1000_read_mac(void) {
+    u32 rar_low = e1000_read32(E1000_RA);
+    u32 rar_high = e1000_read32(E1000_RA + 4);
+    
+    sc->mac[0] = rar_low & 0xFF;
+    sc->mac[1] = (rar_low >> 8) & 0xFF;
+    sc->mac[2] = (rar_low >> 16) & 0xFF;
+    sc->mac[3] = (rar_low >> 24) & 0xFF;
+    sc->mac[4] = rar_high & 0xFF;
+    sc->mac[5] = (rar_high >> 8) & 0xFF;
+}
+
 int e1000_init(pci_dev_t *pci) {
     if (!pci) return -1;
     if (pci->vendor_id != E1000_VENDOR || pci->device_id != E1000_DEVICE) return -1;
@@ -114,12 +124,7 @@ int e1000_init(pci_dev_t *pci) {
         __asm__ volatile ("pause");
     }
     
-    for (int i = 0; i < 3; i++) {
-        e1000_write32(E1000_EERD, (i << 8) | 1);
-        u32 val = e1000_read32(E1000_EERD);
-        sc->mac[i*2] = val >> 8;
-        sc->mac[i*2+1] = val >> 16;
-    }
+    e1000_read_mac();
     
     vga_write("  E1000: MAC ");
     for (int i = 0; i < 6; i++) {
@@ -162,9 +167,6 @@ int e1000_init(pci_dev_t *pci) {
     e1000_write32(E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SECRC);
     e1000_write32(E1000_TCTL, E1000_TCTL_EN | E1000_TCTL_PSP);
     e1000_write32(E1000_TIPG, 0x0060200A);
-    
-    e1000_write32(E1000_RA, sc->mac[0] | (sc->mac[1] << 8) | (sc->mac[2] << 16) | (sc->mac[3] << 24));
-    e1000_write32(E1000_RA + 4, sc->mac[4] | (sc->mac[5] << 8));
     
     e1000_write32(E1000_IMS, 0x1F6DC);
     e1000_write32(E1000_ICR, 0xFFFFFFFF);
@@ -220,8 +222,12 @@ int e1000_recv(u8 *buffer, u16 max_len) {
 }
 
 void e1000_get_mac(u8 *mac) {
-    if (sc && sc->attached) memcpy(mac, sc->mac, 6);
-    else { mac[0]=0x52; mac[1]=0x54; mac[2]=0x00; mac[3]=0x12; mac[4]=0x34; mac[5]=0x56; }
+    if (sc && sc->attached) {
+        memcpy(mac, sc->mac, 6);
+    } else {
+        mac[0] = 0x52; mac[1] = 0x54; mac[2] = 0x00;
+        mac[3] = 0x12; mac[4] = 0x34; mac[5] = 0x56;
+    }
 }
 
 void e1000_handle_irq(void) {
@@ -230,7 +236,10 @@ void e1000_handle_irq(void) {
     if (icr & 0x01) {
         u8 packet[1514];
         int len = e1000_recv(packet, 1514);
-        if (len > 0) net_handle_packet(packet, len);
+        if (len > 0) {
+            extern void net_handle_packet(u8*, int);
+            net_handle_packet(packet, len);
+        }
     }
 }
 

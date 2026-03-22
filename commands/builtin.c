@@ -3,7 +3,6 @@
 #include "../include/string.h"
 #include "../drivers/vga.h"
 #include "../drivers/vesa.h"
-#include "../kernel/kapi.h"
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
 #include "../net/net.h"
@@ -11,6 +10,7 @@
 #include "../net/ip.h"
 #include "../net/arp.h"
 #include "../fs/ufs.h"
+#include "../include/syscall.h"
 
 extern int upac_main(int, char**);
 extern void rtl8139_dump_regs(void);
@@ -93,24 +93,31 @@ static int cmd_ticks(int argc, char** argv) {
 
 static int cmd_ps(int argc, char** argv) {
     (void)argc; (void)argv;
+    // Получаем количество процессов
     int count = sched_get_processes(NULL, 0);
     if (count == 0) {
         shell_print("no processes\n");
         return 0;
     }
+    
+    // Выделяем массив указателей
     process_t* procs[count];
     sched_get_processes(procs, count);
+    
     shell_print("PID  PPID  STATE  NAME\n");
     for (int i = 0; i < count; i++) {
         shell_print_num(procs[i]->pid);
         shell_print("   ");
         shell_print_num(procs[i]->ppid);
         shell_print("   ");
+        
+        // Используем правильные константы из sched.h
         switch(procs[i]->state) {
-            case PROCESS_READY: shell_print("R     "); break;
-            case PROCESS_RUNNING: shell_print("RUN   "); break;
-            case PROCESS_WAITING: shell_print("W     "); break;
-            case PROCESS_ZOMBIE: shell_print("Z     "); break;
+            case PROC_READY: shell_print("R     "); break;
+            case PROC_RUNNING: shell_print("RUN   "); break;
+            case PROC_SLEEPING: shell_print("S     "); break;
+            case PROC_ZOMBIE: shell_print("Z     "); break;
+            case PROC_BLOCKED: shell_print("B     "); break;
             default: shell_print("?     "); break;
         }
         shell_print(procs[i]->name);
@@ -134,6 +141,8 @@ static int cmd_kill(int argc, char** argv) {
         pid = pid * 10 + (*p - '0');
         p++;
     }
+    
+    // sched_kill возвращает int, проверяем
     if (sched_kill(pid) == 0) {
         shell_print("killed ");
         shell_print_num(pid);

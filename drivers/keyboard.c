@@ -111,13 +111,11 @@ void keyboard_handler_c(void) {
         }
     }
     
-    // Ctrl+C — отправляем SIGINT текущему процессу
+    // Ctrl+C — просто добавляем символ 0x03 в буфер
+    // Пользовательская программа сама должна обрабатывать SIGINT
     if (ascii == 3) {
-        int pid = sched_get_current_pid();
-        if (pid > 0) {
-            sched_signal(pid, 2);
-        }
-        return;
+        // Добавляем Ctrl+C в буфер, shell его обработает
+        // Не прерываем процесс напрямую
     }
     
     if (ascii) {

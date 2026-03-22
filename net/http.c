@@ -54,7 +54,8 @@ int http_get(const char *url_str, u8 **response, u32 *resp_len) {
     u32 ip = dns_lookup(url.host, net_get_dns());
     if (ip == 0) return -1;
     
-    int sock = tcp_socket_create();
+    // Исправлено: tcp_socket() вместо tcp_socket_create()
+    int sock = tcp_socket();
     if (sock < 0) return -1;
     
     if (tcp_connect(sock, ip, url.port) != 0) return -1;
@@ -67,10 +68,16 @@ int http_get(const char *url_str, u8 **response, u32 *resp_len) {
         "\r\n", url.path, url.host);
     
     if (tcp_send(sock, (u8*)request, req_len) < 0) {
+        tcp_close(sock);
         return -1;
     }
     
     u8 *buf = kmalloc(65536);
+    if (!buf) {
+        tcp_close(sock);
+        return -1;
+    }
+    
     int total = 0;
     
     while (1) {
@@ -79,6 +86,8 @@ int http_get(const char *url_str, u8 **response, u32 *resp_len) {
         total += r;
         if (total >= 65536) break;
     }
+    
+    tcp_close(sock);
     
     *response = buf;
     *resp_len = total;

@@ -1,8 +1,8 @@
-// include/syscall.h
+// kernel/syscall.h
 #ifndef SYSCALL_H
 #define SYSCALL_H
 
-#include "types.h"
+#include "../include/types.h"
 
 // Номера системных вызовов
 #define SYS_exit        0
@@ -43,7 +43,7 @@
 #define SYS_gettime     52
 #define SYS_fork        57
 
-// Прототипы (УБИРАЕМ static inline, оставляем только объявление)
-long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6);
+void syscall_init(void);
+long syscall_handler(long num, long a1, long a2, long a3, long a4, long a5, long a6);
 
 #endif

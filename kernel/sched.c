@@ -1,321 +1,594 @@
+// kernel/sched.c
 #include "sched.h"
 #include "memory.h"
+#include "paging.h"
 #include "idt.h"
 #include "../include/string.h"
-#include "paging.h"
-
-#define SIGINT 2
+#include "../fs/ufs.h"
+#include "elf.h"
 
 static process_t processes[MAX_PROCESSES];
 static process_t *current = NULL;
-static process_t *idle = NULL;
+static process_t *ready_queue = NULL;
+static process_t *sleep_queue = NULL;
 static u32 next_pid = 1;
 static u32 process_count = 0;
 
-extern void context_switch(u64 *old_rsp, u64 new_rsp, u64 new_cr3);
+extern void switch_to_process(process_t* prev, process_t* next);
+extern void enter_userspace(u64 rip, u64 rsp, u64 cr3);
 
-static void idle_process(void) {
-    while (1) {
-        __asm__ volatile ("hlt");
+// ==================== ОЧЕРЕДИ ====================
+
+static void enqueue_ready(process_t *p) {
+    if (!p || p->state != PROC_READY) return;
+    
+    if (!ready_queue) {
+        ready_queue = p;
+        p->next = NULL;
+    } else {
+        process_t *last = ready_queue;
+        while (last->next) last = last->next;
+        last->next = p;
+        p->next = NULL;
     }
 }
 
-static u64* create_address_space(void) {
-    u64* pml4 = kmalloc(4096);
-    if (!pml4) return NULL;
-    memset(pml4, 0, 4096);
+static process_t* dequeue_ready(void) {
+    if (!ready_queue) return NULL;
     
-    u64* kernel_pml4 = (u64*)0x1000;
-    for (int i = 256; i < 512; i++) {
-        pml4[i] = kernel_pml4[i];
-    }
-    
-    return pml4;
+    process_t *p = ready_queue;
+    ready_queue = ready_queue->next;
+    p->next = NULL;
+    return p;
 }
 
-static void free_address_space(u64* pml4) {
-    if (!pml4 || pml4 == (u64*)0x1000) return;
+static void remove_from_ready(process_t *p) {
+    if (!ready_queue) return;
     
-    for (int i = 0; i < 256; i++) {
-        if (pml4[i] & PAGE_PRESENT) {
-            u64* pdpt = (u64*)(pml4[i] & ~0xFFF);
-            for (int j = 0; j < 512; j++) {
-                if (pdpt[j] & PAGE_PRESENT) {
-                    u64* pd = (u64*)(pdpt[j] & ~0xFFF);
-                    for (int k = 0; k < 512; k++) {
-                        if (pd[k] & PAGE_PRESENT) {
-                            u64* pt = (u64*)(pd[k] & ~0xFFF);
-                            for (int l = 0; l < 512; l++) {
-                                if (pt[l] & PAGE_PRESENT) {
-                                    u64 phys = pt[l] & ~0xFFF;
-                                    kfree((void*)phys);
-                                }
-                            }
-                            kfree(pt);
-                        }
-                    }
-                    kfree(pd);
-                }
-            }
-            kfree(pdpt);
+    if (ready_queue == p) {
+        ready_queue = ready_queue->next;
+        p->next = NULL;
+        return;
+    }
+    
+    process_t *prev = ready_queue;
+    process_t *cur = ready_queue->next;
+    
+    while (cur) {
+        if (cur == p) {
+            prev->next = cur->next;
+            p->next = NULL;
+            return;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+}
+
+static void enqueue_sleep(process_t *p) {
+    if (!p || p->state != PROC_SLEEPING) return;
+    
+    if (!sleep_queue || p->sleep_until < sleep_queue->sleep_until) {
+        p->next = sleep_queue;
+        sleep_queue = p;
+        return;
+    }
+    
+    process_t *prev = sleep_queue;
+    process_t *cur = sleep_queue->next;
+    
+    while (cur && cur->sleep_until <= p->sleep_until) {
+        prev = cur;
+        cur = cur->next;
+    }
+    
+    prev->next = p;
+    p->next = cur;
+}
+
+static void remove_from_sleep(process_t *p) {
+    if (!sleep_queue) return;
+    
+    if (sleep_queue == p) {
+        sleep_queue = sleep_queue->next;
+        p->next = NULL;
+        return;
+    }
+    
+    process_t *prev = sleep_queue;
+    process_t *cur = sleep_queue->next;
+    
+    while (cur) {
+        if (cur == p) {
+            prev->next = cur->next;
+            p->next = NULL;
+            return;
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+}
+
+// ==================== УПРАВЛЕНИЕ ПРОЦЕССАМИ ====================
+
+static u32 alloc_pid(void) {
+    u32 pid = next_pid++;
+    if (next_pid >= 10000) next_pid = 1;
+    return pid;
+}
+
+static process_t* find_free_proc(void) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROC_UNUSED) {
+            memset(&processes[i], 0, sizeof(process_t));
+            return &processes[i];
         }
     }
-    kfree(pml4);
+    return NULL;
 }
+
+static void free_process(process_t *p) {
+    if (!p) return;
+    
+    if (p->kstack) {
+        kfree((void*)p->kstack);
+        p->kstack = 0;
+    }
+    
+    if (p->cr3 && p->cr3 != (u64)0x1000) {
+        free_address_space((u64*)p->cr3);
+        p->cr3 = 0;
+    }
+    
+    for (int i = 0; i < 32; i++) {
+        p->fds[i].used = 0;
+    }
+}
+
+// ==================== ПЛАНИРОВЩИК ====================
 
 void sched_init(void) {
     memset(processes, 0, sizeof(processes));
+    ready_queue = NULL;
+    sleep_queue = NULL;
+    current = NULL;
+    next_pid = 1;
+    process_count = 0;
     
-    idle = &processes[0];
-    idle->pid = next_pid++;
+    // Создаём idle-процесс
+    process_t *idle = find_free_proc();
+    if (!idle) return;
+    
+    idle->pid = alloc_pid();
     strcpy(idle->name, "idle");
-    idle->state = PROCESS_READY;
-    idle->kstack = kmalloc(STACK_SIZE);
-    if (!idle->kstack) return;
+    idle->state = PROC_READY;
+    idle->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
+    idle->kstack_top = idle->kstack + KERNEL_STACK_SIZE;
     
-    idle->rsp = (u64)idle->kstack + STACK_SIZE - 8;
-    idle->cr3 = 0;
-    idle->ppid = 0;
-    idle->time_slice = TIME_SLICE;
-    idle->sleep_until = 0;
-    idle->heap_start = 0;
-    idle->heap_end = 0;
-    idle->user_rsp = 0;
-    idle->user_rip = 0;
+    // У idle нет CR3 — используем ядерное
+    idle->cr3 = (u64)0x1000;
     
-    for (int i = 0; i < 32; i++) {
-        idle->fd_table[i].used = 0;
-    }
-    
+    enqueue_ready(idle);
     current = idle;
-    process_count = 1;
 }
 
-int sched_create_process(const char *name, void (*entry)(void)) {
-    if (process_count >= MAX_PROCESSES) return -1;
+void sched_tick(void) {
+    if (!current) return;
     
-    process_t *p = NULL;
-    for (int i = 1; i < MAX_PROCESSES; i++) {
-        if (processes[i].state == PROCESS_ZOMBIE || processes[i].state == 0) {
-            p = &processes[i];
-            break;
+    // Обновляем таймеры сна
+    static u32 last_tick = 0;
+    u32 now = get_ticks();
+    
+    if (now != last_tick) {
+        last_tick = now;
+        
+        // Пробуждаем процессы
+        while (sleep_queue && sleep_queue->sleep_until <= now) {
+            process_t *p = sleep_queue;
+            sleep_queue = sleep_queue->next;
+            p->next = NULL;
+            
+            p->state = PROC_READY;
+            enqueue_ready(p);
         }
     }
-    if (!p) return -1;
     
-    memset(p, 0, sizeof(process_t));
-    p->pid = next_pid++;
-    p->ppid = current ? current->pid : 0;
-    strncpy(p->name, name, 31);
-    p->name[31] = '\0';
-    p->state = PROCESS_READY;
-    p->time_slice = TIME_SLICE;
-    p->sleep_until = 0;
-    
-    p->kstack = kmalloc(STACK_SIZE);
-    if (!p->kstack) return -1;
-    
-    p->cr3 = (u64)create_address_space();
-    if (!p->cr3) {
-        kfree(p->kstack);
-        return -1;
+    // Уменьшаем квант времени
+    if (current->ticks_left > 0) {
+        current->ticks_left--;
     }
     
-    u64 *stack = (u64*)((u64)p->kstack + STACK_SIZE);
-    
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0;
-    *--stack = 0x202;
-    *--stack = (u64)entry;
-    
-    p->rsp = (u64)stack;
-    p->rbp = (u64)stack;
-    p->heap_start = 0;
-    p->heap_end = 0;
-    p->user_rsp = 0;
-    p->user_rip = 0;
-    
-    for (int i = 0; i < 32; i++) {
-        p->fd_table[i].used = 0;
+    // Если квант истёк или процесс не running (мог заснуть)
+    if (current->ticks_left == 0 || current->state != PROC_RUNNING) {
+        sched_yield();
     }
-    
-    process_count++;
-    return p->pid;
-}
-
-int sched_create_user_process(const char *name, u8 *elf_data, u32 elf_size) {
-    if (process_count >= MAX_PROCESSES) return -1;
-    
-    process_t *p = NULL;
-    for (int i = 1; i < MAX_PROCESSES; i++) {
-        if (processes[i].state == PROCESS_ZOMBIE || processes[i].state == 0) {
-            p = &processes[i];
-            break;
-        }
-    }
-    if (!p) return -1;
-    
-    memset(p, 0, sizeof(process_t));
-    p->pid = next_pid++;
-    p->ppid = current ? current->pid : 0;
-    strncpy(p->name, name, 31);
-    p->name[31] = '\0';
-    p->state = PROCESS_READY;
-    p->time_slice = TIME_SLICE;
-    p->sleep_until = 0;
-    
-    p->kstack = kmalloc(STACK_SIZE);
-    if (!p->kstack) return -1;
-    
-    p->cr3 = (u64)create_address_space();
-    if (!p->cr3) {
-        kfree(p->kstack);
-        return -1;
-    }
-    
-    extern int elf_load_user(u8*, void*);
-    if (elf_load_user(elf_data, p) != 0) {
-        kfree(p->kstack);
-        free_address_space((u64*)p->cr3);
-        return -1;
-    }
-    
-    u64 *stack = (u64*)((u64)p->kstack + STACK_SIZE);
-    
-    *--stack = 0x23;
-    *--stack = p->user_rsp;
-    *--stack = 0x202;
-    *--stack = 0x1B;
-    *--stack = p->user_rip;
-    
-    p->rsp = (u64)stack;
-    p->rbp = (u64)stack;
-    
-    for (int i = 0; i < 3; i++) {
-        p->fd_table[i].used = 1;
-        p->fd_table[i].type = 0;
-        if (i == 0) strcpy(p->fd_table[i].file.path, "/dev/stdin");
-        if (i == 1) strcpy(p->fd_table[i].file.path, "/dev/stdout");
-        if (i == 2) strcpy(p->fd_table[i].file.path, "/dev/stderr");
-        p->fd_table[i].file.pos = 0;
-    }
-    
-    process_count++;
-    return p->pid;
-}
-
-void sched_exit(int code) {
-    (void)code;
-    if (!current || current == idle) return;
-    
-    current->state = PROCESS_ZOMBIE;
-    process_count--;
-    
-    if (current->kstack) {
-        kfree(current->kstack);
-        current->kstack = NULL;
-    }
-    
-    if (current->cr3 != 0) {
-        free_address_space((u64*)current->cr3);
-        current->cr3 = 0;
-    }
-    
-    sched_yield();
 }
 
 void sched_yield(void) {
     if (!current) return;
     
-    u32 start_idx = (current - processes) + 1;
-    process_t *next = idle;
+    // Сохраняем текущий процесс
+    if (current->state == PROC_RUNNING) {
+        current->state = PROC_READY;
+        enqueue_ready(current);
+    }
     
-    for (u32 i = 0; i < MAX_PROCESSES; i++) {
-        u32 idx = (start_idx + i) % MAX_PROCESSES;
-        if (processes[idx].state == PROCESS_READY) {
-            next = &processes[idx];
+    // Выбираем следующий
+    process_t *next = dequeue_ready();
+    if (!next) {
+        // Нет готовых процессов — используем idle
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (processes[i].state == PROC_READY) {
+                next = &processes[i];
+                remove_from_ready(next);
+                break;
+            }
+        }
+        if (!next) return;  // нет ни одного процесса
+    }
+    
+    next->state = PROC_RUNNING;
+    next->ticks_left = TIME_SLICE;
+    
+    process_t *prev = current;
+    current = next;
+    
+    if (prev != next) {
+        switch_to_process(prev, next);
+    }
+}
+
+void sched_sleep(u32 ms) {
+    if (!current || current->pid == 1) return;  // idle не спит
+    
+    u32 now = get_ticks();
+    current->sleep_until = now + ms;
+    current->state = PROC_SLEEPING;
+    
+    remove_from_ready(current);
+    enqueue_sleep(current);
+    
+    sched_yield();
+}
+
+void sched_wakeup(u32 pid) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state == PROC_SLEEPING) {
+            processes[i].state = PROC_READY;
+            remove_from_sleep(&processes[i]);
+            enqueue_ready(&processes[i]);
+            return;
+        }
+    }
+}
+
+// ==================== СОЗДАНИЕ ПРОЦЕССОВ ====================
+
+int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
+    process_t *p = find_free_proc();
+    if (!p) return -1;
+    
+    p->pid = alloc_pid();
+    p->ppid = current ? current->pid : 0;
+    strncpy(p->name, name, 31);
+    p->state = PROC_READY;
+    p->ticks_left = TIME_SLICE;
+    
+    // Выделяем стек ядра
+    p->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
+    if (!p->kstack) {
+        p->state = PROC_UNUSED;
+        return -1;
+    }
+    p->kstack_top = p->kstack + KERNEL_STACK_SIZE;
+    
+    // Используем ядерное адресное пространство
+    p->cr3 = (u64)0x1000;
+    
+    // Настраиваем стек для первого запуска
+    u64 *stack = (u64*)p->kstack_top;
+    
+    // Сохраняем аргумент
+    *--stack = (u64)arg;
+    
+    // Адрес возврата (выйти из потока)
+    *--stack = (u64)sched_exit;
+    
+    // RIP
+    *--stack = (u64)entry;
+    
+    // Сохраняем RSP
+    p->regs.rsp = (u64)stack;
+    p->regs.rip = (u64)entry;
+    
+    // Флаги
+    p->regs.rflags = 0x202;
+    
+    // Сегменты (0x08 = code, 0x10 = data)
+    p->regs.cs = 0x08;
+    p->regs.ss = 0x10;
+    
+    enqueue_ready(p);
+    process_count++;
+    
+    return p->pid;
+}
+
+int sched_create_user(const char* name, const char* elf_path, char** argv, char** envp) {
+    process_t *p = find_free_proc();
+    if (!p) return -1;
+    
+    // Загружаем ELF
+    u8 *elf_data;
+    u32 elf_size;
+    if (ufs_read(elf_path, &elf_data, &elf_size) != 0) {
+        p->state = PROC_UNUSED;
+        return -1;
+    }
+    
+    // Создаём адресное пространство
+    u64* pml4 = create_address_space();
+    if (!pml4) {
+        kfree(elf_data);
+        p->state = PROC_UNUSED;
+        return -1;
+    }
+    p->cr3 = (u64)pml4;
+    
+    // Загружаем ELF в адресное пространство
+    u64 entry = elf_load(elf_data, elf_size, pml4);
+    kfree(elf_data);
+    
+    if (entry == 0) {
+        free_address_space(pml4);
+        p->state = PROC_UNUSED;
+        return -1;
+    }
+    
+    // Выделяем стек ядра
+    p->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
+    if (!p->kstack) {
+        free_address_space(pml4);
+        p->state = PROC_UNUSED;
+        return -1;
+    }
+    p->kstack_top = p->kstack + KERNEL_STACK_SIZE;
+    
+    // Выделяем пользовательский стек (8 страниц)
+    u64 ustack_base = 0x7FFFFFF000;
+    for (int i = 0; i < 8; i++) {
+        u64 phys = (u64)kmalloc(4096);
+        paging_map_for_process(pml4, phys, ustack_base - (i+1)*4096, 
+                               PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+    }
+    p->ustack = ustack_base;
+    p->ustack_top = ustack_base;
+    
+    // Настраиваем стек для пользовательского процесса
+    u64 *ustack = (u64*)ustack_base;
+    
+    // Аргументы и окружение
+    int argc = 0;
+    if (argv) {
+        while (argv[argc]) argc++;
+    }
+    
+    // envp
+    int envc = 0;
+    if (envp) {
+        while (envp[envc]) envc++;
+    }
+    
+    // Считаем, сколько памяти нужно для строк
+    u64 args_size = 0;
+    for (int i = 0; i < argc; i++) args_size += strlen(argv[i]) + 1;
+    for (int i = 0; i < envc; i++) args_size += strlen(envp[i]) + 1;
+    
+    // Выделяем место для строк (на стеке)
+    u64 args_top = ustack_base - args_size;
+    
+    // Копируем строки
+    char *args_ptr = (char*)args_top;
+    u64 argv_ptrs[argc + 1];
+    u64 envp_ptrs[envc + 1];
+    
+    for (int i = 0; i < argc; i++) {
+        argv_ptrs[i] = (u64)args_ptr;
+        strcpy(args_ptr, argv[i]);
+        args_ptr += strlen(argv[i]) + 1;
+    }
+    argv_ptrs[argc] = 0;
+    
+    for (int i = 0; i < envc; i++) {
+        envp_ptrs[i] = (u64)args_ptr;
+        strcpy(args_ptr, envp[i]);
+        args_ptr += strlen(envp[i]) + 1;
+    }
+    envp_ptrs[envc] = 0;
+    
+    // Копируем массивы указателей на стек
+    u64 stack_top = ustack_base - 16;
+    stack_top -= (envc + 1) * 8;
+    memcpy((void*)stack_top, envp_ptrs, (envc + 1) * 8);
+    
+    stack_top -= (argc + 1) * 8;
+    memcpy((void*)stack_top, argv_ptrs, (argc + 1) * 8);
+    
+    stack_top -= 8;  // для argv[0]?
+    *(u64*)stack_top = (u64)stack_top + 8;
+    
+    // argc
+    stack_top -= 8;
+    *(u64*)stack_top = argc;
+    
+    // Адрес возврата (exit)
+    stack_top -= 8;
+    *(u64*)stack_top = 0;  // exit
+    
+    // RIP
+    stack_top -= 8;
+    *(u64*)stack_top = entry;
+    
+    p->regs.rsp = stack_top;
+    p->regs.rip = entry;
+    p->regs.rflags = 0x202;
+    p->regs.cs = 0x1B;  // user code
+    p->regs.ss = 0x23;  // user data
+    
+    p->pid = alloc_pid();
+    p->ppid = current ? current->pid : 0;
+    strncpy(p->name, name, 31);
+    p->state = PROC_READY;
+    p->ticks_left = TIME_SLICE;
+    
+    // Стандартные FD
+    p->fds[0].used = 1;
+    p->fds[0].type = 0;
+    strcpy(p->fds[0].data.file.path, "/dev/stdin");
+    
+    p->fds[1].used = 1;
+    p->fds[1].type = 0;
+    strcpy(p->fds[1].data.file.path, "/dev/stdout");
+    
+    p->fds[2].used = 1;
+    p->fds[2].type = 0;
+    strcpy(p->fds[2].data.file.path, "/dev/stderr");
+    
+    enqueue_ready(p);
+    process_count++;
+    
+    return p->pid;
+}
+
+void sched_exit(int code) {
+    if (!current || current->pid == 1) return;
+    
+    current->exit_code = code;
+    current->state = PROC_ZOMBIE;
+    
+    // Разбудить родителя, если ждёт
+    if (current->waiting_for) {
+        current->waiting_for->state = PROC_READY;
+        enqueue_ready(current->waiting_for);
+    }
+    
+    // Освобождаем ресурсы
+    free_process(current);
+    
+    sched_yield();
+}
+
+int sched_waitpid(u32 pid, int* status) {
+    process_t *target = NULL;
+    
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state == PROC_ZOMBIE) {
+            target = &processes[i];
             break;
         }
     }
     
-    if (next != current) {
-        process_t *prev = current;
-        current = next;
+    if (!target) {
+        // Нет такого зомби — ждём
+        process_t *p = current;
+        p->waiting_for = NULL;
         
-        prev->state = PROCESS_READY;
-        next->state = PROCESS_RUNNING;
-        next->time_slice = TIME_SLICE;
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (processes[i].pid == pid && processes[i].state != PROC_ZOMBIE) {
+                p->waiting_for = &processes[i];
+                p->state = PROC_BLOCKED;
+                sched_yield();
+                break;
+            }
+        }
         
-        context_switch(&prev->rsp, next->rsp, next->cr3);
+        if (!p->waiting_for) return -1;
+        
+        // Проснулись — ищем зомби
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (processes[i].pid == pid) {
+                target = &processes[i];
+                break;
+            }
+        }
+    }
+    
+    if (target && status) {
+        *status = target->exit_code;
+    }
+    
+    // Окончательно удаляем
+    if (target) {
+        target->state = PROC_UNUSED;
+        process_count--;
+    }
+    
+    return pid;
+}
+
+void sched_kill(u32 pid) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state != PROC_ZOMBIE) {
+            processes[i].state = PROC_ZOMBIE;
+            processes[i].exit_code = -1;
+            free_process(&processes[i]);
+            return;
+        }
     }
 }
 
-void sched_sleep(u32 ticks) {
-    if (!current || current == idle) return;
-    current->state = PROCESS_WAITING;
-    current->sleep_until = system_ticks + ticks;
-    sched_yield();
-}
-
-process_t *sched_current(void) {
+process_t* sched_current(void) {
     return current;
 }
 
-void sched_tick(void) {
-    if (!current || current == idle) return;
-    
-    current->time_slice--;
-    if (current->time_slice <= 0) {
-        sched_yield();
-    }
-    
-    for (int i = 1; i < MAX_PROCESSES; i++) {
-        if (processes[i].state == PROCESS_WAITING && 
-            processes[i].sleep_until <= system_ticks) {
-            processes[i].state = PROCESS_READY;
-        }
-    }
+u32 sched_get_pid(void) {
+    return current ? current->pid : 0;
+}
+
+u32 sched_get_ppid(void) {
+    return current ? current->ppid : 0;
+}
+
+int sched_get_current_pid(void) {
+    if (current) return current->pid;
+    return -1;
 }
 
 int sched_get_processes(process_t** buf, int max) {
-    if (!buf) return process_count;
     int count = 0;
-    for (int i = 0; i < MAX_PROCESSES && count < max; i++) {
-        if (processes[i].state != 0) {
-            buf[count] = &processes[i];
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state != PROC_UNUSED) {
             count++;
         }
     }
+    
+    if (buf && max > 0) {
+        int idx = 0;
+        for (int i = 0; i < MAX_PROCESSES && idx < max; i++) {
+            if (processes[i].state != PROC_UNUSED) {
+                buf[idx++] = &processes[i];
+            }
+        }
+    }
+    
     return count;
 }
 
 int sched_kill(int pid) {
     if (pid <= 0) return -1;
     
-    for (int i = 1; i < MAX_PROCESSES; i++) {
-        if (processes[i].pid == pid) {
-            if (processes[i].state == PROCESS_ZOMBIE) return -1;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state != PROC_ZOMBIE) {
+            processes[i].state = PROC_ZOMBIE;
+            processes[i].exit_code = -1;
             
-            processes[i].state = PROCESS_ZOMBIE;
-            
+            // Освобождаем ресурсы
             if (processes[i].kstack) {
-                kfree(processes[i].kstack);
-                processes[i].kstack = NULL;
+                kfree((void*)processes[i].kstack);
+                processes[i].kstack = 0;
             }
             
-            if (processes[i].cr3 != 0) {
+            if (processes[i].cr3 && processes[i].cr3 != (u64)0x1000) {
                 free_address_space((u64*)processes[i].cr3);
                 processes[i].cr3 = 0;
             }
@@ -328,27 +601,14 @@ int sched_kill(int pid) {
 }
 
 void sched_signal(int pid, int sig) {
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (processes[i].pid == pid && processes[i].state != PROCESS_ZOMBIE) {
-            if (sig == SIGINT) {
-                // Помечаем процесс для завершения
-                processes[i].state = PROCESS_ZOMBIE;
-                if (processes[i].kstack) {
-                    kfree(processes[i].kstack);
-                    processes[i].kstack = NULL;
-                }
-                if (processes[i].cr3 != 0) {
-                    free_address_space((u64*)processes[i].cr3);
-                    processes[i].cr3 = 0;
-                }
-                process_count--;
+    if (sig == 2) {  // SIGINT
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (processes[i].pid == pid && processes[i].state != PROC_ZOMBIE) {
+                processes[i].state = PROC_ZOMBIE;
+                processes[i].exit_code = -1;
+                free_process(&processes[i]);
+                break;
             }
-            break;
         }
     }
-}
-
-int sched_get_current_pid(void) {
-    if (current) return current->pid;
-    return -1;
 }
