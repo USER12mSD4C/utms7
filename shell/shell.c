@@ -14,9 +14,6 @@ static char history[MAX_HISTORY][MAX_LINE_LEN];
 static int history_count = 0;
 static int history_pos = -1;
 
-static volatile int command_interrupted = 0;
-static void (*interrupt_handler)(void) = NULL;
-
 void shell_init(void) {
     cmd_count = 0;
     for (int i = 0; i < MAX_COMMANDS; i++) {
@@ -27,25 +24,6 @@ void shell_init(void) {
     for (int i = 0; i < MAX_HISTORY; i++) history[i][0] = '\0';
     history_count = 0;
     history_pos = -1;
-    command_interrupted = 0;
-    interrupt_handler = NULL;
-}
-
-void shell_set_interrupt_handler(void (*handler)(void)) {
-    interrupt_handler = handler;
-}
-
-void shell_interrupt(void) {
-    command_interrupted = 1;
-    if (interrupt_handler) {
-        interrupt_handler();
-    }
-}
-
-int shell_was_interrupted(void) {
-    int ret = command_interrupted;
-    command_interrupted = 0;
-    return ret;
 }
 
 static void add_to_history(const char *line) {
@@ -111,8 +89,6 @@ int shell_execute(const char *cmd_line) {
     char **argv = shell_split_args(buf, &argc);
     if (argc == 0) return 0;
     
-    command_interrupted = 0;
-    
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(argv[0], commands[i].name) == 0) {
             return commands[i].func(argc, argv);
@@ -161,15 +137,6 @@ void shell_run(void) {
             
             key = keyboard_getc();
             
-            // Ctrl+C — прерывание текущей команды
-            if (key == 3) {
-                vga_putchar('\n');
-                shell_print("^C\n");
-                shell_interrupt();
-                break;
-            }
-            
-            // Стрелка вверх
             if (key == 0xE0) {
                 if (history_pos < history_count - 1) {
                     history_pos++;
@@ -184,7 +151,6 @@ void shell_run(void) {
                 continue;
             }
             
-            // Стрелка вниз
             if (key == 0xE1) {
                 if (history_pos > 0) {
                     history_pos--;
@@ -206,7 +172,6 @@ void shell_run(void) {
                 continue;
             }
             
-            // Стрелка влево
             if (key == 0xE2) {
                 if (cursor_x > input_x) {
                     cursor_x--;
@@ -215,7 +180,6 @@ void shell_run(void) {
                 continue;
             }
             
-            // Стрелка вправо
             if (key == 0xE3) {
                 if (cursor_x - input_x < pos) {
                     cursor_x++;
@@ -224,12 +188,10 @@ void shell_run(void) {
                 continue;
             }
             
-            // Tab
             if (key == '\t') {
                 continue;
             }
             
-            // Backspace
             if (key == '\b' || key == 0x7F) {
                 if (cursor_x > input_x) {
                     int idx = cursor_x - input_x - 1;
@@ -244,7 +206,6 @@ void shell_run(void) {
                 continue;
             }
             
-            // Enter
             if (key == '\n' || key == '\r') {
                 line[pos] = '\0';
                 vga_putchar('\n');
@@ -255,7 +216,6 @@ void shell_run(void) {
                 break;
             }
             
-            // Обычные символы
             if (key >= 32 && key <= 126) {
                 if (pos < MAX_LINE_LEN - 1) {
                     int idx = cursor_x - input_x;

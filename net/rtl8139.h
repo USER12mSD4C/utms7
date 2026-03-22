@@ -11,5 +11,6 @@ int rtl8139_recv(u8 *buffer, u16 max_len);
 void rtl8139_get_mac(u8 *mac);
 void rtl8139_handle_irq(void);
 int rtl8139_present(void);
+void rtl8139_dump_regs(void);
 
 #endif

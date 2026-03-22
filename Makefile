@@ -32,6 +32,7 @@ DRIVER_OBJS = drivers/vga.o \
               drivers/udisk.o \
               drivers/pci.o
 
+# Сеть
 NET_OBJS = net/arp.o \
            net/ip.o \
            net/icmp.o \
@@ -41,6 +42,7 @@ NET_OBJS = net/arp.o \
            net/dns.o \
            net/http.o \
            net/net.o \
+           net/e1000.o \
            net/rtl8139.o
 
 # Библиотеки
@@ -66,7 +68,7 @@ APP_OBJS = apps/installer.o \
 # Все объекты
 NORMAL_OBJS = $(CORE_OBJS) $(DRIVER_OBJS) $(NET_OBJS) $(LIB_OBJS) $(FS_OBJS) $(SHELL_OBJS) $(APP_OBJS)
 
-# LiveCD объекты
+# LiveCD объекты (с isofs)
 LIVECD_OBJS = kernel/entry.o \
               kernel/kernel-livecd.o \
               kernel/kinit.o \
@@ -97,6 +99,7 @@ LIVECD_OBJS = kernel/entry.o \
               net/dns.o \
               net/http.o \
               net/net.o \
+              net/e1000.o \
               net/rtl8139.o \
               lib/string.o \
               lib/font.o \
@@ -104,6 +107,7 @@ LIVECD_OBJS = kernel/entry.o \
               lib/zlib.o \
               fs/ufs.o \
               fs/fat.o \
+              fs/isofs.o \
               shell/shell.o \
               shell/uss.o \
               commands/builtin.o \
@@ -135,6 +139,22 @@ kom: $(MKMOD)
 
 # ==================== ОБРАЗЫ ====================
 
+# Создание образа установки
+install.img: kernel.bin kom
+	@echo "Creating install image..."
+	@rm -rf install_root
+	@mkdir -p install_root/modules
+	cp kernel.bin install_root/kernel.bin
+	cp modules/*.ko install_root/modules/ 2>/dev/null || true
+	@echo "Building ISO image..."
+	grub-mkrescue -o install.img install_root/ 2>/dev/null || \
+	mkisofs -o install.img -R -J install_root/ 2>/dev/null || \
+	xorriso -as mkisofs -o install.img -R -J install_root/ 2>/dev/null || \
+	(echo "No ISO tool found, creating raw image..." && \
+	 dd if=/dev/zero of=install.img bs=1M count=10 && \
+	 echo "RAW image created (placeholder)")
+	@echo "Install image created: install.img"
+
 # Создание ISO образа
 iso: kernel.bin kom
 	@mkdir -p iso/boot/grub iso/modules
@@ -145,31 +165,23 @@ iso: kernel.bin kom
 	grub-mkrescue -o utms.iso iso/
 
 # Создание LiveCD образа
-livecd: kernel-livecd.bin kernel.bin kom
+livecd: kernel-livecd.bin install.img
 	@echo "Creating LiveCD..."
 	@rm -rf livecd
-	@mkdir -p livecd/boot/grub
-	@mkdir -p livecd/install/modules
-	
-	@echo "Copying LiveCD kernel..."
+	@mkdir -p livecd/boot/grub livecd/install
 	cp kernel-livecd.bin livecd/boot/kernel.bin
-	
-	@echo "Copying installation kernel..."
-	cp kernel.bin livecd/install/kernel.bin
-	
-	@echo "Copying modules..."
-	cp modules/*.ko livecd/install/modules/ 2>/dev/null || true
-	
-	@echo "Creating grub.cfg..."
+	cp install.img livecd/install/install.img
 	echo 'set timeout=5' > livecd/boot/grub/grub.cfg
 	echo 'menuentry "UTMS LiveCD" {' >> livecd/boot/grub/grub.cfg
 	echo '    multiboot2 /boot/kernel.bin' >> livecd/boot/grub/grub.cfg
 	echo '    boot' >> livecd/boot/grub/grub.cfg
 	echo '}' >> livecd/boot/grub/grub.cfg
-	
-	@echo "Building ISO..."
+	echo 'menuentry "UTMS LiveCD (verbose)" {' >> livecd/boot/grub/grub.cfg
+	echo '    multiboot2 /boot/kernel.bin verbose' >> livecd/boot/grub/grub.cfg
+	echo '    boot' >> livecd/boot/grub/grub.cfg
+	echo '}' >> livecd/boot/grub/grub.cfg
 	grub-mkrescue -o utms-livecd.iso livecd/
-	@echo "Done: utms-livecd.iso"
+	@echo "LiveCD created: utms-livecd.iso"
 
 # Создание дисков
 disk5g.img:
@@ -182,36 +194,40 @@ disk2.img:
 
 # Запуск с ISO (грузится с CD)
 run: iso disk5g.img
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -boot d
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d
 
 # Запуск с LiveCD
 run-livecd: livecd disk5g.img
-	qemu-system-x86_64 -cdrom utms-livecd.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -boot d -net nic,model=rtl8139 -net user
+	qemu-system-x86_64 -cdrom utms-livecd.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d
 
 # Запуск с диском напрямую (без CD)
 rundisk: kernel.bin disk5g.img
-	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user
+	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0
 
-# Запуск с двумя дисками
-run-dual: iso disk5g.img disk2.img
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -hdb disk2.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -boot d
+# Запуск с RTL8139
+run-rtl: iso disk5g.img
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d
 
-# Запуск с сетью
-run-net: kernel.bin disk5g.img
-	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -append "console=ttyS0"
+# Запуск с последовательным портом для отладки
+run-serial: iso disk5g.img
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d -serial stdio
 
-# Отладка
+# Отладка (с GDB)
 debug: kernel.bin
-	qemu-system-x86_64 -kernel kernel.bin -m 512 -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -s -S
+	qemu-system-x86_64 -kernel kernel.bin -m 512 -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -s -S
 
-# Запуск с UEFI (если нужно)
+# Запуск с UEFI
 run-uefi: iso disk5g.img
-	qemu-system-x86_64 -bios /usr/share/ovmf/x64/OVMF.fd -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -net nic,model=rtl8139 -net user -boot d
+	qemu-system-x86_64 -bios /usr/share/ovmf/x64/OVMF.fd -cdrom utms.iso -m 512 -hda disk5g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d
+
+# Запуск без графики (только консоль)
+run-nographic: iso disk5g.img
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk5g.img -netdev user,id=net0 -device e1000,netdev=net0 -nographic -append "console=ttyS0"
 
 # ==================== ОЧИСТКА ====================
 
 clean:
-	rm -rf *.o */*.o *.bin *.iso iso/ livecd/
+	rm -rf *.o */*.o *.bin *.iso iso/ livecd/ install_root/ install.img
 
 distclean: clean
 	rm -rf modules/ tools/mkmod disk*.img
@@ -233,4 +249,4 @@ kernel/idt_irq.o: kernel/idt_irq.asm
 kernel/sched_asm.o: kernel/sched_asm.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 
-.PHONY: all clean distclean run run-livecd rundisk run-dual run-net debug run-uefi iso livecd kom
+.PHONY: all clean distclean run run-livecd rundisk run-rtl run-serial debug run-uefi run-nographic iso livecd kom

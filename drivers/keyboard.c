@@ -1,5 +1,7 @@
+// drivers/keyboard.c
 #include "keyboard.h"
 #include "../include/io.h"
+#include "../kernel/sched.h"
 
 #define KEYBOARD_DATA_PORT 0x60
 #define KEYBOARD_STATUS_PORT 0x64
@@ -36,7 +38,6 @@ int keyboard_init(void) {
     return 0;
 }
 
-// НОВОЕ: получить состояние модификаторов
 int keyboard_get_modifiers(void) {
     int mods = 0;
     if (shift) mods |= KEY_MOD_SHIFT;
@@ -51,13 +52,11 @@ void keyboard_handler_c(void) {
     
     u8 scancode = inb(KEYBOARD_DATA_PORT);
     
-    // Extended key (0xE0)
     if (scancode == 0xE0) {
         extended = 1;
         return;
     }
     
-    // Key release
     if (scancode & 0x80) {
         u8 release = scancode & 0x7F;
         if (release == 0x2A || release == 0x36) shift = 0;
@@ -67,7 +66,6 @@ void keyboard_handler_c(void) {
         return;
     }
     
-    // Modifiers
     if (scancode == 0x2A || scancode == 0x36) {
         shift = 1;
         extended = 0;
@@ -87,33 +85,39 @@ void keyboard_handler_c(void) {
     u8 ascii = 0;
     
     if (extended) {
-        // Extended keys (стрелки и т.д.)
         switch(scancode) {
-            case 0x48: ascii = 0xE0; break; // Up
-            case 0x50: ascii = 0xE1; break; // Down
-            case 0x4B: ascii = 0xE2; break; // Left
-            case 0x4D: ascii = 0xE3; break; // Right
-            case 0x47: ascii = 0xE4; break; // Home
-            case 0x4F: ascii = 0xE5; break; // End
-            case 0x49: ascii = 0xE6; break; // PageUp
-            case 0x51: ascii = 0xE7; break; // PageDown
-            case 0x52: ascii = 0xE8; break; // Insert
-            case 0x53: ascii = 0xE9; break; // Delete
+            case 0x48: ascii = 0xE0; break;
+            case 0x50: ascii = 0xE1; break;
+            case 0x4B: ascii = 0xE2; break;
+            case 0x4D: ascii = 0xE3; break;
+            case 0x47: ascii = 0xE4; break;
+            case 0x4F: ascii = 0xE5; break;
+            case 0x49: ascii = 0xE6; break;
+            case 0x51: ascii = 0xE7; break;
+            case 0x52: ascii = 0xE8; break;
+            case 0x53: ascii = 0xE9; break;
             default: ascii = 0;
         }
         extended = 0;
     } else {
-        // Normal keys
         if (scancode < sizeof(normal_keys)) {
             ascii = shift ? shift_keys[scancode] : normal_keys[scancode];
             
-            // Для Ctrl+буква отправляем специальные коды (1-26)
             if (ctrl && ascii >= 'a' && ascii <= 'z') {
                 ascii = ascii - 'a' + 1;
             } else if (ctrl && ascii >= 'A' && ascii <= 'Z') {
                 ascii = ascii - 'A' + 1;
             }
         }
+    }
+    
+    // Ctrl+C — отправляем SIGINT текущему процессу
+    if (ascii == 3) {
+        int pid = sched_get_current_pid();
+        if (pid > 0) {
+            sched_signal(pid, 2);
+        }
+        return;
     }
     
     if (ascii) {

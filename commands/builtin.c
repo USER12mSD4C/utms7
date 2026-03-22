@@ -3,7 +3,6 @@
 #include "../include/string.h"
 #include "../drivers/vga.h"
 #include "../drivers/vesa.h"
-#include "../drivers/keyboard.h"
 #include "../kernel/kapi.h"
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
@@ -16,17 +15,9 @@
 extern int upac_main(int, char**);
 extern void rtl8139_dump_regs(void);
 extern int arp_cache_dump(char *buf, int max_len);
-extern int icmp_send_request(u32 dst_ip, u16 id, u16 seq);
+extern int icmp_ping(u32 dst_ip, int timeout_ms);
 extern int http_get(const char* url, u8** data, u32* size);
-extern int shell_was_interrupted(void);
-extern void shell_set_interrupt_handler(void (*handler)(void));
 extern int icmp_ping_received;
-
-static volatile int ping_interrupted = 0;
-
-static void ping_interrupt_handler(void) {
-    ping_interrupted = 1;
-}
 
 static int cmd_help(int argc, char** argv) {
     (void)argc; (void)argv;
@@ -189,48 +180,9 @@ static int cmd_ping(int argc, char** argv) {
     shell_print("."); shell_print_num((ip >> 8) & 0xFF);
     shell_print("."); shell_print_num(ip & 0xFF);
     shell_print("): 56 data bytes\n");
-    shell_print("Press Ctrl+C to stop\n");
     
-    // Устанавливаем обработчик прерывания
-    ping_interrupted = 0;
-    shell_set_interrupt_handler(ping_interrupt_handler);
-    
-    for (int i = 0; i < 999; i++) {
-        if (ping_interrupted) {
-            shell_print("\n--- "); shell_print(argv[1]); shell_print(" ping statistics ---\n");
-            shell_print_num(i);
-            shell_print(" packets transmitted, 0 received, 100% loss\n");
-            shell_set_interrupt_handler(NULL);
-            return 0;
-        }
-        
-        icmp_send_request(ip, 0x1234, i);
-        
-        int waited = 0;
-        int received = 0;
-        icmp_ping_received = 0;
-        
-        while (waited < 100) {
-            if (ping_interrupted) {
-                shell_print("\n--- "); shell_print(argv[1]); shell_print(" ping statistics ---\n");
-                shell_print_num(i + 1);
-                shell_print(" packets transmitted, ");
-                shell_print_num(received ? 1 : 0);
-                shell_print(" received\n");
-                shell_set_interrupt_handler(NULL);
-                return 0;
-            }
-            
-            if (icmp_ping_received) {
-                received = 1;
-                break;
-            }
-            
-            for (int j = 0; j < 10000; j++) __asm__ volatile ("pause");
-            waited++;
-        }
-        
-        if (received) {
+    for (int i = 0; i < 4; i++) {
+        if (icmp_ping(ip, 1000) == 0) {
             shell_print("  64 bytes from ");
             shell_print_num((ip >> 24) & 0xFF);
             shell_print("."); shell_print_num((ip >> 16) & 0xFF);
@@ -238,15 +190,13 @@ static int cmd_ping(int argc, char** argv) {
             shell_print("."); shell_print_num(ip & 0xFF);
             shell_print(": icmp_seq=");
             shell_print_num(i);
-            shell_print(" time=0ms\n");
+            shell_print("\n");
         } else {
             shell_print("  Request timeout for icmp_seq=");
             shell_print_num(i);
             shell_print("\n");
         }
     }
-    
-    shell_set_interrupt_handler(NULL);
     return 0;
 }
 

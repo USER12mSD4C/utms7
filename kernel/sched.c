@@ -4,6 +4,8 @@
 #include "../include/string.h"
 #include "paging.h"
 
+#define SIGINT 2
+
 static process_t processes[MAX_PROCESSES];
 static process_t *current = NULL;
 static process_t *idle = NULL;
@@ -322,5 +324,31 @@ int sched_kill(int pid) {
             return 0;
         }
     }
+    return -1;
+}
+
+void sched_signal(int pid, int sig) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state != PROCESS_ZOMBIE) {
+            if (sig == SIGINT) {
+                // Помечаем процесс для завершения
+                processes[i].state = PROCESS_ZOMBIE;
+                if (processes[i].kstack) {
+                    kfree(processes[i].kstack);
+                    processes[i].kstack = NULL;
+                }
+                if (processes[i].cr3 != 0) {
+                    free_address_space((u64*)processes[i].cr3);
+                    processes[i].cr3 = 0;
+                }
+                process_count--;
+            }
+            break;
+        }
+    }
+}
+
+int sched_get_current_pid(void) {
+    if (current) return current->pid;
     return -1;
 }

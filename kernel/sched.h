@@ -54,5 +54,6 @@ process_t *sched_current(void);
 void sched_tick(void);
 int sched_get_processes(process_t** buf, int max);
 int sched_kill(int pid);
-
+void sched_signal(int pid, int sig);
+int sched_get_current_pid(void);
 #endif

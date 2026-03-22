@@ -13,110 +13,85 @@
 typedef struct {
     int used;
     u16 port;
-    u8 *buffer;
-    u32 buffer_len;
-    u32 buffer_capacity;
+    u8 *buf;
+    u32 len;
+    u32 cap;
 } udp_socket_t;
 
-static udp_socket_t udp_sockets[UDP_MAX_PORTS];
+static udp_socket_t socks[UDP_MAX_PORTS];
 
-static u16 udp_checksum(ip_hdr_t *ip, udp_hdr_t *udp, int udp_len) {
+static u16 udp_checksum(ip_hdr_t *ip, udp_hdr_t *udp, int len) {
     u32 sum = 0;
-    sum += (ip->src >> 16) & 0xFFFF;
-    sum += ip->src & 0xFFFF;
-    sum += (ip->dst >> 16) & 0xFFFF;
-    sum += ip->dst & 0xFFFF;
-    sum += ip->protocol;
-    sum += udp_len;
-    
+    sum += (ip->src >> 16) & 0xFFFF; sum += ip->src & 0xFFFF;
+    sum += (ip->dst >> 16) & 0xFFFF; sum += ip->dst & 0xFFFF;
+    sum += ip->protocol; sum += len;
     u16 *p = (u16*)udp;
-    for (int i = 0; i < udp_len / 2; i++) sum += p[i];
-    if (udp_len & 1) sum += *((u8*)udp + udp_len - 1);
-    
+    for (int i = 0; i < len / 2; i++) sum += p[i];
+    if (len & 1) sum += *((u8*)udp + len - 1);
     while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
     return ~sum;
 }
 
 void udp_init(void) {
-    for (int i = 0; i < UDP_MAX_PORTS; i++) {
-        udp_sockets[i].used = 0;
-        udp_sockets[i].port = 0;
-        udp_sockets[i].buffer = NULL;
-        udp_sockets[i].buffer_len = 0;
-        udp_sockets[i].buffer_capacity = 0;
-    }
+    for (int i = 0; i < UDP_MAX_PORTS; i++) socks[i].used = 0;
     vga_write("UDP initialized\n");
 }
 
-int udp_send(u32 dst_ip, u16 src_port, u16 dst_port, u8 *data, int len) {
-    int udp_len = sizeof(udp_hdr_t) + len;
-    u8 *packet = kmalloc(udp_len);
-    if (!packet) return -1;
-    
-    udp_hdr_t *udp = (udp_hdr_t*)packet;
-    udp->src_port = htons(src_port);
-    udp->dst_port = htons(dst_port);
-    udp->length = htons(udp_len);
+int udp_send(u32 dst, u16 srcp, u16 dstp, u8 *data, int len) {
+    int ulen = sizeof(udp_hdr_t) + len;
+    u8 *pkt = kmalloc(ulen);
+    if (!pkt) return -1;
+    udp_hdr_t *udp = (udp_hdr_t*)pkt;
+    udp->src_port = htons(srcp);
+    udp->dst_port = htons(dstp);
+    udp->length = htons(ulen);
     udp->checksum = 0;
-    
-    if (len > 0 && data) {
-        memcpy(packet + sizeof(udp_hdr_t), data, len);
-    }
-    
-    ip_hdr_t pseudo_ip;
-    pseudo_ip.src = net_get_ip();
-    pseudo_ip.dst = dst_ip;
-    pseudo_ip.protocol = IP_PROTO_UDP;
-    udp->checksum = udp_checksum(&pseudo_ip, udp, udp_len);
-    
-    int res = ip_send_packet(dst_ip, IP_PROTO_UDP, packet, udp_len);
-    kfree(packet);
+    if (len > 0 && data) memcpy(pkt + sizeof(udp_hdr_t), data, len);
+    ip_hdr_t ip;
+    ip.src = net_get_ip();
+    ip.dst = dst;
+    ip.protocol = IP_PROTO_UDP;
+    udp->checksum = udp_checksum(&ip, udp, ulen);
+    int res = ip_send_packet(dst, IP_PROTO_UDP, pkt, ulen);
+    kfree(pkt);
     return res;
 }
 
 int udp_bind(u16 port) {
     for (int i = 0; i < UDP_MAX_PORTS; i++) {
-        if (!udp_sockets[i].used) {
-            udp_sockets[i].used = 1;
-            udp_sockets[i].port = port;
-            udp_sockets[i].buffer_len = 0;
-            udp_sockets[i].buffer_capacity = UDP_BUFFER_SIZE;
-            udp_sockets[i].buffer = kmalloc(udp_sockets[i].buffer_capacity);
-            if (!udp_sockets[i].buffer) {
-                udp_sockets[i].used = 0;
-                return -1;
-            }
+        if (!socks[i].used) {
+            socks[i].used = 1;
+            socks[i].port = port;
+            socks[i].len = 0;
+            socks[i].cap = UDP_BUFFER_SIZE;
+            socks[i].buf = kmalloc(socks[i].cap);
             return i;
         }
     }
     return -1;
 }
 
-void udp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip) {
-    (void)src_ip;
-    (void)dst_ip;
+void udp_handle_packet(u8 *pkt, int len, u32 src, u32 dst) {
+    (void)src; (void)dst;
     if (len < sizeof(udp_hdr_t)) return;
-    
-    udp_hdr_t *udp = (udp_hdr_t*)packet;
-    u16 dst_port = ntohs(udp->dst_port);
-    int udp_len = ntohs(udp->length);
-    int data_len = udp_len - sizeof(udp_hdr_t);
-    u8 *data = packet + sizeof(udp_hdr_t);
-    
-    if (data_len < 0 || udp_len > len) return;
+    udp_hdr_t *udp = (udp_hdr_t*)pkt;
+    u16 dstp = ntohs(udp->dst_port);
+    int ulen = ntohs(udp->length);
+    int dlen = ulen - sizeof(udp_hdr_t);
+    u8 *data = pkt + sizeof(udp_hdr_t);
+    if (dlen < 0 || ulen > len) return;
     
     for (int i = 0; i < UDP_MAX_PORTS; i++) {
-        if (udp_sockets[i].used && udp_sockets[i].port == dst_port) {
-            if (data_len > udp_sockets[i].buffer_capacity) {
-                u8 *new_buf = kmalloc(data_len);
-                if (!new_buf) return;
-                if (udp_sockets[i].buffer) kfree(udp_sockets[i].buffer);
-                udp_sockets[i].buffer = new_buf;
-                udp_sockets[i].buffer_capacity = data_len;
+        if (socks[i].used && socks[i].port == dstp) {
+            if (dlen > socks[i].cap) {
+                u8 *new = kmalloc(dlen);
+                if (!new) return;
+                if (socks[i].buf) kfree(socks[i].buf);
+                socks[i].buf = new;
+                socks[i].cap = dlen;
             }
-            
-            memcpy(udp_sockets[i].buffer, data, data_len);
-            udp_sockets[i].buffer_len = data_len;
+            memcpy(socks[i].buf, data, dlen);
+            socks[i].len = dlen;
             return;
         }
     }
@@ -124,14 +99,12 @@ void udp_handle_packet(u8 *packet, int len, u32 src_ip, u32 dst_ip) {
 
 int udp_recv(u8 *buf, int len) {
     for (int i = 0; i < UDP_MAX_PORTS; i++) {
-        if (udp_sockets[i].used && udp_sockets[i].buffer_len > 0) {
-            int copy_len = udp_sockets[i].buffer_len;
-            if (copy_len > len) copy_len = len;
-            
-            memcpy(buf, udp_sockets[i].buffer, copy_len);
-            udp_sockets[i].buffer_len = 0;
-            
-            return copy_len;
+        if (socks[i].used && socks[i].len > 0) {
+            int copy = socks[i].len;
+            if (copy > len) copy = len;
+            memcpy(buf, socks[i].buf, copy);
+            socks[i].len = 0;
+            return copy;
         }
     }
     return 0;
