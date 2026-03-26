@@ -1,9 +1,12 @@
+// kernel/idt.c
 #include "idt.h"
 #include "../include/io.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
 #include "../net/rtl8139.h"
 #include "../net/e1000.h"
+#include "panic.h"
+#include "../include/string.h"
 
 static struct idt_entry idt[256] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
@@ -12,6 +15,7 @@ u32 system_ticks = 0;
 static u32 timer_ticks = 0;
 static u32 seconds = 0;
 
+// Обработчики прерываний
 static void irq0_handler(void) {
     timer_ticks++;
     system_ticks = timer_ticks;
@@ -36,6 +40,12 @@ static void irq11_handler(void) {
     outb(0xA0, 0x20);
 }
 
+static void exception_handler(u32 num) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "Exception %d", num);
+    panic(buf);
+}
+
 static void default_handler(void) {
     outb(0x20, 0x20);
 }
@@ -54,17 +64,25 @@ int idt_init(void) {
     idtp.limit = sizeof(struct idt_entry) * 256 - 1;
     idtp.base = (u64)&idt[0];
     
-    for (int i = 0; i < 256; i++) {
+    // Исключения
+    for (int i = 0; i < 32; i++) {
+        idt_set_gate(i, (u64)exception_handler, 0x08, 0x8E);
+    }
+    
+    // Остальные
+    for (int i = 32; i < 256; i++) {
         idt_set_gate(i, (u64)default_handler, 0x08, 0x8E);
     }
     
-    idt_set_gate(32, (u64)irq0_handler, 0x08, 0x8E);
-    idt_set_gate(33, (u64)irq1_handler, 0x08, 0x8E);
-    idt_set_gate(44, (u64)irq12_handler, 0x08, 0x8E);
-    idt_set_gate(43, (u64)irq11_handler, 0x08, 0x8E);
+    // IRQ
+    idt_set_gate(32, (u64)irq0_handler, 0x08, 0x8E);   // PIT
+    idt_set_gate(33, (u64)irq1_handler, 0x08, 0x8E);   // Keyboard
+    idt_set_gate(44, (u64)irq12_handler, 0x08, 0x8E);  // Mouse
+    idt_set_gate(43, (u64)irq11_handler, 0x08, 0x8E);  // Network
     
     __asm__ volatile ("lidt %0" : : "m"(idtp));
     
+    // PIC
     outb(0x20, 0x11);
     outb(0xA0, 0x11);
     outb(0x21, 0x20);

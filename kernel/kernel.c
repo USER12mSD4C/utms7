@@ -1,27 +1,28 @@
-// kernel/syscall.c
-#include "syscall.h"
-#include "sched.h"
-#include "idt.h"
-#include "../fs/ufs.h"
+// kernel/kernel.c
 #include "../drivers/vga.h"
-#include "../drivers/keyboard.h"
-#include "../drivers/disk.h"
-#include "../include/udisk.h"
-#include "../net/tcp.h"
-#include "../net/udp.h"
-#include "../net/dns.h"
-#include "../net/net.h"
 #include "memory.h"
 #include "paging.h"
-#include "elf.h"
-#include "../include/string.h"
+#include "gdt.h"
+#include "idt.h"
+#include "sched.h"
+#include "syscall.h"
+#include "../drivers/pci.h"
+#include "../drivers/disk.h"
+#include "../net/net.h"
+#include "../fs/ufs.h"
+#include "../include/shell_api.h"
+#include "../commands/builtin.h"
+#include "../commands/fs.h"
 
+// Внешние функции
 extern void disk_commands_init(void);
 extern void commands_init(void);
 extern void fs_commands_init(void);
 extern void shell_init(void);
 extern void shell_run(void);
 extern void kinit_run_all(void);
+
+// timer_init уже объявлен в idt.h, не нужно объявлять ещё раз
 
 void kernel_main(void *mb_info) {
     (void)mb_info;

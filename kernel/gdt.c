@@ -1,11 +1,10 @@
+// kernel/gdt.c
 #include "gdt.h"
 #include "../include/io.h"
 #include "../drivers/vga.h"
 
 struct gdt_entry gdt[6];
 struct gdt_ptr gp;
-
-extern void gdt_flush(u64);
 
 void gdt_set_gate(u32 num, u64 base, u64 limit, u8 access, u8 gran) {
     gdt[num].base_low = (base & 0xFFFF);
@@ -51,5 +50,6 @@ int gdt_init(void) {
     gdt_set_gate(5, 0, 0, 0, 0);
     
     gdt_flush();
+    
     return 0;
 }

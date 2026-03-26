@@ -24,7 +24,6 @@ typedef struct {
     u32 blocks;
 } sys_stat_t;
 
-
 static int is_user_pointer(void* ptr) {
     u64 addr = (u64)ptr;
     return (addr >= 0x400000 && addr < 0x800000000000);
@@ -32,12 +31,6 @@ static int is_user_pointer(void* ptr) {
 
 static int copy_from_user(void* dest, const void* src, u64 size) {
     if (!is_user_pointer((void*)src)) return -1;
-    memcpy(dest, src, size);
-    return 0;
-}
-
-static int copy_to_user(void* dest, const void* src, u64 size) {
-    if (!is_user_pointer(dest)) return -1;
     memcpy(dest, src, size);
     return 0;
 }

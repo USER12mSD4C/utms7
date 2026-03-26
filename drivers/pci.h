@@ -1,3 +1,4 @@
+// drivers/pci.h
 #ifndef PCI_H
 #define PCI_H
 
@@ -12,7 +13,6 @@ typedef struct {
     u8 header_type;
     u32 bar[6];
     u8 irq;
-    // Добавляем эти поля
     u8 bus;
     u8 slot;
     u8 func;

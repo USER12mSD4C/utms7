@@ -1,3 +1,4 @@
+// kernel/sched.c
 #include "sched.h"
 #include "memory.h"
 #include "paging.h"
@@ -138,6 +139,10 @@ void sched_init(void) {
     idle->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
     idle->kstack_top = idle->kstack + KERNEL_STACK_SIZE;
     idle->cr3 = (u64)0x1000;
+    idle->heap_start = 0;
+    idle->heap_end = 0;
+    
+    for (int i = 0; i < 32; i++) idle->fds[i].used = 0;
     
     enqueue_ready(idle);
     current = idle;
@@ -172,6 +177,10 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     p->regs.rflags = 0x202;
     p->regs.cs = 0x08;
     p->regs.ss = 0x10;
+    p->heap_start = 0;
+    p->heap_end = 0;
+    
+    for (int i = 0; i < 32; i++) p->fds[i].used = 0;
     
     enqueue_ready(p);
     process_count++;
@@ -179,10 +188,17 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
 }
 
 void sched_exit(int code) {
-    (void)code;
     if (!current || current->pid == 1) return;
     
+    current->exit_code = code;
     current->state = PROC_ZOMBIE;
+    
+    // Разбудить родителя, если ждёт
+    if (current->waiting_for) {
+        current->waiting_for->state = PROC_READY;
+        enqueue_ready(current->waiting_for);
+    }
+    
     free_process(current);
     process_count--;
     sched_yield();
@@ -308,4 +324,39 @@ int sched_kill(int pid) {
         }
     }
     return -1;
+}
+
+// ==================== ДОБАВЛЕННЫЕ ФУНКЦИИ ====================
+
+process_t* sched_current(void) {
+    return current;
+}
+
+int sched_waitpid(u32 pid, int* status) {
+    process_t *target = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid) {
+            target = &processes[i];
+            break;
+        }
+    }
+    
+    if (!target) return -1;
+    
+    if (target->state == PROC_ZOMBIE) {
+        if (status) *status = target->exit_code;
+        target->state = PROC_UNUSED;
+        process_count--;
+        return pid;
+    }
+    
+    current->waiting_for = target;
+    current->state = PROC_BLOCKED;
+    sched_yield();
+    
+    if (status) *status = target->exit_code;
+    target->state = PROC_UNUSED;
+    process_count--;
+    
+    return pid;
 }

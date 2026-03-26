@@ -83,6 +83,8 @@ void sched_tick(void);
 u32 sched_get_pid(void);
 u32 sched_get_ppid(void);
 int sched_get_processes(process_t** buf, int max);
+process_t* sched_current(void);
+int sched_waitpid(u32 pid, int* status);
 
 u64* create_address_space(void);
 void free_address_space(u64* pml4);
