@@ -64,7 +64,7 @@ typedef struct {
 } __attribute__((packed)) e1000_tx_desc_t;
 
 typedef struct {
-    u16 mmio;
+    u32 mmio_base;
     u8 mac[6];
     u8 *rx_buf[RX_DESC_COUNT];
     u8 *tx_buf[TX_DESC_COUNT];
@@ -78,11 +78,11 @@ typedef struct {
 static e1000_softc_t *sc = NULL;
 
 static inline u32 e1000_read32(u32 reg) {
-    return *(volatile u32*)((u64)sc->mmio + reg);
+    return *(volatile u32*)(sc->mmio_base + reg);
 }
 
 static inline void e1000_write32(u32 reg, u32 val) {
-    *(volatile u32*)((u64)sc->mmio + reg) = val;
+    *(volatile u32*)(sc->mmio_base + reg) = val;
 }
 
 static void e1000_read_mac(void) {
@@ -95,6 +95,28 @@ static void e1000_read_mac(void) {
     sc->mac[3] = (rar_low >> 24) & 0xFF;
     sc->mac[4] = rar_high & 0xFF;
     sc->mac[5] = (rar_high >> 8) & 0xFF;
+    
+    // Если MAC нулевой, пробуем альтернативный способ
+    if (sc->mac[0] == 0 && sc->mac[1] == 0 && sc->mac[2] == 0 &&
+        sc->mac[3] == 0 && sc->mac[4] == 0 && sc->mac[5] == 0) {
+        for (int i = 0; i < 3; i++) {
+            e1000_write32(E1000_EERD, (i << 8) | 1);
+            u32 val = e1000_read32(E1000_EERD);
+            sc->mac[i*2] = (val >> 8) & 0xFF;
+            sc->mac[i*2+1] = (val >> 0) & 0xFF;
+        }
+    }
+    
+    // Если всё ещё нулевой — ставим дефолтный
+    if (sc->mac[0] == 0 && sc->mac[1] == 0 && sc->mac[2] == 0 &&
+        sc->mac[3] == 0 && sc->mac[4] == 0 && sc->mac[5] == 0) {
+        sc->mac[0] = 0x52;
+        sc->mac[1] = 0x54;
+        sc->mac[2] = 0x00;
+        sc->mac[3] = 0x12;
+        sc->mac[4] = 0x34;
+        sc->mac[5] = 0x56;
+    }
 }
 
 int e1000_init(pci_dev_t *pci) {
@@ -105,13 +127,13 @@ int e1000_init(pci_dev_t *pci) {
     if (!sc) return -1;
     memset(sc, 0, sizeof(e1000_softc_t));
     
-    sc->mmio = pci->bar[0] & 0xFFFFFFF0;
+    sc->mmio_base = pci->bar[0] & 0xFFFFFFF0;
     sc->rx_cur = 0;
     sc->tx_cur = 0;
     sc->attached = 1;
     
     vga_write("  E1000: MMIO base=0x");
-    vga_write_hex(sc->mmio);
+    vga_write_hex(sc->mmio_base);
     vga_write("\n");
     
     u32 cmd = pci_read_config(pci->bus, pci->slot, pci->func, 0x04);

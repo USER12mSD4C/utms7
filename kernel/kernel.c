@@ -1,21 +1,27 @@
-// kernel/kernel.c
+// kernel/syscall.c
+#include "syscall.h"
+#include "sched.h"
+#include "idt.h"
+#include "../fs/ufs.h"
 #include "../drivers/vga.h"
+#include "../drivers/keyboard.h"
+#include "../drivers/disk.h"
+#include "../include/udisk.h"
+#include "../net/tcp.h"
+#include "../net/udp.h"
+#include "../net/dns.h"
+#include "../net/net.h"
 #include "memory.h"
 #include "paging.h"
-#include "gdt.h"
-#include "idt.h"
-#include "sched.h"
-#include "syscall.h"      // НОВОЕ
-#include "../drivers/pci.h"
-#include "../drivers/disk.h"
-#include "../net/net.h"
-#include "../fs/ufs.h"
-#include "../commands/builtin.h"
-#include "../commands/fs.h"
-#include "../include/shell_api.h"
+#include "elf.h"
+#include "../include/string.h"
 
 extern void disk_commands_init(void);
-extern void syscall_init(void);   // НОВОЕ
+extern void commands_init(void);
+extern void fs_commands_init(void);
+extern void shell_init(void);
+extern void shell_run(void);
+extern void kinit_run_all(void);
 
 void kernel_main(void *mb_info) {
     (void)mb_info;
@@ -24,7 +30,7 @@ void kernel_main(void *mb_info) {
     
     vga_init();
     vga_clear();
-    vga_write("UTMS v0.4 - Full Network Edition\n");
+    vga_write("UTMS v0.4 - Network Edition\n");
     
     vga_write("[1/9] GDT... ");
     gdt_init();
@@ -35,7 +41,7 @@ void kernel_main(void *mb_info) {
     vga_write("OK\n");
     
     vga_write("[3/9] Memory... ");
-    memory_init(0x100000, 32 * 1024 * 1024);
+    memory_init(0x100000, 64 * 1024 * 1024);
     vga_write("OK\n");
     
     vga_write("[4/9] Paging... ");
@@ -45,8 +51,8 @@ void kernel_main(void *mb_info) {
     }
     vga_write("OK\n");
     
-    vga_write("[5/9] Disk... ");
-    disk_init();
+    vga_write("[5/9] Timer... ");
+    timer_init();
     vga_write("OK\n");
     
     vga_write("[6/9] Scheduler... ");
@@ -54,20 +60,24 @@ void kernel_main(void *mb_info) {
     vga_write("OK\n");
     
     vga_write("[7/9] Syscalls... ");
-    syscall_init();   // НОВОЕ (вместо kapi_init)
+    syscall_init();
     vga_write("OK\n");
     
-    vga_write("[8/9] PCI... ");
+    vga_write("[8/9] Disk... ");
+    disk_init();
+    vga_write("OK\n");
+    
+    vga_write("[9/9] PCI... ");
     pci_init();
-    vga_write("OK\n");
-    
-    vga_write("[9/9] Network... ");
-    net_init();
     vga_write("OK\n");
     
     __asm__ volatile ("sti");
     
-    vga_write("\nMounting UFS... ");
+    vga_write("\nNetwork init... ");
+    net_init();
+    vga_write("OK\n");
+    
+    vga_write("Mounting UFS... ");
     if (ufs_mount(2048, 0) == 0) {
         vga_write("OK\n");
     } else {
@@ -78,6 +88,10 @@ void kernel_main(void *mb_info) {
     vga_write_num(disk_get_disk_count());
     vga_write("\n");
     
+    vga_write("Loading modules... ");
+    kinit_run_all();
+    vga_write("OK\n");
+    
     vga_write("\nShell init... ");
     shell_init();
     commands_init();
@@ -87,6 +101,7 @@ void kernel_main(void *mb_info) {
     
     vga_write("\nUTMS is ready!\n");
     vga_write("Type 'help' for commands\n");
+    vga_write("Type 'upac -Sy' to sync packages\n\n");
     
     shell_run();
 }

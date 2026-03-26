@@ -123,5 +123,10 @@ void vga_write(const char* s) {
     while (*s) vga_putchar(*s++);
 }
 
+void vga_flush(void) {
+    // Просто принудительный вывод
+    __asm__ volatile ("pause");
+}
+
 static const char __vga_name[] __attribute__((section(".module_name"))) = "vga";
 static int (*__vga_entry)(void) __attribute__((section(".module_entry"))) = vga_init;

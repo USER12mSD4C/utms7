@@ -108,8 +108,8 @@ _start:
     or eax, 0x80000001
     mov cr0, eax
     
-    ; GDT
-    lgdt [gdt64_ptr]
+    ; GDT для перехода в long mode
+    lgdt [gdt32_ptr]
     jmp 0x08:start64
 
 bits 64
@@ -133,10 +133,10 @@ start64:
 
 section .data
 align 16
-gdt64:
+gdt32:
     dq 0x0000000000000000
     dq 0x0020980000000000
     dq 0x0000920000000000
-gdt64_ptr:
-    dw $ - gdt64 - 1
-    dq gdt64
+gdt32_ptr:
+    dw $ - gdt32 - 1
+    dq gdt32

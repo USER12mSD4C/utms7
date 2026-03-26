@@ -23,7 +23,7 @@ struct dirent {
     int is_dir;
 };
 
-// Системные вызовы (НЕ static, чтобы не конфликтовать с syscall.h)
+// Системные вызовы
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6);
 
 // ==================== STDIO ====================
@@ -34,6 +34,8 @@ ssize_t write(int fd, const void *buf, size_t count);
 off_t lseek(int fd, off_t offset, int whence);
 int stat(const char *path, struct stat *buf);
 int fstat(int fd, struct stat *buf);
+int dup(int oldfd);
+int dup2(int oldfd, int newfd);
 
 // ==================== STDIO (printf family) ====================
 int printf(const char *fmt, ...);

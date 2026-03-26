@@ -30,6 +30,8 @@
 #define SYS_chdir       22
 #define SYS_getcwd      23
 #define SYS_readdir     24
+#define SYS_dup         25
+#define SYS_dup2        26
 
 // Сетевые
 #define SYS_socket      40
@@ -43,7 +45,6 @@
 #define SYS_gettime     52
 #define SYS_fork        57
 
-// Прототипы (УБИРАЕМ static inline, оставляем только объявление)
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6);
 
 #endif

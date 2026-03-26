@@ -1,7 +1,7 @@
 // kernel/syscall.c
 #include "syscall.h"
 #include "sched.h"
-#include "elf.h"
+#include "idt.h"
 #include "../fs/ufs.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
@@ -13,18 +13,17 @@
 #include "../net/net.h"
 #include "memory.h"
 #include "paging.h"
+#include "elf.h"
 #include "../include/string.h"
 
 #define MAX_FDS 32
 
-// Структура для stat
 typedef struct {
     u32 size;
     u8 is_dir;
     u32 blocks;
 } sys_stat_t;
 
-// ==================== ПРОВЕРКА УКАЗАТЕЛЕЙ ====================
 
 static int is_user_pointer(void* ptr) {
     u64 addr = (u64)ptr;
@@ -43,64 +42,13 @@ static int copy_to_user(void* dest, const void* src, u64 size) {
     return 0;
 }
 
-// ==================== СЕТЕВЫЕ ВЫЗОВЫ ====================
-
-static long sys_gethostbyname(long name, long ip, long a3, long a4, long a5, long a6) {
-    (void)a3; (void)a4; (void)a5; (void)a6;
-    if (!is_user_pointer((void*)name) || !is_user_pointer((void*)ip)) return -1;
-    
-    char name_buf[256];
-    copy_from_user(name_buf, (void*)name, 255);
-    name_buf[255] = '\0';
-    
-    u32 ip_addr = dns_lookup(name_buf, net_get_dns());
-    if (ip_addr == 0) return -1;
-    
-    copy_to_user((void*)ip, &ip_addr, 4);
+static int copy_to_user(void* dest, const void* src, u64 size) {
+    if (!is_user_pointer(dest)) return -1;
+    memcpy(dest, src, size);
     return 0;
 }
 
-static long sys_socket(long domain, long type, long protocol, long a4, long a5, long a6) {
-    (void)domain; (void)type; (void)protocol; (void)a4; (void)a5; (void)a6;
-    return tcp_socket();
-}
-
-static long sys_connect(long fd, long addr, long port, long a4, long a5, long a6) {
-    (void)a4; (void)a5; (void)a6;
-    return tcp_connect(fd, (u32)addr, (u16)port);
-}
-
-static long sys_send(long fd, long buf, long len, long flags, long a5, long a6) {
-    (void)flags; (void)a5; (void)a6;
-    if (!is_user_pointer((void*)buf)) return -1;
-    
-    u8 *data = kmalloc(len);
-    if (!data) return -1;
-    copy_from_user(data, (void*)buf, len);
-    
-    int res = tcp_send(fd, data, len);
-    kfree(data);
-    return res;
-}
-
-static long sys_recv(long fd, long buf, long len, long flags, long a5, long a6) {
-    (void)flags; (void)a5; (void)a6;
-    if (!is_user_pointer((void*)buf)) return -1;
-    
-    u8 *data = kmalloc(len);
-    if (!data) return -1;
-    
-    int res = tcp_recv(fd, data, len);
-    if (res > 0) {
-        copy_to_user((void*)buf, data, res);
-    }
-    
-    kfree(data);
-    return res;
-}
-
-// ==================== ОСТАЛЬНЫЕ СИСТЕМНЫЕ ВЫЗОВЫ ====================
-// (все остальные функции из предыдущего syscall.c)
+// ==================== БАЗОВЫЕ ВЫЗОВЫ ====================
 
 static long sys_exit(long code, long a2, long a3, long a4, long a5, long a6) {
     (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
@@ -266,11 +214,60 @@ static long sys_yield(long a1, long a2, long a3, long a4, long a5, long a6) {
     return 0;
 }
 
-static long sys_kill(long pid, long sig, long a3, long a4, long a5, long a6) {
-    (void)sig; (void)a3; (void)a4; (void)a5; (void)a6;
-    sched_kill(pid);
+static long sys_mmap(long addr, long size, long prot, long flags, long fd, long offset) {
+    (void)addr; (void)prot; (void)flags; (void)fd; (void)offset;
+    process_t *p = sched_current();
+    if (!p) return -1;
+    
+    u64 pages = (size + 4095) / 4096;
+    u64 virt = p->heap_end;
+    u64* pml4 = (u64*)p->cr3;
+    
+    for (u64 i = 0; i < pages; i++) {
+        u64 phys = (u64)kmalloc(4096);
+        paging_map_for_process(pml4, phys, virt + i * 4096, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+    }
+    
+    p->heap_end = virt + pages * 4096;
+    return virt;
+}
+
+static long sys_munmap(long addr, long size, long a3, long a4, long a5, long a6) {
+    (void)addr; (void)size; (void)a3; (void)a4; (void)a5; (void)a6;
     return 0;
 }
+
+static long sys_exec(long path, long argv, long envp, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p) return -1;
+    if (!is_user_pointer((void*)path)) return -1;
+    
+    char path_buf[256];
+    copy_from_user(path_buf, (void*)path, 255);
+    path_buf[255] = '\0';
+    
+    u8 *elf_data;
+    u32 elf_size;
+    if (ufs_read(path_buf, &elf_data, &elf_size) != 0) return -1;
+    
+    int res = elf_load_current(elf_data, elf_size, p);
+    kfree(elf_data);
+    
+    return res;
+}
+
+static long sys_waitpid(long pid, long status, long options, long a4, long a5, long a6) {
+    (void)options; (void)a4; (void)a5; (void)a6;
+    return sched_waitpid(pid, (int*)status);
+}
+
+static long sys_kill(long pid, long sig, long a3, long a4, long a5, long a6) {
+    (void)sig; (void)a3; (void)a4; (void)a5; (void)a6;
+    return sched_kill(pid);
+}
+
+// ==================== ФАЙЛОВЫЕ ОПЕРАЦИИ ====================
 
 static long sys_lseek(long fd, long offset, long whence, long a4, long a5, long a6) {
     (void)a4; (void)a5; (void)a6;
@@ -431,58 +428,116 @@ static long sys_readdir(long path, long entries, long count, long a4, long a5, l
     return to_copy;
 }
 
-static long sys_fork(long a1, long a2, long a3, long a4, long a5, long a6) {
-    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-    return -1; // TODO: реализовать fork
+// ==================== ДИСКОВЫЕ ОПЕРАЦИИ ====================
+
+static long sys_disk_list(long disks, long max, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)disks)) return -1;
+    
+    udisk_scan();
+    
+    int count = 0;
+    for (int i = 0; i < 4 && count < max; i++) {
+        disk_info_t* d = udisk_get_info(i);
+        if (d && d->present) {
+            copy_to_user((void*)((char*)disks + count * sizeof(disk_info_t)), d, sizeof(disk_info_t));
+            count++;
+        }
+    }
+    
+    return count;
 }
 
-static long sys_exec(long path, long argv, long envp, long a4, long a5, long a6) {
-    (void)a4; (void)a5; (void)a6;
-    process_t *p = sched_current();
+static long sys_partition_mount(long dev, long point, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)dev) || !is_user_pointer((void*)point)) return -1;
+    
+    char dev_buf[32];
+    char point_buf[256];
+    copy_from_user(dev_buf, (void*)dev, 31);
+    copy_from_user(point_buf, (void*)point, 255);
+    dev_buf[31] = '\0';
+    point_buf[255] = '\0';
+    
+    partition_t* p = udisk_get_partition(dev_buf);
     if (!p) return -1;
-    if (!is_user_pointer((void*)path)) return -1;
     
-    char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
-    path_buf[255] = '\0';
+    if (ufs_ismounted()) return -1;
     
-    u8 *elf_data;
-    u32 elf_size;
-    if (ufs_read(path_buf, &elf_data, &elf_size) != 0) return -1;
+    if (ufs_mount_with_point(p->start_lba, p->disk_num, point_buf) != 0) return -1;
     
-    int res = elf_load_current(elf_data, elf_size, p);
-    kfree(elf_data);
+    extern void fs_set_current_dir(const char*);
+    fs_set_current_dir(point_buf);
+    return 0;
+}
+
+static long sys_partition_umount(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    return ufs_umount();
+}
+
+// ==================== СЕТЕВЫЕ ОПЕРАЦИИ ====================
+
+static long sys_socket(long domain, long type, long protocol, long a4, long a5, long a6) {
+    (void)domain; (void)type; (void)protocol; (void)a4; (void)a5; (void)a6;
+    return tcp_socket();
+}
+
+static long sys_connect(long fd, long addr, long port, long a4, long a5, long a6) {
+    (void)a4; (void)a5; (void)a6;
+    return tcp_connect(fd, (u32)addr, (u16)port);
+}
+
+static long sys_send(long fd, long buf, long len, long flags, long a5, long a6) {
+    (void)flags; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)buf)) return -1;
     
+    u8 *data = kmalloc(len);
+    if (!data) return -1;
+    copy_from_user(data, (void*)buf, len);
+    
+    int res = tcp_send(fd, data, len);
+    kfree(data);
     return res;
 }
 
-static long sys_waitpid(long pid, long status, long options, long a4, long a5, long a6) {
-    (void)options; (void)a4; (void)a5; (void)a6;
-    return sched_waitpid(pid, (int*)status);
-}
-
-static long sys_mmap(long addr, long size, long prot, long flags, long fd, long offset) {
-    (void)addr; (void)prot; (void)flags; (void)fd; (void)offset;
-    process_t *p = sched_current();
-    if (!p) return -1;
+static long sys_recv(long fd, long buf, long len, long flags, long a5, long a6) {
+    (void)flags; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)buf)) return -1;
     
-    u64 pages = (size + 4095) / 4096;
-    u64 virt = p->heap_end;
-    u64* pml4 = (u64*)p->cr3;
+    u8 *data = kmalloc(len);
+    if (!data) return -1;
     
-    for (u64 i = 0; i < pages; i++) {
-        u64 phys = (u64)kmalloc(4096);
-        paging_map_for_process(pml4, phys, virt + i * 4096, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+    int res = tcp_recv(fd, data, len);
+    if (res > 0) {
+        copy_to_user((void*)buf, data, res);
     }
     
-    p->heap_end = virt + pages * 4096;
-    return virt;
+    kfree(data);
+    return res;
 }
 
-static long sys_munmap(long addr, long size, long a3, long a4, long a5, long a6) {
-    (void)addr; (void)size; (void)a3; (void)a4; (void)a5; (void)a6;
+static long sys_gethostbyname(long name, long ip, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)name) || !is_user_pointer((void*)ip)) return -1;
+    
+    char name_buf[256];
+    copy_from_user(name_buf, (void*)name, 255);
+    name_buf[255] = '\0';
+    
+    u32 ip_addr = dns_lookup(name_buf, net_get_dns());
+    if (ip_addr == 0) return -1;
+    
+    copy_to_user((void*)ip, &ip_addr, 4);
     return 0;
 }
+
+static long sys_getip(long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    return net_get_ip();
+}
+
+// ==================== ИНФОРМАЦИОННЫЕ ВЫЗОВЫ ====================
 
 static long sys_meminfo(long total, long used, long free, long a4, long a5, long a6) {
     (void)a4; (void)a5; (void)a6;
@@ -499,9 +554,36 @@ static long sys_meminfo(long total, long used, long free, long a4, long a5, long
     return 0;
 }
 
+static long sys_ps(long processes, long max, long a3, long a4, long a5, long a6) {
+    (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)processes)) return -1;
+    
+    process_t* kernel_procs[MAX_PROCESSES];
+    int count = sched_get_processes(kernel_procs, MAX_PROCESSES);
+    
+    int to_copy = (count < max) ? count : max;
+    
+    typedef struct {
+        int pid;
+        int ppid;
+        char name[32];
+        int state;
+    } ps_entry_t;
+    
+    for (int i = 0; i < to_copy; i++) {
+        ps_entry_t entry;
+        entry.pid = kernel_procs[i]->pid;
+        entry.ppid = kernel_procs[i]->ppid;
+        strcpy(entry.name, kernel_procs[i]->name);
+        entry.state = kernel_procs[i]->state;
+        copy_to_user((void*)((char*)processes + i * sizeof(ps_entry_t)), &entry, sizeof(ps_entry_t));
+    }
+    
+    return to_copy;
+}
+
 static long sys_gettime(long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-    extern u32 get_ticks(void);
     return get_ticks();
 }
 
@@ -513,39 +595,43 @@ static syscall_t syscall_table[64];
 void syscall_init(void) {
     for (int i = 0; i < 64; i++) syscall_table[i] = NULL;
     
-    syscall_table[SYS_exit] = sys_exit;
-    syscall_table[SYS_read] = sys_read;
-    syscall_table[SYS_write] = sys_write;
-    syscall_table[SYS_open] = sys_open;
-    syscall_table[SYS_close] = sys_close;
-    syscall_table[SYS_brk] = sys_brk;
-    syscall_table[SYS_getpid] = sys_getpid;
-    syscall_table[SYS_getppid] = sys_getppid;
-    syscall_table[SYS_sleep] = sys_sleep;
-    syscall_table[SYS_yield] = sys_yield;
-    syscall_table[SYS_mmap] = sys_mmap;
-    syscall_table[SYS_munmap] = sys_munmap;
-    syscall_table[SYS_exec] = sys_exec;
-    syscall_table[SYS_waitpid] = sys_waitpid;
-    syscall_table[SYS_kill] = sys_kill;
-    syscall_table[SYS_lseek] = sys_lseek;
-    syscall_table[SYS_stat] = sys_stat;
-    syscall_table[SYS_fstat] = sys_fstat;
-    syscall_table[SYS_mkdir] = sys_mkdir;
-    syscall_table[SYS_rmdir] = sys_rmdir;
-    syscall_table[SYS_unlink] = sys_unlink;
-    syscall_table[SYS_rename] = sys_rename;
-    syscall_table[SYS_chdir] = sys_chdir;
-    syscall_table[SYS_getcwd] = sys_getcwd;
-    syscall_table[SYS_readdir] = sys_readdir;
-    syscall_table[SYS_fork] = sys_fork;
-    syscall_table[SYS_socket] = sys_socket;
-    syscall_table[SYS_connect] = sys_connect;
-    syscall_table[SYS_send] = sys_send;
-    syscall_table[SYS_recv] = sys_recv;
-    syscall_table[SYS_gethostbyname] = sys_gethostbyname;
-    syscall_table[SYS_meminfo] = sys_meminfo;
-    syscall_table[SYS_gettime] = sys_gettime;
+    syscall_table[0] = sys_exit;
+    syscall_table[1] = sys_read;
+    syscall_table[2] = sys_write;
+    syscall_table[3] = sys_open;
+    syscall_table[4] = sys_close;
+    syscall_table[5] = sys_brk;
+    syscall_table[6] = sys_getpid;
+    syscall_table[7] = sys_getppid;
+    syscall_table[8] = sys_sleep;
+    syscall_table[9] = sys_yield;
+    syscall_table[10] = sys_mmap;
+    syscall_table[11] = sys_munmap;
+    syscall_table[12] = sys_exec;
+    syscall_table[13] = sys_waitpid;
+    syscall_table[14] = sys_kill;
+    syscall_table[15] = sys_lseek;
+    syscall_table[16] = sys_stat;
+    syscall_table[17] = sys_fstat;
+    syscall_table[18] = sys_mkdir;
+    syscall_table[19] = sys_rmdir;
+    syscall_table[20] = sys_unlink;
+    syscall_table[21] = sys_rename;
+    syscall_table[22] = sys_chdir;
+    syscall_table[23] = sys_getcwd;
+    syscall_table[24] = sys_readdir;
+    syscall_table[30] = sys_disk_list;
+    syscall_table[37] = sys_partition_mount;
+    syscall_table[38] = sys_partition_umount;
+    syscall_table[40] = sys_socket;
+    syscall_table[41] = sys_connect;
+    syscall_table[45] = sys_send;
+    syscall_table[46] = sys_recv;
+    syscall_table[47] = sys_gethostbyname;
+    syscall_table[48] = sys_getip;
+    syscall_table[50] = sys_meminfo;
+    syscall_table[51] = sys_ps;
+    syscall_table[52] = sys_gettime;
 }
 
 long syscall_handler_c(long num, long a1, long a2, long a3, long a4, long a5, long a6) {

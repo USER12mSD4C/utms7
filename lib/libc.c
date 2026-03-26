@@ -30,6 +30,8 @@
 #define SYS_chdir       22
 #define SYS_getcwd      23
 #define SYS_readdir     24
+#define SYS_dup         25
+#define SYS_dup2        26
 #define SYS_socket      40
 #define SYS_connect     41
 #define SYS_send        45
@@ -91,6 +93,14 @@ int stat(const char *path, struct stat *buf) {
 
 int fstat(int fd, struct stat *buf) {
     return syscall(SYS_fstat, fd, (long)buf, 0, 0, 0, 0);
+}
+
+int dup(int oldfd) {
+    return syscall(SYS_dup, oldfd, 0, 0, 0, 0, 0);
+}
+
+int dup2(int oldfd, int newfd) {
+    return syscall(SYS_dup2, oldfd, newfd, 0, 0, 0, 0);
 }
 
 // ==================== ФАЙЛОВАЯ СИСТЕМА ====================

@@ -18,5 +18,6 @@ void vga_setpos(u8 x, u8 y);
 void vga_getpos(u8* x, u8* y);
 void vga_update_cursor(void);
 void vga_scroll_lines(i8 lines);
+void vga_flush(void);
 
 #endif

@@ -1,4 +1,3 @@
-// kernel/sched.h
 #ifndef SCHED_H
 #define SCHED_H
 
@@ -32,7 +31,6 @@ typedef struct process_t {
     proc_state_t state;
     
     u64 cr3;
-    
     u64 kstack;
     u64 kstack_top;
     u64 ustack;
@@ -45,7 +43,6 @@ typedef struct process_t {
     
     u64 user_rip;
     u64 user_rsp;
-    
     u64 heap_start;
     u64 heap_end;
     
@@ -73,25 +70,20 @@ typedef struct process_t {
     
 } process_t;
 
-// Прототипы
 void sched_init(void);
 int sched_create_kthread(const char* name, void (*entry)(void*), void* arg);
 int sched_create_user(const char* name, const char* elf_path, char** argv, char** envp);
 void sched_exit(int code);
 void sched_yield(void);
 void sched_sleep(u32 ms);
-void sched_wakeup(u32 pid);
 int sched_waitpid(u32 pid, int* status);
+int sched_kill(int pid);
 process_t* sched_current(void);
 void sched_tick(void);
 u32 sched_get_pid(void);
 u32 sched_get_ppid(void);
-
-// Дополнительные функции
 int sched_get_processes(process_t** buf, int max);
-int sched_kill(int pid);
 
-// Функции для работы с адресными пространствами
 u64* create_address_space(void);
 void free_address_space(u64* pml4);
 int paging_map_for_process(u64* pml4, u64 phys, u64 virt, u64 flags);
