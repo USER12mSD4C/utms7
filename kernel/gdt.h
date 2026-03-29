@@ -9,11 +9,8 @@ struct gdt_entry {
     u16 base_low;
     u8 base_middle;
     u8 access;
-    u8 limit_high : 4;
-    u8 flags : 4;
+    u8 granularity;
     u8 base_high;
-    u32 base_upper;
-    u32 reserved;
 } __attribute__((packed));
 
 struct gdt_ptr {
@@ -22,6 +19,5 @@ struct gdt_ptr {
 } __attribute__((packed));
 
 int gdt_init(void);
-void gdt_set_gate(u32 num, u64 base, u64 limit, u8 access, u8 gran);
 
 #endif

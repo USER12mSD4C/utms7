@@ -14,7 +14,6 @@
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 
-// Внешние функции
 extern void disk_commands_init(void);
 extern void commands_init(void);
 extern void fs_commands_init(void);
@@ -22,11 +21,10 @@ extern void shell_init(void);
 extern void shell_run(void);
 extern void kinit_run_all(void);
 
-// timer_init уже объявлен в idt.h, не нужно объявлять ещё раз
-
 void kernel_main(void *mb_info) {
     (void)mb_info;
     
+    // Держим прерывания выключенными до полной инициализации
     __asm__ volatile ("cli");
     
     vga_init();
@@ -72,6 +70,7 @@ void kernel_main(void *mb_info) {
     pci_init();
     vga_write("OK\n");
     
+    // Включаем прерывания ТОЛЬКО сейчас, после полной инициализации
     __asm__ volatile ("sti");
     
     vga_write("\nNetwork init... ");

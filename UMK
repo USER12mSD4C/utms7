@@ -6,7 +6,7 @@ LD = ld
 MKMOD = tools/mkmod
 
 ASFLAGS = -f elf64
-CFLAGS = -m64 -ffreestanding -nostdlib -Iinclude -fno-stack-protector -mno-red-zone -mcmodel=large -mno-sse -O2 -g
+CFLAGS = -m64 -ffreestanding -nostdlib -Iinclude -fno-stack-protector -mno-red-zone -mno-sse -O2 -g
 LDFLAGS = -m elf_x86_64 -T linker.ld -nostdlib
 
 # ==================== ПАТТЕРН-ПРАВИЛА ====================

@@ -13,11 +13,6 @@ struct idt_entry {
     u32 zero;
 } __attribute__((packed));
 
-struct idt_ptr {
-    u16 limit;
-    u64 base;
-} __attribute__((packed));
-
 extern u32 system_ticks;
 
 int idt_init(void);
