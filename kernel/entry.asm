@@ -1,4 +1,3 @@
-; kernel/entry.asm
 [bits 32]
 global _start
 extern kernel_main
@@ -12,12 +11,6 @@ header_start:
     dd 0
     dd header_end - header_start
     dd 0x100000000 - (0xe85250d6 + 0 + (header_end - header_start))
-    
-    align 8
-    dw 2
-    dw 0
-    dd 12
-    dd 0
     
     align 8
     dw 0
@@ -38,42 +31,47 @@ multiboot_info:
 section .text
 _start:
     cli
+    mov [multiboot_info], ebx
     
-    mov dword [multiboot_info], ebx
-    mov dword [multiboot_info + 4], 0
-    
-    mov ebx, __bss_start
+    ; очистка BSS
     mov ecx, __bss_end
-    sub ecx, ebx
-    mov edi, ebx
+    mov eax, __bss_start
+    sub ecx, eax
+    mov edi, __bss_start
     xor eax, eax
     rep stosb
     
+    ; страничная адресация
     mov edi, 0x1000
     mov cr3, edi
     xor eax, eax
     mov ecx, 4096
     rep stosd
     
+    ; PML4[0] -> PDPT
     mov edi, 0x1000
     mov eax, 0x2000
     or eax, 3
     mov [edi], eax
     
+    ; PML4[510] -> PDPT2
     mov eax, 0x4000
     or eax, 3
     mov [edi + 510*8], eax
     
+    ; PDPT[0] -> PD
     mov edi, 0x2000
     mov eax, 0x3000
     or eax, 3
     mov [edi], eax
     
+    ; PDPT2[0] -> PD2
     mov edi, 0x4000
     mov eax, 0x5000
     or eax, 3
     mov [edi], eax
     
+    ; заполняем PD
     mov edi, 0x3000
     mov eax, 0x83
     mov ecx, 512
@@ -83,6 +81,7 @@ _start:
     add edi, 8
     loop .map_pd
     
+    ; framebuffer
     mov edi, 0x5000
     xor eax, eax
     mov ecx, 4096
@@ -93,19 +92,23 @@ _start:
     or eax, 0x83
     mov [edi + 0x3F40], eax
     
+    ; PAE
     mov eax, cr4
     or eax, 1 << 5
     mov cr4, eax
     
+    ; long mode
     mov ecx, 0xC0000080
     rdmsr
     or eax, 1 << 8
     wrmsr
     
+    ; paging
     mov eax, cr0
     or eax, 0x80000001
     mov cr0, eax
     
+    ; GDT
     lgdt [gdt64_ptr]
     jmp 0x08:start64
 
@@ -132,8 +135,8 @@ section .data
 align 16
 gdt64:
     dq 0x0000000000000000
-    dq 0x00af9a000000ffff
-    dq 0x00cf92000000ffff
+    dq 0x0020980000000000
+    dq 0x0000920000000000
 gdt64_ptr:
     dw $ - gdt64 - 1
     dq gdt64
