@@ -1,4 +1,3 @@
-// kernel/sched.c
 #include "sched.h"
 #include "memory.h"
 #include "paging.h"
@@ -193,7 +192,6 @@ void sched_exit(int code) {
     current->exit_code = code;
     current->state = PROC_ZOMBIE;
     
-    // Разбудить родителя, если ждёт
     if (current->waiting_for) {
         current->waiting_for->state = PROC_READY;
         enqueue_ready(current->waiting_for);
@@ -325,8 +323,6 @@ int sched_kill(int pid) {
     }
     return -1;
 }
-
-// ==================== ДОБАВЛЕННЫЕ ФУНКЦИИ ====================
 
 process_t* sched_current(void) {
     return current;

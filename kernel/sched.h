@@ -76,15 +76,13 @@ int sched_create_user(const char* name, const char* elf_path, char** argv, char*
 void sched_exit(int code);
 void sched_yield(void);
 void sched_sleep(u32 ms);
+void sched_tick(void);
 int sched_waitpid(u32 pid, int* status);
 int sched_kill(int pid);
 process_t* sched_current(void);
-void sched_tick(void);
 u32 sched_get_pid(void);
 u32 sched_get_ppid(void);
 int sched_get_processes(process_t** buf, int max);
-process_t* sched_current(void);
-int sched_waitpid(u32 pid, int* status);
 
 u64* create_address_space(void);
 void free_address_space(u64* pml4);
