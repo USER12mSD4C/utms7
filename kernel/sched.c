@@ -14,14 +14,13 @@ static u32 process_count = 0;
 
 static void enqueue_ready(process_t *p) {
     if (!p || p->state != PROC_READY) return;
+    p->next = NULL;
     if (!ready_queue) {
         ready_queue = p;
-        p->next = NULL;
     } else {
         process_t *last = ready_queue;
         while (last->next) last = last->next;
         last->next = p;
-        p->next = NULL;
     }
 }
 
@@ -55,6 +54,7 @@ static void remove_from_ready(process_t *p) {
 
 static void enqueue_sleep(process_t *p) {
     if (!p || p->state != PROC_SLEEPING) return;
+    p->next = NULL;
     if (!sleep_queue || p->sleep_until < sleep_queue->sleep_until) {
         p->next = sleep_queue;
         sleep_queue = p;
@@ -265,10 +265,9 @@ void sched_sleep(u32 ms) {
 void sched_tick(void) {
     if (!current) return;
     
-    static u32 last_tick = 0;
     u32 now = get_ticks();
-    if (now != last_tick) {
-        last_tick = now;
+    
+    if (sleep_queue && now >= sleep_queue->sleep_until) {
         while (sleep_queue && sleep_queue->sleep_until <= now) {
             process_t *p = sleep_queue;
             sleep_queue = sleep_queue->next;
@@ -281,7 +280,10 @@ void sched_tick(void) {
     if (current->ticks_left > 0) {
         current->ticks_left--;
     }
-    if (current->ticks_left == 0 || current->state != PROC_RUNNING) {
+    
+    if (current->ticks_left == 0 && current->state == PROC_RUNNING) {
+        current->state = PROC_READY;
+        enqueue_ready(current);
         sched_yield();
     }
 }

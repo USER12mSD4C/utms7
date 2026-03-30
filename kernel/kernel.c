@@ -24,8 +24,6 @@ extern void kinit_run_all(void);
 void kernel_main(void *mb_info) {
     (void)mb_info;
     
-    // Держим прерывания выключенными до полной инициализации
-    __asm__ volatile ("cli");
     
     vga_init();
     vga_clear();
@@ -69,9 +67,6 @@ void kernel_main(void *mb_info) {
     vga_write("[9/9] PCI... ");
     pci_init();
     vga_write("OK\n");
-    
-    // Включаем прерывания ТОЛЬКО сейчас, после полной инициализации
-    __asm__ volatile ("sti");
     
     vga_write("\nNetwork init... ");
     net_init();
