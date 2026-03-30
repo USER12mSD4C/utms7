@@ -20,9 +20,10 @@ struct idt_ptr {
 
 int idt_init(void);
 int timer_init(void);
-void irq_register(int irq, void* handler);
 u32 get_ticks(void);
 u32 get_seconds(void);
+
+// Обработчики на C
 void irq0_handler_c(void);
 void irq1_handler_c(void);
 void irq11_handler_c(void);

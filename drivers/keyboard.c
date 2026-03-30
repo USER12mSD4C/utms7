@@ -35,6 +35,15 @@ static u8 extended = 0;
 int keyboard_init(void) {
     buffer_head = buffer_tail = 0;
     shift = ctrl = alt = extended = 0;
+    
+    outb(0x64, 0xAD);
+    for (int i = 0; i < 1000; i++) __asm__ volatile ("pause");
+    outb(0x64, 0xAE);
+    for (int i = 0; i < 1000; i++) __asm__ volatile ("pause");
+    outb(KEYBOARD_DATA_PORT, 0xFF);
+    for (int i = 0; i < 10000; i++) __asm__ volatile ("pause");
+    outb(KEYBOARD_DATA_PORT, 0xF4);
+    
     return 0;
 }
 
@@ -86,16 +95,16 @@ void keyboard_handler_c(void) {
     
     if (extended) {
         switch(scancode) {
-            case 0x48: ascii = 0xE0; break;
-            case 0x50: ascii = 0xE1; break;
-            case 0x4B: ascii = 0xE2; break;
-            case 0x4D: ascii = 0xE3; break;
-            case 0x47: ascii = 0xE4; break;
-            case 0x4F: ascii = 0xE5; break;
-            case 0x49: ascii = 0xE6; break;
-            case 0x51: ascii = 0xE7; break;
-            case 0x52: ascii = 0xE8; break;
-            case 0x53: ascii = 0xE9; break;
+            case 0x48: ascii = KEY_UP; break;
+            case 0x50: ascii = KEY_DOWN; break;
+            case 0x4B: ascii = KEY_LEFT; break;
+            case 0x4D: ascii = KEY_RIGHT; break;
+            case 0x47: ascii = KEY_HOME; break;
+            case 0x4F: ascii = KEY_END; break;
+            case 0x49: ascii = KEY_PGUP; break;
+            case 0x51: ascii = KEY_PGDN; break;
+            case 0x52: ascii = KEY_INSERT; break;
+            case 0x53: ascii = KEY_DELETE; break;
             default: ascii = 0;
         }
         extended = 0;
@@ -109,13 +118,6 @@ void keyboard_handler_c(void) {
                 ascii = ascii - 'A' + 1;
             }
         }
-    }
-    
-    // Ctrl+C — просто добавляем символ 0x03 в буфер
-    // Пользовательская программа сама должна обрабатывать SIGINT
-    if (ascii == 3) {
-        // Добавляем Ctrl+C в буфер, shell его обработает
-        // Не прерываем процесс напрямую
     }
     
     if (ascii) {
@@ -132,8 +134,13 @@ int keyboard_data_ready(void) {
 }
 
 u8 keyboard_getc(void) {
-    while (buffer_head == buffer_tail);
+    while (buffer_head == buffer_tail) {
+        __asm__ volatile ("pause");
+    }
     u8 c = key_buffer[buffer_tail];
     buffer_tail = (buffer_tail + 1) % KEY_BUFFER_SIZE;
     return c;
 }
+
+static const char __keyboard_name[] __attribute__((section(".module_name"))) = "keyboard";
+static int (*__keyboard_entry)(void) __attribute__((section(".module_entry"))) = keyboard_init;

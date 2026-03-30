@@ -35,22 +35,22 @@ global isr_wrapper29
 global isr_wrapper30
 global isr_wrapper31
 
-global isr_wrapper32
-global isr_wrapper33
-global isr_wrapper34
-global isr_wrapper35
-global isr_wrapper36
-global isr_wrapper37
-global isr_wrapper38
-global isr_wrapper39
-global isr_wrapper40
-global isr_wrapper41
-global isr_wrapper42
-global isr_wrapper43
-global isr_wrapper44
-global isr_wrapper45
-global isr_wrapper46
-global isr_wrapper47
+global irq0_handler_asm
+global irq1_handler_asm
+global irq2_handler_asm
+global irq3_handler_asm
+global irq4_handler_asm
+global irq5_handler_asm
+global irq6_handler_asm
+global irq7_handler_asm
+global irq8_handler_asm
+global irq9_handler_asm
+global irq10_handler_asm
+global irq11_handler_asm
+global irq12_handler_asm
+global irq13_handler_asm
+global irq14_handler_asm
+global irq15_handler_asm
 
 extern exception_handler_c
 extern irq0_handler_c
@@ -71,17 +71,7 @@ isr_wrapper%1:
     jmp isr_common
 %endmacro
 
-%macro IRQ 2
-isr_wrapper%1:
-    push 0
-    push %2
-    jmp irq_common
-%endmacro
-
-; ============================================================
-; Обработчик исключений
-; ============================================================
-isr_common:
+%macro SAVE_REGS 0
     push rax
     push rbx
     push rcx
@@ -97,104 +87,217 @@ isr_common:
     push r13
     push r14
     push r15
-    
+%endmacro
+
+%macro RESTORE_REGS 0
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+%endmacro
+
+isr_common:
+    SAVE_REGS
     mov rdi, [rsp + 136]
     mov rsi, [rsp + 128]
     call exception_handler_c
-    
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    
+    RESTORE_REGS
     add rsp, 16
     iretq
 
-; ============================================================
-; Обработчик IRQ
-; ============================================================
-irq_common:
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
-    
-    ; Сохраняем номер прерывания в r12 (callee-saved)
-    mov r12, [rsp + 136]
-    
-    cmp r12, 32
-    je .irq0
-    cmp r12, 33
-    je .irq1
-    cmp r12, 43
-    je .irq11
-    cmp r12, 44
-    je .irq12
-    jmp .eoi
-    
-.irq0:
+; IRQ обработчики
+irq0_handler_asm:
+    cli
+    SAVE_REGS
     call irq0_handler_c
-    jmp .eoi
-.irq1:
-    call irq1_handler_c
-    jmp .eoi
-.irq11:
-    call irq11_handler_c
-    jmp .eoi
-.irq12:
-    call irq12_handler_c
-    jmp .eoi
-
-.eoi:
-    ; Используем сохранённый номер в r12
+    RESTORE_REGS
     mov al, 0x20
     out 0x20, al
-    cmp r12, 40
-    jl .no_slave
-    out 0xA0, al
-.no_slave:
-    
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-    
-    add rsp, 16
+    sti
     iretq
 
+irq1_handler_asm:
+    cli
+    SAVE_REGS
+    call irq1_handler_c
+    RESTORE_REGS
+    mov al, 0x20
+    out 0x20, al
+    sti
+    iretq
+
+irq2_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq3_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq4_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq5_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq6_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq7_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq8_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq9_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq10_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq11_handler_asm:
+    cli
+    SAVE_REGS
+    call irq11_handler_c
+    RESTORE_REGS
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    sti
+    iretq
+
+irq12_handler_asm:
+    cli
+    SAVE_REGS
+    call irq12_handler_c
+    RESTORE_REGS
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    sti
+    iretq
+
+irq13_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq14_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+irq15_handler_asm:
+    cli
+    SAVE_REGS
+    push rax
+    mov al, 0x20
+    out 0x20, al
+    out 0xA0, al
+    pop rax
+    RESTORE_REGS
+    sti
+    iretq
+
+; Объявления исключений
 ISR_NOERRCODE 0
 ISR_NOERRCODE 1
 ISR_NOERRCODE 2
@@ -227,20 +330,3 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_NOERRCODE 30
 ISR_NOERRCODE 31
-
-IRQ 32, 32
-IRQ 33, 33
-IRQ 34, 34
-IRQ 35, 35
-IRQ 36, 36
-IRQ 37, 37
-IRQ 38, 38
-IRQ 39, 39
-IRQ 40, 40
-IRQ 41, 41
-IRQ 42, 42
-IRQ 43, 43
-IRQ 44, 44
-IRQ 45, 45
-IRQ 46, 46
-IRQ 47, 47

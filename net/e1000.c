@@ -3,6 +3,7 @@
 #include "../include/io.h"
 #include "../include/string.h"
 #include "../kernel/memory.h"
+#include "../kernel/paging.h"
 #include "../drivers/pci.h"
 #include "../drivers/vga.h"
 
@@ -44,6 +45,7 @@
 #define TX_DESC_COUNT 256
 #define RX_BUFFER_SIZE 2048
 #define TX_BUFFER_SIZE 1518
+#define MMIO_SIZE 0x20000
 
 typedef struct {
     u64 addr;
@@ -60,7 +62,7 @@ typedef struct {
     u8 cso;
     u8 status;
     u8 css;
-    u8 special;
+    u16 special;
 } __attribute__((packed)) e1000_tx_desc_t;
 
 typedef struct {
@@ -96,7 +98,6 @@ static void e1000_read_mac(void) {
     sc->mac[4] = rar_high & 0xFF;
     sc->mac[5] = (rar_high >> 8) & 0xFF;
     
-    // Если MAC нулевой, пробуем альтернативный способ
     if (sc->mac[0] == 0 && sc->mac[1] == 0 && sc->mac[2] == 0 &&
         sc->mac[3] == 0 && sc->mac[4] == 0 && sc->mac[5] == 0) {
         for (int i = 0; i < 3; i++) {
@@ -107,7 +108,6 @@ static void e1000_read_mac(void) {
         }
     }
     
-    // Если всё ещё нулевой — ставим дефолтный
     if (sc->mac[0] == 0 && sc->mac[1] == 0 && sc->mac[2] == 0 &&
         sc->mac[3] == 0 && sc->mac[4] == 0 && sc->mac[5] == 0) {
         sc->mac[0] = 0x52;
@@ -117,6 +117,19 @@ static void e1000_read_mac(void) {
         sc->mac[4] = 0x34;
         sc->mac[5] = 0x56;
     }
+}
+
+static int e1000_map_mmio(void) {
+    u64 phys = sc->mmio_base;
+    u64 virt = phys;
+    
+    for (u64 offset = 0; offset < MMIO_SIZE; offset += 4096) {
+        if (paging_map(phys + offset, virt + offset, PAGE_PRESENT | PAGE_WRITABLE) != 0) {
+            return -1;
+        }
+    }
+    
+    return 0;
 }
 
 int e1000_init(pci_dev_t *pci) {
@@ -130,20 +143,33 @@ int e1000_init(pci_dev_t *pci) {
     sc->mmio_base = pci->bar[0] & 0xFFFFFFF0;
     sc->rx_cur = 0;
     sc->tx_cur = 0;
-    sc->attached = 1;
+    sc->attached = 0;
     
     vga_write("  E1000: MMIO base=0x");
     vga_write_hex(sc->mmio_base);
     vga_write("\n");
+    
+    if (e1000_map_mmio() != 0) {
+        vga_write("  E1000: MMIO mapping failed\n");
+        kfree(sc);
+        sc = NULL;
+        return -1;
+    }
     
     u32 cmd = pci_read_config(pci->bus, pci->slot, pci->func, 0x04);
     cmd |= 0x07;
     pci_write_config(pci->bus, pci->slot, pci->func, 0x04, cmd);
     
     e1000_write32(E1000_CTRL, E1000_CTRL_RST);
-    int timeout = 10000;
+    int timeout = 100000;
     while ((e1000_read32(E1000_CTRL) & E1000_CTRL_RST) && timeout-- > 0) {
         __asm__ volatile ("pause");
+    }
+    if (timeout <= 0) {
+        vga_write("  E1000: reset timeout\n");
+        kfree(sc);
+        sc = NULL;
+        return -1;
     }
     
     e1000_read_mac();
@@ -166,22 +192,24 @@ int e1000_init(pci_dev_t *pci) {
         sc->rx_buf[i] = kmalloc(RX_BUFFER_SIZE);
         if (!sc->rx_buf[i]) goto fail;
         sc->rx_desc[i].addr = (u64)sc->rx_buf[i];
+        sc->rx_desc[i].status = 0;
     }
     
     for (int i = 0; i < TX_DESC_COUNT; i++) {
         sc->tx_buf[i] = kmalloc(TX_BUFFER_SIZE);
         if (!sc->tx_buf[i]) goto fail;
         sc->tx_desc[i].addr = (u64)sc->tx_buf[i];
+        sc->tx_desc[i].status = 0;
     }
     
     e1000_write32(E1000_RDBAL, (u32)(u64)sc->rx_desc);
-    e1000_write32(E1000_RDBAH, 0);
+    e1000_write32(E1000_RDBAH, (u32)((u64)sc->rx_desc >> 32));
     e1000_write32(E1000_RDLEN, sizeof(e1000_rx_desc_t) * RX_DESC_COUNT);
     e1000_write32(E1000_RDH, 0);
     e1000_write32(E1000_RDT, RX_DESC_COUNT - 1);
     
     e1000_write32(E1000_TDBAL, (u32)(u64)sc->tx_desc);
-    e1000_write32(E1000_TDBAH, 0);
+    e1000_write32(E1000_TDBAH, (u32)((u64)sc->tx_desc >> 32));
     e1000_write32(E1000_TDLEN, sizeof(e1000_tx_desc_t) * TX_DESC_COUNT);
     e1000_write32(E1000_TDH, 0);
     e1000_write32(E1000_TDT, 0);
@@ -194,6 +222,7 @@ int e1000_init(pci_dev_t *pci) {
     e1000_write32(E1000_ICR, 0xFFFFFFFF);
     e1000_write32(E1000_CTRL, e1000_read32(E1000_CTRL) | E1000_CTRL_SLU);
     
+    sc->attached = 1;
     vga_write("  E1000: OK\n");
     return 0;
     
@@ -212,7 +241,9 @@ void e1000_send(u8 *data, u16 len) {
     
     int idx = sc->tx_cur;
     int timeout = 100000;
-    while ((sc->tx_desc[idx].status & 0x01) && timeout-- > 0) __asm__ volatile ("pause");
+    while ((sc->tx_desc[idx].status & 0x01) && timeout-- > 0) {
+        __asm__ volatile ("pause");
+    }
     if (timeout <= 0) return;
     
     memcpy(sc->tx_buf[idx], data, len);
@@ -265,4 +296,6 @@ void e1000_handle_irq(void) {
     }
 }
 
-int e1000_present(void) { return (sc && sc->attached); }
+int e1000_present(void) {
+    return (sc && sc->attached);
+}

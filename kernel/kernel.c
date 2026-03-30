@@ -8,6 +8,7 @@
 #include "syscall.h"
 #include "../drivers/pci.h"
 #include "../drivers/disk.h"
+#include "../drivers/keyboard.h"
 #include "../net/net.h"
 #include "../fs/ufs.h"
 #include "../include/shell_api.h"
@@ -23,7 +24,6 @@ extern void kinit_run_all(void);
 
 void kernel_main(void *mb_info) {
     (void)mb_info;
-    
     
     vga_init();
     vga_clear();
@@ -66,6 +66,10 @@ void kernel_main(void *mb_info) {
     
     vga_write("[9/9] PCI... ");
     pci_init();
+    vga_write("OK\n");
+    
+    vga_write("[10/10] Keyboard... ");
+    keyboard_init();
     vga_write("OK\n");
     
     vga_write("\nNetwork init... ");
