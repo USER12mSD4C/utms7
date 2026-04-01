@@ -1,4 +1,3 @@
-// kernel/kernel.c
 #include "../drivers/vga.h"
 #include "memory.h"
 #include "paging.h"
@@ -29,42 +28,48 @@ void kernel_main(void *mb_info) {
     vga_clear();
     vga_write("UTMS v0.4 - Network Edition\n");
     
-    vga_write("[1/9] GDT... ");
-    gdt_init();
+    vga_write("[1/10] GDT... ");
+    if (gdt_init() != 0) {
+        vga_write("FAILED\n");
+        while(1) { __asm__ volatile ("hlt"); }
+    }
     vga_write("OK\n");
     
-    vga_write("[2/9] IDT... ");
-    idt_init();
+    vga_write("[2/10] IDT... ");
+    if (idt_init() != 0) {
+        vga_write("FAILED\n");
+        while(1) { __asm__ volatile ("hlt"); }
+    }
     vga_write("OK\n");
     
-    vga_write("[3/9] Memory... ");
+    vga_write("[3/10] Memory... ");
     memory_init(0x100000, 64 * 1024 * 1024);
     vga_write("OK\n");
     
-    vga_write("[4/9] Paging... ");
+    vga_write("[4/10] Paging... ");
     if (paging_init() != 0) {
         vga_write("FAILED\n");
         while(1);
     }
     vga_write("OK\n");
     
-    vga_write("[5/9] Timer... ");
+    vga_write("[5/10] Timer... ");
     timer_init();
     vga_write("OK\n");
     
-    vga_write("[6/9] Scheduler... ");
+    vga_write("[6/10] Scheduler... ");
     sched_init();
     vga_write("OK\n");
     
-    vga_write("[7/9] Syscalls... ");
+    vga_write("[7/10] Syscalls... ");
     syscall_init();
     vga_write("OK\n");
     
-    vga_write("[8/9] Disk... ");
+    vga_write("[8/10] Disk... ");
     disk_init();
     vga_write("OK\n");
     
-    vga_write("[9/9] PCI... ");
+    vga_write("[9/10] PCI... ");
     pci_init();
     vga_write("OK\n");
     
@@ -102,5 +107,6 @@ void kernel_main(void *mb_info) {
     vga_write("Type 'help' for commands\n");
     vga_write("Type 'upac -Sy' to sync packages\n\n");
     
+    __asm__ volatile ("sti");
     shell_run();
 }

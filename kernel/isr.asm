@@ -1,75 +1,5 @@
-; kernel/isr.asm
 bits 64
 section .text
-
-global isr_wrapper0
-global isr_wrapper1
-global isr_wrapper2
-global isr_wrapper3
-global isr_wrapper4
-global isr_wrapper5
-global isr_wrapper6
-global isr_wrapper7
-global isr_wrapper8
-global isr_wrapper9
-global isr_wrapper10
-global isr_wrapper11
-global isr_wrapper12
-global isr_wrapper13
-global isr_wrapper14
-global isr_wrapper15
-global isr_wrapper16
-global isr_wrapper17
-global isr_wrapper18
-global isr_wrapper19
-global isr_wrapper20
-global isr_wrapper21
-global isr_wrapper22
-global isr_wrapper23
-global isr_wrapper24
-global isr_wrapper25
-global isr_wrapper26
-global isr_wrapper27
-global isr_wrapper28
-global isr_wrapper29
-global isr_wrapper30
-global isr_wrapper31
-
-global irq0_handler_asm
-global irq1_handler_asm
-global irq2_handler_asm
-global irq3_handler_asm
-global irq4_handler_asm
-global irq5_handler_asm
-global irq6_handler_asm
-global irq7_handler_asm
-global irq8_handler_asm
-global irq9_handler_asm
-global irq10_handler_asm
-global irq11_handler_asm
-global irq12_handler_asm
-global irq13_handler_asm
-global irq14_handler_asm
-global irq15_handler_asm
-
-extern exception_handler_c
-extern irq0_handler_c
-extern irq1_handler_c
-extern irq11_handler_c
-extern irq12_handler_c
-
-%macro ISR_NOERRCODE 1
-isr_wrapper%1:
-    push 0
-    push %1
-    jmp isr_common
-%endmacro
-
-%macro ISR_ERRCODE 1
-isr_wrapper%1:
-    push %1
-    jmp isr_common
-%endmacro
 
 %macro SAVE_REGS 0
     push rax
@@ -107,6 +37,34 @@ isr_wrapper%1:
     pop rax
 %endmacro
 
+%macro ISR_NOERRCODE 1
+global isr_wrapper%1
+isr_wrapper%1:
+    push 0
+    push %1
+    jmp isr_common
+%endmacro
+
+%macro ISR_ERRCODE 1
+global isr_wrapper%1
+isr_wrapper%1:
+    push %1
+    jmp isr_common
+%endmacro
+
+%macro IRQ 2
+global irq%1
+irq%1:
+    SAVE_REGS
+    mov rdi, %2
+    call irq_handler_dispatch
+    RESTORE_REGS
+    iretq
+%endmacro
+
+extern exception_handler_c
+extern irq_handler_dispatch
+
 isr_common:
     SAVE_REGS
     mov rdi, [rsp + 136]
@@ -116,188 +74,6 @@ isr_common:
     add rsp, 16
     iretq
 
-; IRQ обработчики
-irq0_handler_asm:
-    cli
-    SAVE_REGS
-    call irq0_handler_c
-    RESTORE_REGS
-    mov al, 0x20
-    out 0x20, al
-    sti
-    iretq
-
-irq1_handler_asm:
-    cli
-    SAVE_REGS
-    call irq1_handler_c
-    RESTORE_REGS
-    mov al, 0x20
-    out 0x20, al
-    sti
-    iretq
-
-irq2_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq3_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq4_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq5_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq6_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq7_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq8_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq9_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq10_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq11_handler_asm:
-    cli
-    SAVE_REGS
-    call irq11_handler_c
-    RESTORE_REGS
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    sti
-    iretq
-
-irq12_handler_asm:
-    cli
-    SAVE_REGS
-    call irq12_handler_c
-    RESTORE_REGS
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    sti
-    iretq
-
-irq13_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq14_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-irq15_handler_asm:
-    cli
-    SAVE_REGS
-    push rax
-    mov al, 0x20
-    out 0x20, al
-    out 0xA0, al
-    pop rax
-    RESTORE_REGS
-    sti
-    iretq
-
-; Объявления исключений
 ISR_NOERRCODE 0
 ISR_NOERRCODE 1
 ISR_NOERRCODE 2
@@ -330,3 +106,20 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_NOERRCODE 30
 ISR_NOERRCODE 31
+
+IRQ 0, 0
+IRQ 1, 1
+IRQ 2, 2
+IRQ 3, 3
+IRQ 4, 4
+IRQ 5, 5
+IRQ 6, 6
+IRQ 7, 7
+IRQ 8, 8
+IRQ 9, 9
+IRQ 10, 10
+IRQ 11, 11
+IRQ 12, 12
+IRQ 13, 13
+IRQ 14, 14
+IRQ 15, 15
