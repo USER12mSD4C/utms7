@@ -2,23 +2,10 @@
 #include "../include/io.h"
 #include "../include/string.h"
 #include "panic.h"
+#include "gdt.h"
 
-struct idt_entry {
-    u16 offset_low;
-    u16 selector;
-    u8 ist;
-    u8 flags;
-    u16 offset_mid;
-    u32 offset_high;
-    u32 reserved;
-} __attribute__((packed));
-
-static struct idt_entry idt[256];
-static struct {
-    u16 limit;
-    u64 base;
-} __attribute__((packed)) idtp;
-
+static struct idt_entry idt[IDT_ENTRIES] __attribute__((aligned(16)));
+static struct idt_ptr idtp;
 static irq_handler_t irq_handlers[16];
 u32 system_ticks = 0;
 
@@ -73,6 +60,10 @@ extern void irq14(void);
 extern void irq15(void);
 
 void idt_set_gate(u8 num, u64 base, u16 selector, u8 flags) {
+    if (num >= IDT_ENTRIES) {
+        return;
+    }
+    
     idt[num].offset_low = base & 0xFFFF;
     idt[num].offset_mid = (base >> 16) & 0xFFFF;
     idt[num].offset_high = (base >> 32) & 0xFFFFFFFF;
@@ -80,6 +71,22 @@ void idt_set_gate(u8 num, u64 base, u16 selector, u8 flags) {
     idt[num].ist = 0;
     idt[num].flags = flags;
     idt[num].reserved = 0;
+}
+
+static int idt_verify(void) {
+    struct idt_ptr verify;
+    
+    __asm__ volatile ("sidt %0" : "=m"(verify));
+    
+    if (verify.limit != idtp.limit) {
+        return -1;
+    }
+    
+    if (verify.base != idtp.base) {
+        return -1;
+    }
+    
+    return 0;
 }
 
 void idt_register_irq(int irq, irq_handler_t handler) {
@@ -138,14 +145,20 @@ void irq_handler_dispatch(int irq) {
     if (irq >= 0 && irq < 16 && irq_handlers[irq]) {
         irq_handlers[irq]();
     }
-    if (irq >= 8) {
-        outb(0xA0, 0x20);
-    }
-    outb(0x20, 0x20);
 }
 
 void irq0_handler_c(void) {
     system_ticks++;
+    outb(0x20, 0x20);
+}
+
+void irq11_handler_c(void) {
+    outb(0x20, 0x20);
+    outb(0xA0, 0x20);
+}
+
+void irq12_handler_c(void) {
+    outb(0x20, 0x20);
 }
 
 int idt_init(void) {
@@ -153,55 +166,61 @@ int idt_init(void) {
     idtp.base = (u64)idt;
     
     memset(idt, 0, sizeof(idt));
+    
     for (int i = 0; i < 16; i++) {
         irq_handlers[i] = NULL;
     }
     
     for (int i = 0; i < 32; i++) {
-        idt_set_gate(i, (u64)isr_wrapper0 + i * 16, 0x08, 0x8E);
+        idt_set_gate(i, (u64)isr_wrapper0 + i * 16, __KERNEL_CS, IDT_INTERRUPT_GATE);
     }
     
-    idt_set_gate(32, (u64)irq0, 0x08, 0x8E);
-    idt_set_gate(33, (u64)irq1, 0x08, 0x8E);
-    idt_set_gate(34, (u64)irq2, 0x08, 0x8E);
-    idt_set_gate(35, (u64)irq3, 0x08, 0x8E);
-    idt_set_gate(36, (u64)irq4, 0x08, 0x8E);
-    idt_set_gate(37, (u64)irq5, 0x08, 0x8E);
-    idt_set_gate(38, (u64)irq6, 0x08, 0x8E);
-    idt_set_gate(39, (u64)irq7, 0x08, 0x8E);
-    idt_set_gate(40, (u64)irq8, 0x08, 0x8E);
-    idt_set_gate(41, (u64)irq9, 0x08, 0x8E);
-    idt_set_gate(42, (u64)irq10, 0x08, 0x8E);
-    idt_set_gate(43, (u64)irq11, 0x08, 0x8E);
-    idt_set_gate(44, (u64)irq12, 0x08, 0x8E);
-    idt_set_gate(45, (u64)irq13, 0x08, 0x8E);
-    idt_set_gate(46, (u64)irq14, 0x08, 0x8E);
-    idt_set_gate(47, (u64)irq15, 0x08, 0x8E);
+    idt_set_gate(32, (u64)irq0, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(33, (u64)irq1, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(34, (u64)irq2, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(35, (u64)irq3, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(36, (u64)irq4, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(37, (u64)irq5, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(38, (u64)irq6, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(39, (u64)irq7, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(40, (u64)irq8, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(41, (u64)irq9, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(42, (u64)irq10, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(43, (u64)irq11, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(44, (u64)irq12, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(45, (u64)irq13, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(46, (u64)irq14, __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt_set_gate(47, (u64)irq15, __KERNEL_CS, IDT_INTERRUPT_GATE);
     
     __asm__ volatile ("lidt %0" : : "m"(idtp));
     
-    struct {
-        u16 limit;
-        u64 base;
-    } idt_check;
-    __asm__ volatile ("sidt %0" : "=m"(idt_check));
-    
-    if (idt_check.base != (u64)idt) {
-        panic("IDT not loaded correctly");
+    if (idt_verify() != 0) {
+        return -1;
     }
     
     irq_remap();
     irq_unmask(0);
     irq_unmask(1);
+    irq_unmask(12);
+    
+    idt_register_irq(0, irq0_handler_c);
+    idt_register_irq(11, irq11_handler_c);
+    idt_register_irq(12, irq12_handler_c);
     
     return 0;
 }
 
 int timer_init(void) {
     u32 divisor = 1193180 / 100;
+    
+    if (divisor == 0) {
+        return -1;
+    }
+    
     outb(0x43, 0x36);
     outb(0x40, divisor & 0xFF);
     outb(0x40, (divisor >> 8) & 0xFF);
+    
     return 0;
 }
 
@@ -211,4 +230,17 @@ u32 get_ticks(void) {
 
 u32 get_seconds(void) {
     return system_ticks / 100;
+}
+
+void idt_get_info(u16 *limit, u64 *base) {
+    struct idt_ptr ptr;
+    
+    __asm__ volatile ("sidt %0" : "=m"(ptr));
+    
+    if (limit) {
+        *limit = ptr.limit;
+    }
+    if (base) {
+        *base = ptr.base;
+    }
 }

@@ -7,7 +7,6 @@
 #include "syscall.h"
 #include "../drivers/pci.h"
 #include "../drivers/disk.h"
-#include "../drivers/keyboard.h"
 #include "../net/net.h"
 #include "../fs/ufs.h"
 #include "../include/shell_api.h"
@@ -28,53 +27,49 @@ void kernel_main(void *mb_info) {
     vga_clear();
     vga_write("UTMS v0.4 - Network Edition\n");
     
-    vga_write("[1/10] GDT... ");
+    vga_write("[1/9] GDT... ");
     if (gdt_init() != 0) {
         vga_write("FAILED\n");
         while(1) { __asm__ volatile ("hlt"); }
     }
     vga_write("OK\n");
     
-    vga_write("[2/10] IDT... ");
+    vga_write("[2/9] IDT... ");
     if (idt_init() != 0) {
         vga_write("FAILED\n");
         while(1) { __asm__ volatile ("hlt"); }
     }
     vga_write("OK\n");
     
-    vga_write("[3/10] Memory... ");
+    vga_write("[3/9] Memory... ");
     memory_init(0x100000, 64 * 1024 * 1024);
     vga_write("OK\n");
     
-    vga_write("[4/10] Paging... ");
+    vga_write("[4/9] Paging... ");
     if (paging_init() != 0) {
         vga_write("FAILED\n");
         while(1);
     }
     vga_write("OK\n");
     
-    vga_write("[5/10] Timer... ");
+    vga_write("[5/9] Timer... ");
     timer_init();
     vga_write("OK\n");
     
-    vga_write("[6/10] Scheduler... ");
+    vga_write("[6/9] Scheduler... ");
     sched_init();
     vga_write("OK\n");
     
-    vga_write("[7/10] Syscalls... ");
+    vga_write("[7/9] Syscalls... ");
     syscall_init();
     vga_write("OK\n");
     
-    vga_write("[8/10] Disk... ");
+    vga_write("[8/9] Disk... ");
     disk_init();
     vga_write("OK\n");
     
-    vga_write("[9/10] PCI... ");
+    vga_write("[9/9] PCI... ");
     pci_init();
-    vga_write("OK\n");
-    
-    vga_write("[10/10] Keyboard... ");
-    keyboard_init();
     vga_write("OK\n");
     
     vga_write("\nNetwork init... ");
@@ -109,4 +104,8 @@ void kernel_main(void *mb_info) {
     
     __asm__ volatile ("sti");
     shell_run();
+    
+    while(1) {
+        __asm__ volatile ("hlt");
+    }
 }

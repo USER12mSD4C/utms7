@@ -55,10 +55,12 @@ isr_wrapper%1:
 %macro IRQ 2
 global irq%1
 irq%1:
+    cli
     SAVE_REGS
     mov rdi, %2
     call irq_handler_dispatch
     RESTORE_REGS
+    sti
     iretq
 %endmacro
 
@@ -66,12 +68,14 @@ extern exception_handler_c
 extern irq_handler_dispatch
 
 isr_common:
+    cli
     SAVE_REGS
     mov rdi, [rsp + 136]
     mov rsi, [rsp + 128]
     call exception_handler_c
     RESTORE_REGS
     add rsp, 16
+    sti
     iretq
 
 ISR_NOERRCODE 0
