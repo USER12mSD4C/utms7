@@ -1,6 +1,7 @@
 bits 64
 section .text
 
+; Макрос для сохранения всех регистров общего назначения
 %macro SAVE_REGS 0
     push rax
     push rbx
@@ -19,6 +20,7 @@ section .text
     push r15
 %endmacro
 
+; Макрос для восстановления всех регистров общего назначения
 %macro RESTORE_REGS 0
     pop r15
     pop r14
@@ -37,27 +39,32 @@ section .text
     pop rax
 %endmacro
 
+; Макрос для определения обработчика исключения без кода ошибки
 %macro ISR_NOERRCODE 1
 global isr_wrapper%1
 isr_wrapper%1:
-    push 0
-    push %1
+    cli
+    push 0                 ; заглушка для error_code
+    push %1                ; номер прерывания
     jmp isr_common
 %endmacro
 
+; Макрос для определения обработчика исключения с кодом ошибки
 %macro ISR_ERRCODE 1
 global isr_wrapper%1
 isr_wrapper%1:
-    push %1
+    cli
+    push %1                ; номер прерывания
     jmp isr_common
 %endmacro
 
+; Макрос для определения обработчика IRQ
 %macro IRQ 2
 global irq%1
 irq%1:
     cli
     SAVE_REGS
-    mov rdi, %2
+    mov rdi, %2            ; аргумент 1: номер IRQ
     call irq_handler_dispatch
     RESTORE_REGS
     sti
@@ -67,17 +74,18 @@ irq%1:
 extern exception_handler_c
 extern irq_handler_dispatch
 
+; Общий обработчик исключений
 isr_common:
-    cli
     SAVE_REGS
-    mov rdi, [rsp + 136]
-    mov rsi, [rsp + 128]
+    mov rdi, [rsp + 136]    ; номер прерывания (лежит выше сохранённых регистров)
+    mov rsi, [rsp + 128]    ; код ошибки
     call exception_handler_c
     RESTORE_REGS
-    add rsp, 16
+    add rsp, 16             ; убираем push 0 и номер прерывания
     sti
     iretq
 
+; Генерация обработчиков исключений (0-31)
 ISR_NOERRCODE 0
 ISR_NOERRCODE 1
 ISR_NOERRCODE 2
@@ -99,7 +107,7 @@ ISR_ERRCODE   17
 ISR_NOERRCODE 18
 ISR_NOERRCODE 19
 ISR_NOERRCODE 20
-ISR_NOERRCODE 21
+ISR_ERRCODE   21
 ISR_NOERRCODE 22
 ISR_NOERRCODE 23
 ISR_NOERRCODE 24
@@ -108,9 +116,10 @@ ISR_NOERRCODE 26
 ISR_NOERRCODE 27
 ISR_NOERRCODE 28
 ISR_NOERRCODE 29
-ISR_NOERRCODE 30
+ISR_ERRCODE   30
 ISR_NOERRCODE 31
 
+; Генерация обработчиков IRQ (0-15)
 IRQ 0, 0
 IRQ 1, 1
 IRQ 2, 2

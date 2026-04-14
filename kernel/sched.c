@@ -1,3 +1,4 @@
+// файл: kernel/sched.c
 #include "sched.h"
 #include "memory.h"
 #include "paging.h"
@@ -12,6 +13,14 @@ static process_t *sleep_queue = NULL;
 static u32 next_pid = 1;
 static u32 process_count = 0;
 
+// Бесконечный цикл для idle-потока (не возвращает управление)
+static void idle_loop(void) {
+    while (1) {
+        __asm__ volatile ("hlt");
+    }
+}
+
+// Вспомогательные функции работы с очередями
 static void enqueue_ready(process_t *p) {
     if (!p || p->state != PROC_READY) return;
     p->next = NULL;
@@ -128,10 +137,10 @@ void sched_init(void) {
     current = NULL;
     next_pid = 1;
     process_count = 0;
-    
+
     process_t *idle = find_free_proc();
     if (!idle) return;
-    
+
     idle->pid = alloc_pid();
     strcpy(idle->name, "idle");
     idle->state = PROC_READY;
@@ -140,9 +149,15 @@ void sched_init(void) {
     idle->cr3 = (u64)0x1000;
     idle->heap_start = 0;
     idle->heap_end = 0;
-    
+
+    idle->regs.cs = 0x08;
+    idle->regs.ss = 0x10;
+    idle->regs.rflags = 0x202;
+    idle->regs.rsp = idle->kstack_top;
+    idle->regs.rip = (u64)idle_loop;
+
     for (int i = 0; i < 32; i++) idle->fds[i].used = 0;
-    
+
     enqueue_ready(idle);
     current = idle;
     process_count = 1;
@@ -151,13 +166,13 @@ void sched_init(void) {
 int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     process_t *p = find_free_proc();
     if (!p) return -1;
-    
+
     p->pid = alloc_pid();
     p->ppid = current ? current->pid : 0;
     strncpy(p->name, name, 31);
     p->state = PROC_READY;
     p->ticks_left = TIME_SLICE;
-    
+
     p->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
     if (!p->kstack) {
         p->state = PROC_UNUSED;
@@ -165,22 +180,23 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     }
     p->kstack_top = p->kstack + KERNEL_STACK_SIZE;
     p->cr3 = (u64)0x1000;
-    
+
     u64 *stack = (u64*)p->kstack_top;
     *--stack = (u64)arg;
     *--stack = (u64)sched_exit;
     *--stack = (u64)entry;
-    
+
     p->regs.rsp = (u64)stack;
     p->regs.rip = (u64)entry;
     p->regs.rflags = 0x202;
     p->regs.cs = 0x08;
     p->regs.ss = 0x10;
+
     p->heap_start = 0;
     p->heap_end = 0;
-    
+
     for (int i = 0; i < 32; i++) p->fds[i].used = 0;
-    
+
     enqueue_ready(p);
     process_count++;
     return p->pid;
@@ -188,15 +204,15 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
 
 void sched_exit(int code) {
     if (!current || current->pid == 1) return;
-    
+
     current->exit_code = code;
     current->state = PROC_ZOMBIE;
-    
+
     if (current->waiting_for) {
         current->waiting_for->state = PROC_READY;
         enqueue_ready(current->waiting_for);
     }
-    
+
     free_process(current);
     process_count--;
     sched_yield();
@@ -204,52 +220,45 @@ void sched_exit(int code) {
 
 void sched_yield(void) {
     if (!current) return;
-    
+
     if (current->state == PROC_RUNNING) {
         current->state = PROC_READY;
         enqueue_ready(current);
     }
-    
+
     process_t *next = dequeue_ready();
     if (!next) {
-        for (int i = 0; i < MAX_PROCESSES; i++) {
-            if (processes[i].state == PROC_READY) {
-                next = &processes[i];
-                remove_from_ready(next);
-                break;
-            }
-        }
-        if (!next) return;
+        return;
     }
-    
+
     next->state = PROC_RUNNING;
     next->ticks_left = TIME_SLICE;
-    
+
     process_t *prev = current;
     current = next;
-    
-    if (prev != next) {
-        __asm__ volatile (
-            "push %%rbx\n"
-            "push %%rbp\n"
-            "push %%r12\n"
-            "push %%r13\n"
-            "push %%r14\n"
-            "push %%r15\n"
-            "mov %%rsp, %0\n"
-            "mov %1, %%rsp\n"
-            "mov %2, %%cr3\n"
-            "pop %%r15\n"
-            "pop %%r14\n"
-            "pop %%r13\n"
-            "pop %%r12\n"
-            "pop %%rbp\n"
-            "pop %%rbx\n"
-            : "=m"(prev->regs.rsp)
-            : "r"(next->regs.rsp), "r"(next->cr3)
-            : "memory"
-        );
-    }
+
+    if (prev == next) return;
+
+    __asm__ volatile (
+        "push %%rbx\n"
+        "push %%rbp\n"
+        "push %%r12\n"
+        "push %%r13\n"
+        "push %%r14\n"
+        "push %%r15\n"
+        "mov %%rsp, %0\n"
+        "mov %1, %%rsp\n"
+        "mov %2, %%cr3\n"
+        "pop %%r15\n"
+        "pop %%r14\n"
+        "pop %%r13\n"
+        "pop %%r12\n"
+        "pop %%rbp\n"
+        "pop %%rbx\n"
+        : "=m"(prev->regs.rsp)
+        : "r"(next->regs.rsp), "r"(next->cr3)
+        : "memory"
+    );
 }
 
 void sched_sleep(u32 ms) {
@@ -264,23 +273,21 @@ void sched_sleep(u32 ms) {
 
 void sched_tick(void) {
     if (!current) return;
-    
+
     u32 now = get_ticks();
-    
-    if (sleep_queue && now >= sleep_queue->sleep_until) {
-        while (sleep_queue && sleep_queue->sleep_until <= now) {
-            process_t *p = sleep_queue;
-            sleep_queue = sleep_queue->next;
-            p->next = NULL;
-            p->state = PROC_READY;
-            enqueue_ready(p);
-        }
+
+    while (sleep_queue && sleep_queue->sleep_until <= now) {
+        process_t *p = sleep_queue;
+        sleep_queue = sleep_queue->next;
+        p->next = NULL;
+        p->state = PROC_READY;
+        enqueue_ready(p);
     }
-    
+
     if (current->ticks_left > 0) {
         current->ticks_left--;
     }
-    
+
     if (current->ticks_left == 0 && current->state == PROC_RUNNING) {
         current->state = PROC_READY;
         enqueue_ready(current);
@@ -338,23 +345,23 @@ int sched_waitpid(u32 pid, int* status) {
             break;
         }
     }
-    
+
     if (!target) return -1;
-    
+
     if (target->state == PROC_ZOMBIE) {
         if (status) *status = target->exit_code;
         target->state = PROC_UNUSED;
         process_count--;
         return pid;
     }
-    
+
     current->waiting_for = target;
     current->state = PROC_BLOCKED;
     sched_yield();
-    
+
     if (status) *status = target->exit_code;
     target->state = PROC_UNUSED;
     process_count--;
-    
+
     return pid;
 }
