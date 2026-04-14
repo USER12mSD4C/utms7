@@ -91,19 +91,23 @@ void kernel_main(void *mb_info) {
     kinit_run_all();
     vga_write("OK\n");
 
-    vga_write("\nShell init... ");
+    vga_write("\ninit+... ");
     shell_init();
     commands_init();
     fs_commands_init();
     disk_commands_init();
     vga_write("OK\n");
 
+    vga_write("shell thread call...");
+    sched_create_kthread("shell", (void(*)(void*))shell_run, NULL);
+    vga_write("OK");
+
     vga_write("\nUTMS is ready!\n");
     vga_write("Type 'help' for commands\n");
     vga_write("Type 'upac -Sy' to sync packages\n\n");
 
     __asm__ volatile ("sti");
-    shell_run();
+    sched_start();
 
     while(1) {
         __asm__ volatile ("hlt");

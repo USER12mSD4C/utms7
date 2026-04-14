@@ -1,14 +1,14 @@
+// файл: kernel/idt.c
 #include "idt.h"
 #include "../include/io.h"
 #include "../include/string.h"
 #include "panic.h"
 #include "gdt.h"
+#include "sched.h"
 
-// Определения, вынесенные из заголовка для полноты
 #define IDT_ENTRIES 256
 #define IDT_INTERRUPT_GATE 0x8E
 #define IDT_TRAP_GATE 0x8F
-#define IDT_TASK_GATE 0x85
 
 struct idt_entry {
     u16 offset_low;
@@ -25,77 +25,45 @@ struct idt_ptr {
     u64 base;
 } __attribute__((packed));
 
-// Глобальные переменные модуля
 static struct idt_entry idt[IDT_ENTRIES] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
 static irq_handler_t irq_handlers[16];
 u32 system_ticks = 0;
 
-// Внешние ассемблерные точки входа (объявлены в isr.asm)
-extern void isr_wrapper0(void);
-extern void isr_wrapper1(void);
-extern void isr_wrapper2(void);
-extern void isr_wrapper3(void);
-extern void isr_wrapper4(void);
-extern void isr_wrapper5(void);
-extern void isr_wrapper6(void);
-extern void isr_wrapper7(void);
-extern void isr_wrapper8(void);
-extern void isr_wrapper9(void);
-extern void isr_wrapper10(void);
-extern void isr_wrapper11(void);
-extern void isr_wrapper12(void);
-extern void isr_wrapper13(void);
-extern void isr_wrapper14(void);
-extern void isr_wrapper15(void);
-extern void isr_wrapper16(void);
-extern void isr_wrapper17(void);
-extern void isr_wrapper18(void);
-extern void isr_wrapper19(void);
-extern void isr_wrapper20(void);
-extern void isr_wrapper21(void);
-extern void isr_wrapper22(void);
-extern void isr_wrapper23(void);
-extern void isr_wrapper24(void);
-extern void isr_wrapper25(void);
-extern void isr_wrapper26(void);
-extern void isr_wrapper27(void);
-extern void isr_wrapper28(void);
-extern void isr_wrapper29(void);
-extern void isr_wrapper30(void);
-extern void isr_wrapper31(void);
+// Внешние ассемблерные точки входа
+extern void isr_wrapper0(void);   extern void isr_wrapper1(void);
+extern void isr_wrapper2(void);   extern void isr_wrapper3(void);
+extern void isr_wrapper4(void);   extern void isr_wrapper5(void);
+extern void isr_wrapper6(void);   extern void isr_wrapper7(void);
+extern void isr_wrapper8(void);   extern void isr_wrapper9(void);
+extern void isr_wrapper10(void);  extern void isr_wrapper11(void);
+extern void isr_wrapper12(void);  extern void isr_wrapper13(void);
+extern void isr_wrapper14(void);  extern void isr_wrapper15(void);
+extern void isr_wrapper16(void);  extern void isr_wrapper17(void);
+extern void isr_wrapper18(void);  extern void isr_wrapper19(void);
+extern void isr_wrapper20(void);  extern void isr_wrapper21(void);
+extern void isr_wrapper22(void);  extern void isr_wrapper23(void);
+extern void isr_wrapper24(void);  extern void isr_wrapper25(void);
+extern void isr_wrapper26(void);  extern void isr_wrapper27(void);
+extern void isr_wrapper28(void);  extern void isr_wrapper29(void);
+extern void isr_wrapper30(void);  extern void isr_wrapper31(void);
 
-extern void irq0(void);
-extern void irq1(void);
-extern void irq2(void);
-extern void irq3(void);
-extern void irq4(void);
-extern void irq5(void);
-extern void irq6(void);
-extern void irq7(void);
-extern void irq8(void);
-extern void irq9(void);
-extern void irq10(void);
-extern void irq11(void);
-extern void irq12(void);
-extern void irq13(void);
-extern void irq14(void);
-extern void irq15(void);
+extern void irq0(void);   extern void irq1(void);
+extern void irq2(void);   extern void irq3(void);
+extern void irq4(void);   extern void irq5(void);
+extern void irq6(void);   extern void irq7(void);
+extern void irq8(void);   extern void irq9(void);
+extern void irq10(void);  extern void irq11(void);
+extern void irq12(void);  extern void irq13(void);
+extern void irq14(void);  extern void irq15(void);
 
-// Вспомогательная функция отправки EOI
 static void send_eoi(int irq) {
-    if (irq >= 8) {
-        outb(0xA0, 0x20);
-    }
+    if (irq >= 8) outb(0xA0, 0x20);
     outb(0x20, 0x20);
 }
 
-// Установка дескриптора в IDT
 void idt_set_gate(u8 num, u64 base, u16 selector, u8 flags) {
-    if (num >= IDT_ENTRIES) {
-        return;
-    }
-
+    if (num >= IDT_ENTRIES) return;
     idt[num].offset_low  = base & 0xFFFF;
     idt[num].offset_mid  = (base >> 16) & 0xFFFF;
     idt[num].offset_high = (base >> 32) & 0xFFFFFFFF;
@@ -105,100 +73,53 @@ void idt_set_gate(u8 num, u64 base, u16 selector, u8 flags) {
     idt[num].reserved    = 0;
 }
 
-// Проверка корректности загрузки IDT
 static int idt_verify(void) {
     struct idt_ptr verify;
     __asm__ volatile ("sidt %0" : "=m"(verify));
-    if (verify.limit != idtp.limit || verify.base != idtp.base) {
-        return -1;
-    }
-    return 0;
+    return (verify.limit == idtp.limit && verify.base == idtp.base) ? 0 : -1;
 }
 
-// Регистрация обработчика IRQ
 void idt_register_irq(int irq, irq_handler_t handler) {
-    if (irq >= 0 && irq < 16) {
-        irq_handlers[irq] = handler;
-    }
+    if (irq >= 0 && irq < 16) irq_handlers[irq] = handler;
 }
 
-// Перенастройка контроллеров прерываний (PIC)
 void irq_remap(void) {
-    outb(0x20, 0x11);   // ICW1: инициализация ведущего
-    outb(0xA0, 0x11);   // ICW1: инициализация ведомого
-    outb(0x21, 0x20);   // ICW2: базовый вектор ведущего = 0x20
-    outb(0xA1, 0x28);   // ICW2: базовый вектор ведомого = 0x28
-    outb(0x21, 0x04);   // ICW3: ведущий знает о ведомом на IRQ2
-    outb(0xA1, 0x02);   // ICW3: ведомый подключён к IRQ2
-    outb(0x21, 0x01);   // ICW4: режим 8086
-    outb(0xA1, 0x01);
+    outb(0x20, 0x11); outb(0xA0, 0x11);
+    outb(0x21, 0x20); outb(0xA1, 0x28);
+    outb(0x21, 0x04); outb(0xA1, 0x02);
+    outb(0x21, 0x01); outb(0xA1, 0x01);
 }
 
-// Размаскирование конкретного IRQ
 void irq_unmask(int irq) {
-    u16 port;
-    u8  value;
-
-    if (irq < 8) {
-        port = 0x21;
-    } else {
-        port = 0xA1;
-        irq -= 8;
-    }
-
-    value = inb(port) & ~(1 << irq);
+    u16 port = (irq < 8) ? 0x21 : 0xA1;
+    u8  value = inb(port) & ~(1 << (irq & 7));
     outb(port, value);
 }
 
-// Маскирование конкретного IRQ
 void irq_mask(int irq) {
-    u16 port;
-    u8  value;
-
-    if (irq < 8) {
-        port = 0x21;
-    } else {
-        port = 0xA1;
-        irq -= 8;
-    }
-
-    value = inb(port) | (1 << irq);
+    u16 port = (irq < 8) ? 0x21 : 0xA1;
+    u8  value = inb(port) | (1 << (irq & 7));
     outb(port, value);
 }
 
-// Обработчик исключений (вызывается из ассемблера)
 void exception_handler_c(int num, int error_code) {
-    // Для начала просто паникуем с информацией
     panic("Unhandled CPU exception");
-    // В реальной системе здесь может быть более умная обработка
-    (void)num;
-    (void)error_code;
+    (void)num; (void)error_code;
 }
 
-// Диспетчер IRQ (вызывается из ассемблера)
 void irq_handler_dispatch(int irq) {
-    if (irq >= 0 && irq < 16) {
-        if (irq_handlers[irq]) {
-            irq_handlers[irq]();
-        } else {
-            // Неизвестное прерывание — всё равно отправляем EOI
-        }
-    }
-    // Отправляем EOI после обработки
+    if (irq >= 0 && irq < 16 && irq_handlers[irq])
+        irq_handlers[irq]();
     send_eoi(irq);
 }
 
-// Обработчик таймера (IRQ0)
 static void irq0_handler_c(void) {
     system_ticks++;
-    // Здесь может быть вызов планировщика
-    // send_eoi вызывается в общем диспетчере
+    sched_tick();          // планировщик вызывается при каждом тике
 }
 
-// Заглушки для других IRQ, если они не зарегистрированы
-static void irq1_handler_c(void) {
-    // Обработка клавиатуры будет зарегистрирована позже
-}
+// Заглушки для остальных IRQ
+static void irq1_handler_c(void) {}
 static void irq2_handler_c(void) {}
 static void irq3_handler_c(void) {}
 static void irq4_handler_c(void) {}
@@ -214,21 +135,13 @@ static void irq13_handler_c(void) {}
 static void irq14_handler_c(void) {}
 static void irq15_handler_c(void) {}
 
-// Инициализация IDT
 int idt_init(void) {
     idtp.limit = sizeof(idt) - 1;
     idtp.base  = (u64)idt;
-
-    // Обнуляем всю таблицу
     memset(idt, 0, sizeof(idt));
+    memset(irq_handlers, 0, sizeof(irq_handlers));
 
-    // Сбрасываем массив обработчиков
-    for (int i = 0; i < 16; i++) {
-        irq_handlers[i] = NULL;
-    }
-
-    // Устанавливаем векторы исключений (0-31)
-    // Все они ведут на соответствующие ассемблерные заглушки
+    // Установка векторов исключений (0-31)
     idt_set_gate(0,  (u64)isr_wrapper0,  __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(1,  (u64)isr_wrapper1,  __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(2,  (u64)isr_wrapper2,  __KERNEL_CS, IDT_INTERRUPT_GATE);
@@ -262,7 +175,7 @@ int idt_init(void) {
     idt_set_gate(30, (u64)isr_wrapper30, __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(31, (u64)isr_wrapper31, __KERNEL_CS, IDT_INTERRUPT_GATE);
 
-    // Устанавливаем векторы IRQ (32-47)
+    // Установка векторов IRQ (32-47)
     idt_set_gate(32, (u64)irq0,  __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(33, (u64)irq1,  __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(34, (u64)irq2,  __KERNEL_CS, IDT_INTERRUPT_GATE);
@@ -280,23 +193,12 @@ int idt_init(void) {
     idt_set_gate(46, (u64)irq14, __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(47, (u64)irq15, __KERNEL_CS, IDT_INTERRUPT_GATE);
 
-    // Загружаем IDT
     __asm__ volatile ("lidt %0" : : "m"(idtp));
+    if (idt_verify() != 0) return -1;
 
-    // Проверяем, что IDT загружена корректно
-    if (idt_verify() != 0) {
-        return -1;
-    }
-
-    // Перенастраиваем PIC
     irq_remap();
+    for (int i = 0; i < 16; i++) irq_mask(i);
 
-    // Маскируем все прерывания (позже размаскируем нужные)
-    for (int i = 0; i < 16; i++) {
-        irq_mask(i);
-    }
-
-    // Регистрируем базовые обработчики (заглушки) на случай, если кто-то вызовет
     idt_register_irq(0, irq0_handler_c);
     idt_register_irq(1, irq1_handler_c);
     idt_register_irq(2, irq2_handler_c);
@@ -314,36 +216,23 @@ int idt_init(void) {
     idt_register_irq(14, irq14_handler_c);
     idt_register_irq(15, irq15_handler_c);
 
-    // Разрешаем таймер (IRQ0) и клавиатуру (IRQ1)
-    irq_unmask(0);
-    irq_unmask(1);
+    irq_unmask(0); // таймер
+    irq_unmask(1); // клавиатура
 
     return 0;
 }
 
-// Инициализация таймера PIT (программируемый интервальный таймер)
 int timer_init(void) {
-    u32 divisor = 1193180 / 100;  // 100 Гц (10 мс тик)
-
-    // Устанавливаем режим 3 (генератор меандра) для канала 0
+    u32 divisor = 1193180 / 100; // 100 Гц
     outb(0x43, 0x36);
     outb(0x40, divisor & 0xFF);
     outb(0x40, (divisor >> 8) & 0xFF);
-
     return 0;
 }
 
-// Получение системных тиков
-u32 get_ticks(void) {
-    return system_ticks;
-}
+u32 get_ticks(void) { return system_ticks; }
+u32 get_seconds(void) { return system_ticks / 100; }
 
-// Получение секунд (при частоте 100 Гц)
-u32 get_seconds(void) {
-    return system_ticks / 100;
-}
-
-// Получение информации об IDT (для отладки)
 void idt_get_info(u16 *limit, u64 *base) {
     struct idt_ptr ptr;
     __asm__ volatile ("sidt %0" : "=m"(ptr));
