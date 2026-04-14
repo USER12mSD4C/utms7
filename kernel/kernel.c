@@ -10,6 +10,7 @@
 #include "../net/net.h"
 #include "../fs/ufs.h"
 #include "../include/shell_api.h"
+#include "../adders/ski.h"
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 
@@ -19,31 +20,32 @@ extern void fs_commands_init(void);
 extern void shell_init(void);
 extern void shell_run(void);
 extern void kinit_run_all(void);
+extern void ski(void* mb_info);
 
 void kernel_main(void *mb_info) {
-    (void)mb_info;
 
     vga_init();
     vga_clear();
-    vga_write("UTMS v0.4\n");
+    vga_write("hello world, UTMS7 is booting...");
+    ski(mb_info);
 
-    vga_write("[1/9] GDT... ");
-    if (gdt_init() != 0) {
-        vga_write("FAILED\n");
-        while(1) { __asm__ volatile ("hlt"); }
-    }
-    vga_write("OK\n");
+    //vga_write("[1/9] GDT... ");
+    //if (gdt_init() != 0) {
+    //    vga_write("FAILED\n");
+    //    while(1) { __asm__ volatile ("hlt"); }
+    //}
+    //vga_write("OK\n");
 
-    vga_write("[2/9] IDT... ");
-    if (idt_init() != 0) {
-        vga_write("FAILED\n");
-        while(1) { __asm__ volatile ("hlt"); }
-    }
-    vga_write("OK\n");
+    //vga_write("[2/9] IDT... ");
+    //if (idt_init() != 0) {
+    //    vga_write("FAILED\n");
+    //    while(1) { __asm__ volatile ("hlt"); }
+    //}
+    //vga_write("OK\n");
 
-    vga_write("[3/9] Memory... ");
-    memory_init(0x100000, 64 * 1024 * 1024);
-    vga_write("OK\n");
+    //vga_write("[3/9] Memory... ");
+    //memory_init(0x100000, 64 * 1024 * 1024);
+    //vga_write("OK\n");
 
     vga_write("[4/9] Paging... ");
     if (paging_init() != 0) {
@@ -92,21 +94,22 @@ void kernel_main(void *mb_info) {
     vga_write("OK\n");
 
     vga_write("\ninit+... ");
-    shell_init();
-    commands_init();
-    fs_commands_init();
-    disk_commands_init();
+
+    //shell_init();
+    //commands_init();
+    //fs_commands_init();
+    //disk_commands_init();
     vga_write("OK\n");
 
-    vga_write("shell thread call...");
+    vga_write("shell thread call... ");
     sched_create_kthread("shell", (void(*)(void*))shell_run, NULL);
-    vga_write("OK");
+    vga_write("OK\n");
 
     vga_write("\nUTMS is ready!\n");
     vga_write("Type 'help' for commands\n");
     vga_write("Type 'upac -Sy' to sync packages\n\n");
 
-    __asm__ volatile ("sti");
+    //__asm__ volatile ("sti");
     sched_start();
 
     while(1) {

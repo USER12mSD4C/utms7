@@ -50,12 +50,12 @@ long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     register long r10 __asm__("r10") = a4;
     register long r8  __asm__("r8")  = a5;
     register long r9  __asm__("r9")  = a6;
-    
+
     __asm__ volatile ("syscall"
         : "+r"(rax)
         : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8), "r"(r9)
         : "rcx", "r11", "memory");
-    
+
     return rax;
 }
 
@@ -164,13 +164,13 @@ static void *align_ptr(void *ptr) {
 
 void *malloc(size_t size) {
     if (size == 0) return NULL;
-    
+
     size = (size + BLOCK_ALIGN - 1) & ~(BLOCK_ALIGN - 1);
     size_t total = size + sizeof(block_header_t);
-    
+
     block_header_t *prev = NULL;
     block_header_t *curr = free_list;
-    
+
     while (curr) {
         if (curr->free && curr->size >= total) {
             if (curr->size >= total + sizeof(block_header_t) + BLOCK_ALIGN) {
@@ -187,18 +187,18 @@ void *malloc(size_t size) {
         prev = curr;
         curr = curr->next;
     }
-    
+
     void *mem = sbrk(total);
     if (mem == (void*)-1) return NULL;
-    
+
     block_header_t *block = (block_header_t*)mem;
     block->size = total;
     block->next = NULL;
     block->free = 0;
-    
+
     if (prev) prev->next = block;
     else free_list = block;
-    
+
     return (void*)((char*)block + sizeof(block_header_t));
 }
 
@@ -215,7 +215,7 @@ void *realloc(void *ptr, size_t size) {
         free(ptr);
         return NULL;
     }
-    
+
     block_header_t *block = (block_header_t*)((char*)ptr - sizeof(block_header_t));
     if (block->size >= size + sizeof(block_header_t)) {
         if (block->size >= size + sizeof(block_header_t) + BLOCK_ALIGN) {
@@ -229,10 +229,10 @@ void *realloc(void *ptr, size_t size) {
         }
         return ptr;
     }
-    
+
     void *new_ptr = malloc(size);
     if (!new_ptr) return NULL;
-    
+
     memcpy(new_ptr, ptr, block->size - sizeof(block_header_t));
     free(ptr);
     return new_ptr;
@@ -240,10 +240,10 @@ void *realloc(void *ptr, size_t size) {
 
 void free(void *ptr) {
     if (!ptr) return;
-    
+
     block_header_t *block = (block_header_t*)((char*)ptr - sizeof(block_header_t));
     block->free = 1;
-    
+
     block_header_t *curr = free_list;
     while (curr) {
         if (curr->free && curr->next && curr->next->free) {
@@ -256,12 +256,10 @@ void free(void *ptr) {
 
 // ==================== PRINTF ====================
 int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
-    // Эта функция уже есть в lib/string.c, но оставим её здесь
-    // Если есть конфликт, удалим отсюда
     char *start = str;
     const char *p = fmt;
     int count = 0;
-    
+
     while (*p && count < (int)size - 1) {
         if (*p == '%') {
             p++;
@@ -272,7 +270,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
                 width = width * 10 + (*p - '0');
                 p++;
             }
-            
+
             switch (*p) {
                 case 'd': {
                     int val = va_arg(args, int);
@@ -349,7 +347,7 @@ int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
         }
         p++;
     }
-    
+
     *str = '\0';
     return count;
 }
@@ -423,7 +421,7 @@ char *getenv(const char *name) {
 int putenv(char *string) {
     char *eq = strchr(string, '=');
     if (!eq) return -1;
-    
+
     for (int i = 0; i < env_count; i++) {
         char *p = environment[i];
         int j = 0;
@@ -433,7 +431,7 @@ int putenv(char *string) {
             return 0;
         }
     }
-    
+
     if (env_count < ENV_SIZE - 1) {
         environment[env_count++] = string;
         environment[env_count] = NULL;
@@ -445,10 +443,10 @@ int putenv(char *string) {
 int setenv(const char *name, const char *value, int overwrite) {
     char *existing = getenv(name);
     if (existing && !overwrite) return 0;
-    
+
     char *new = malloc(strlen(name) + strlen(value) + 2);
     if (!new) return -1;
-    
+
     sprintf(new, "%s=%s", name, value);
     return putenv(new);
 }

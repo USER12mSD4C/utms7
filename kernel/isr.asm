@@ -54,11 +54,13 @@ isr_wrapper%1:
     jmp isr_common
 %endmacro
 
+; Макрос для аппаратных прерываний (IRQ)
+; Загружаем сегментные регистры данных ядра, затем сохраняем регистры,
+; вызываем диспетчер и при необходимости переключаем контекст.
 %macro IRQ 2
 global irq%1
 irq%1:
     cli
-    ; Загружаем сегментные регистры данных (на всякий случай)
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -67,27 +69,8 @@ irq%1:
     SAVE_REGS
     mov rdi, %2
     call irq_handler_dispatch
-    ; Проверяем, нужно ли переключение контекста
-    cmp dword [sched_need_resched], 0
-    je .no_switch
-    ; Сохраняем указатель стека в current->kstack_top
-    mov rax, [current]
-    lea rbx, [rsp + 8]      ; rsp указывает на адрес возврата, сохранённые регистры начинаются с rsp+8
-    mov [rax + 40], rbx     ; offsetof(process_t, kstack_top) = 40
-    call sched_pick_next
-    ; Результат в rax – следующий процесс
-    mov rbx, [rax + 40]     ; next->kstack_top
-    mov rdx, [rax + 32]     ; next->cr3 (offset 32)
-    mov rsp, rbx
-    mov cr3, rdx
-    ; Продолжаем как при обычном выходе
     RESTORE_REGS
-    add rsp, 16             ; убираем номер IRQ и код ошибки
-    sti
-    iretq
-.no_switch:
-    RESTORE_REGS
-    add rsp, 16
+    add rsp, 16          ; убираем номер IRQ и код ошибки
     sti
     iretq
 %endmacro
@@ -99,21 +82,24 @@ extern current
 extern sched_pick_next
 
 isr_common:
+    ; Исключения тоже могут прийти с некорректными сегментными регистрами
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
+
     SAVE_REGS
-    mov rdi, [rsp + 136]    ; номер прерывания (15 regs * 8 = 120, + 8 ret addr, + 8 err code)
-    mov rsi, [rsp + 128]    ; код ошибки
+    mov rdi, [rsp + 136]        ; номер прерывания (15 regs * 8 = 120, +8 ret addr, +8 err code)
+    mov rsi, [rsp + 128]        ; код ошибки
     call exception_handler_c
     RESTORE_REGS
     add rsp, 16
     sti
     iretq
 
-; Исключения
+; ----------------------------------------------------------------------
+; Исключения (векторы 0-31)
 ISR_NOERRCODE 0
 ISR_NOERRCODE 1
 ISR_NOERRCODE 2
@@ -147,7 +133,8 @@ ISR_NOERRCODE 29
 ISR_ERRCODE   30
 ISR_NOERRCODE 31
 
-; IRQ
+; ----------------------------------------------------------------------
+; Аппаратные прерывания (IRQ 0-15)
 IRQ 0, 0
 IRQ 1, 1
 IRQ 2, 2

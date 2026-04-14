@@ -8,6 +8,8 @@
 #define STACK_SIZE 16384
 #define TIME_SLICE 10
 #define KERNEL_STACK_SIZE 4096
+#define OFFSET_KSTACK_TOP  40   // смещение поля kstack_top в process_t
+#define OFFSET_CR3         32   // смещение поля cr3
 
 typedef enum {
     PROC_UNUSED = 0,

@@ -115,7 +115,6 @@ void irq_handler_dispatch(int irq) {
 
 static void irq0_handler_c(void) {
     system_ticks++;
-    sched_tick();          // планировщик вызывается при каждом тике
 }
 
 // Заглушки для остальных IRQ
