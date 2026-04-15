@@ -23,13 +23,10 @@ i dont recommend use it, still untested
 ## Building
 
 ```
-make
-make run #with qemu
-make runD #with logs
-make rundisk #run only disk, without ISO
-make kom #kernel objects/tools
-make livecd #kernel with installing on disk with grub programm
-make iso
+umk build
+umk build --clean //with pre clean
+umk build --iso //create iso after build
+umk build --disk //create 5gb disk after build
 ```
 
 ## What is that?

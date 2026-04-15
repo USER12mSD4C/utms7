@@ -1,8 +1,9 @@
-// kernel/elf.h
+// файл: kernel/elf.h
 #ifndef ELF_H
 #define ELF_H
 
 #include "../include/types.h"
+#include "sched.h"   // чтобы знать process_t
 
 #define ELF_MAGIC 0x464C457F
 #define ET_EXEC 2
@@ -37,11 +38,7 @@ typedef struct {
     u64 align;
 } __attribute__((packed)) elf64_phdr_t;
 
-// Forward declaration
-struct process_t;
-
-// Прототипы
 u64 elf_load(u8 *data, u32 size, u64* pml4);
-int elf_load_current(u8 *data, u32 size, struct process_t *p);
+int elf_load_current(u8 *data, u32 size, process_t *p);
 
 #endif

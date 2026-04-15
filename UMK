@@ -19,6 +19,10 @@ drivers/%.o: drivers/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 eoc
 
+adders/%.o: adders/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+eoc
+
 net/%.o: net/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 eoc
@@ -74,8 +78,9 @@ LIB = lib/string.o lib/font.o lib/path.o lib/zlib.o lib/libc.o
 FS = fs/ufs.o fs/fat.o
 SH = shell/shell.o shell/uss.o commands/builtin.o commands/fs.o
 APP = apps/installer.o apps/upac.o
+ADDERS = adders/ski.o
 
-ALL = $(CORE) $(ASM) $(DRV) $(NET) $(LIB) $(FS) $(SH) $(APP)
+ALL = $(CORE) $(ASM) $(DRV) $(NET) $(LIB) $(FS) $(SH) $(APP) $(ADDERS)
 
 # == ЦЕЛИ ==
 
@@ -114,11 +119,11 @@ build:
 			call kernel.bin
 			call kom
 		eofg
-		-fg(iso):
+		+fg(iso):
 			echo "[ISO] Creating ISO..."
 			call iso
 		eofg
-		-fg(disk):
+		+fg(disk):
 			echo "[DISK] Creating disk..."
 			call disk5g.img
 		eofg

@@ -1,7 +1,5 @@
 #include "../drivers/vga.h"
-#include "memory.h"
 #include "paging.h"
-#include "gdt.h"
 #include "idt.h"
 #include "sched.h"
 #include "syscall.h"
@@ -20,97 +18,38 @@ extern void fs_commands_init(void);
 extern void shell_init(void);
 extern void shell_run(void);
 extern void kinit_run_all(void);
-extern void ski(void* mb_info);
+
+//typedef struct {
+//    const char* name;
+//    int (*init)(void);
+//    int critical;
+//} init_entry_t;
+
+//static init_entry_t init_table[] = {
+    //{"paging", paging_init, 1},
+    //{"timer", timer_init, 1},
+    //{"sched", sched_init, 1},
+    //{"syscalls", syscall_init, 1},
+    //{"PCI", pci_init, 1},
+    //{"DISK_C", disk_commands_init, 0},
+    //{"FS_C", fs_commands_init, 0},
+    //{"SHELL_i", shell_init, 0},
+    //{"commands_init", commands_init, 0},
+    //{"kinit_chmodules", kinit_run_all, 0},
+    //{"net", net_init, 0},
+    //{"disk counter", disk_get_disk_count, 0},
+    //{"UFS mount", ufs_mount, 0, 2048, 0},
+    //{"shell_thread", sched_create_kthread, 0, "shell", (void(*)(void*))shell_run, NULL},
+    //{"sched_start", sched_start, 1},
+    //{NULL, NULL, 0}
+    //};
 
 void kernel_main(void *mb_info) {
-
     vga_init();
     vga_clear();
     vga_write("hello world, UTMS7 is booting...");
-    ski(mb_info);
 
-    //vga_write("[1/9] GDT... ");
-    //if (gdt_init() != 0) {
-    //    vga_write("FAILED\n");
-    //    while(1) { __asm__ volatile ("hlt"); }
-    //}
-    //vga_write("OK\n");
-
-    //vga_write("[2/9] IDT... ");
-    //if (idt_init() != 0) {
-    //    vga_write("FAILED\n");
-    //    while(1) { __asm__ volatile ("hlt"); }
-    //}
-    //vga_write("OK\n");
-
-    //vga_write("[3/9] Memory... ");
-    //memory_init(0x100000, 64 * 1024 * 1024);
-    //vga_write("OK\n");
-
-    vga_write("[4/9] Paging... ");
-    if (paging_init() != 0) {
-        vga_write("FAILED\n");
-        while(1);
-    }
-    vga_write("OK\n");
-
-    vga_write("[5/9] Timer... ");
-    timer_init();
-    vga_write("OK\n");
-
-    vga_write("[6/9] Scheduler... ");
-    sched_init();
-    vga_write("OK\n");
-
-    vga_write("[7/9] Syscalls... ");
-    syscall_init();
-    vga_write("OK\n");
-
-    vga_write("[8/9] Disk... ");
-    disk_init();
-    vga_write("OK\n");
-
-    vga_write("[9/9] PCI... ");
-    pci_init();
-    vga_write("OK\n");
-
-    vga_write("\nNetwork init... ");
-    net_init();
-    vga_write("OK\n");
-
-    vga_write("Mounting UFS... ");
-    if (ufs_mount(2048, 0) == 0) {
-        vga_write("OK\n");
-    } else {
-        vga_write("FAILED\n");
-    }
-
-    vga_write("Disks found: ");
-    vga_write_num(disk_get_disk_count());
-    vga_write("\n");
-
-    vga_write("Loading modules... ");
-    kinit_run_all();
-    vga_write("OK\n");
-
-    vga_write("\ninit+... ");
-
-    //shell_init();
-    //commands_init();
-    //fs_commands_init();
-    //disk_commands_init();
-    vga_write("OK\n");
-
-    vga_write("shell thread call... ");
-    sched_create_kthread("shell", (void(*)(void*))shell_run, NULL);
-    vga_write("OK\n");
-
-    vga_write("\nUTMS is ready!\n");
-    vga_write("Type 'help' for commands\n");
-    vga_write("Type 'upac -Sy' to sync packages\n\n");
-
-    //__asm__ volatile ("sti");
-    sched_start();
+    ski((u64)mb_info);
 
     while(1) {
         __asm__ volatile ("hlt");

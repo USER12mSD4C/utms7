@@ -1,4 +1,4 @@
-// net/e1000.c
+// файл: net/e1000.c (исправление предупреждений)
 #include "e1000.h"
 #include "../include/io.h"
 #include "../include/string.h"
@@ -80,24 +80,24 @@ typedef struct {
 static e1000_softc_t *sc = NULL;
 
 static inline u32 e1000_read32(u32 reg) {
-    return *(volatile u32*)(sc->mmio_base + reg);
+    return *(volatile u32*)((uintptr_t)sc->mmio_base + reg);
 }
 
 static inline void e1000_write32(u32 reg, u32 val) {
-    *(volatile u32*)(sc->mmio_base + reg) = val;
+    *(volatile u32*)((uintptr_t)sc->mmio_base + reg) = val;
 }
 
 static void e1000_read_mac(void) {
     u32 rar_low = e1000_read32(E1000_RA);
     u32 rar_high = e1000_read32(E1000_RA + 4);
-    
+
     sc->mac[0] = rar_low & 0xFF;
     sc->mac[1] = (rar_low >> 8) & 0xFF;
     sc->mac[2] = (rar_low >> 16) & 0xFF;
     sc->mac[3] = (rar_low >> 24) & 0xFF;
     sc->mac[4] = rar_high & 0xFF;
     sc->mac[5] = (rar_high >> 8) & 0xFF;
-    
+
     if (sc->mac[0] == 0 && sc->mac[1] == 0 && sc->mac[2] == 0 &&
         sc->mac[3] == 0 && sc->mac[4] == 0 && sc->mac[5] == 0) {
         for (int i = 0; i < 3; i++) {
@@ -107,7 +107,7 @@ static void e1000_read_mac(void) {
             sc->mac[i*2+1] = (val >> 0) & 0xFF;
         }
     }
-    
+
     if (sc->mac[0] == 0 && sc->mac[1] == 0 && sc->mac[2] == 0 &&
         sc->mac[3] == 0 && sc->mac[4] == 0 && sc->mac[5] == 0) {
         sc->mac[0] = 0x52;
@@ -122,44 +122,44 @@ static void e1000_read_mac(void) {
 static int e1000_map_mmio(void) {
     u64 phys = sc->mmio_base;
     u64 virt = phys;
-    
+
     for (u64 offset = 0; offset < MMIO_SIZE; offset += 4096) {
         if (paging_map(phys + offset, virt + offset, PAGE_PRESENT | PAGE_WRITABLE) != 0) {
             return -1;
         }
     }
-    
+
     return 0;
 }
 
 int e1000_init(pci_dev_t *pci) {
     if (!pci) return -1;
     if (pci->vendor_id != E1000_VENDOR || pci->device_id != E1000_DEVICE) return -1;
-    
+
     sc = kmalloc(sizeof(e1000_softc_t));
     if (!sc) return -1;
     memset(sc, 0, sizeof(e1000_softc_t));
-    
+
     sc->mmio_base = pci->bar[0] & 0xFFFFFFF0;
     sc->rx_cur = 0;
     sc->tx_cur = 0;
     sc->attached = 0;
-    
+
     vga_write("  E1000: MMIO base=0x");
     vga_write_hex(sc->mmio_base);
     vga_write("\n");
-    
+
     if (e1000_map_mmio() != 0) {
         vga_write("  E1000: MMIO mapping failed\n");
         kfree(sc);
         sc = NULL;
         return -1;
     }
-    
+
     u32 cmd = pci_read_config(pci->bus, pci->slot, pci->func, 0x04);
     cmd |= 0x07;
     pci_write_config(pci->bus, pci->slot, pci->func, 0x04, cmd);
-    
+
     e1000_write32(E1000_CTRL, E1000_CTRL_RST);
     int timeout = 100000;
     while ((e1000_read32(E1000_CTRL) & E1000_CTRL_RST) && timeout-- > 0) {
@@ -171,61 +171,61 @@ int e1000_init(pci_dev_t *pci) {
         sc = NULL;
         return -1;
     }
-    
+
     e1000_read_mac();
-    
+
     vga_write("  E1000: MAC ");
     for (int i = 0; i < 6; i++) {
         vga_write_hex(sc->mac[i]);
         if (i < 5) vga_write(":");
     }
     vga_write("\n");
-    
+
     sc->rx_desc = kmalloc(sizeof(e1000_rx_desc_t) * RX_DESC_COUNT);
     sc->tx_desc = kmalloc(sizeof(e1000_tx_desc_t) * TX_DESC_COUNT);
     if (!sc->rx_desc || !sc->tx_desc) goto fail;
-    
+
     memset(sc->rx_desc, 0, sizeof(e1000_rx_desc_t) * RX_DESC_COUNT);
     memset(sc->tx_desc, 0, sizeof(e1000_tx_desc_t) * TX_DESC_COUNT);
-    
+
     for (int i = 0; i < RX_DESC_COUNT; i++) {
         sc->rx_buf[i] = kmalloc(RX_BUFFER_SIZE);
         if (!sc->rx_buf[i]) goto fail;
         sc->rx_desc[i].addr = (u64)sc->rx_buf[i];
         sc->rx_desc[i].status = 0;
     }
-    
+
     for (int i = 0; i < TX_DESC_COUNT; i++) {
         sc->tx_buf[i] = kmalloc(TX_BUFFER_SIZE);
         if (!sc->tx_buf[i]) goto fail;
         sc->tx_desc[i].addr = (u64)sc->tx_buf[i];
         sc->tx_desc[i].status = 0;
     }
-    
+
     e1000_write32(E1000_RDBAL, (u32)(u64)sc->rx_desc);
     e1000_write32(E1000_RDBAH, (u32)((u64)sc->rx_desc >> 32));
     e1000_write32(E1000_RDLEN, sizeof(e1000_rx_desc_t) * RX_DESC_COUNT);
     e1000_write32(E1000_RDH, 0);
     e1000_write32(E1000_RDT, RX_DESC_COUNT - 1);
-    
+
     e1000_write32(E1000_TDBAL, (u32)(u64)sc->tx_desc);
     e1000_write32(E1000_TDBAH, (u32)((u64)sc->tx_desc >> 32));
     e1000_write32(E1000_TDLEN, sizeof(e1000_tx_desc_t) * TX_DESC_COUNT);
     e1000_write32(E1000_TDH, 0);
     e1000_write32(E1000_TDT, 0);
-    
+
     e1000_write32(E1000_RCTL, E1000_RCTL_EN | E1000_RCTL_BAM | E1000_RCTL_SECRC);
     e1000_write32(E1000_TCTL, E1000_TCTL_EN | E1000_TCTL_PSP);
     e1000_write32(E1000_TIPG, 0x0060200A);
-    
+
     e1000_write32(E1000_IMS, 0x1F6DC);
     e1000_write32(E1000_ICR, 0xFFFFFFFF);
     e1000_write32(E1000_CTRL, e1000_read32(E1000_CTRL) | E1000_CTRL_SLU);
-    
+
     sc->attached = 1;
     vga_write("  E1000: OK\n");
     return 0;
-    
+
 fail:
     if (sc->rx_desc) kfree(sc->rx_desc);
     if (sc->tx_desc) kfree(sc->tx_desc);
@@ -238,39 +238,39 @@ fail:
 
 void e1000_send(u8 *data, u16 len) {
     if (!sc || !sc->attached || len == 0 || len > TX_BUFFER_SIZE) return;
-    
+
     int idx = sc->tx_cur;
     int timeout = 100000;
     while ((sc->tx_desc[idx].status & 0x01) && timeout-- > 0) {
         __asm__ volatile ("pause");
     }
     if (timeout <= 0) return;
-    
+
     memcpy(sc->tx_buf[idx], data, len);
     sc->tx_desc[idx].length = len;
     sc->tx_desc[idx].cso = 0;
     sc->tx_desc[idx].status = 0;
     sc->tx_desc[idx].css = 0;
     sc->tx_desc[idx].special = 0;
-    
+
     sc->tx_cur = (sc->tx_cur + 1) % TX_DESC_COUNT;
     e1000_write32(E1000_TDT, sc->tx_cur);
 }
 
 int e1000_recv(u8 *buffer, u16 max_len) {
     if (!sc || !sc->attached) return 0;
-    
+
     int idx = sc->rx_cur;
     if (!(sc->rx_desc[idx].status & 0x01)) return 0;
-    
+
     u16 len = sc->rx_desc[idx].length;
     if (len > max_len) len = max_len;
     memcpy(buffer, sc->rx_buf[idx], len);
-    
+
     sc->rx_desc[idx].status = 0;
     sc->rx_cur = (sc->rx_cur + 1) % RX_DESC_COUNT;
     e1000_write32(E1000_RDT, sc->rx_cur);
-    
+
     return len;
 }
 

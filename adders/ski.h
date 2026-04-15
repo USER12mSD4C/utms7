@@ -1,6 +1,9 @@
+// adders/ski.h
 #ifndef SKI_H
 #define SKI_H
 
-void ski(void* mb_info);   // принимает указатель на Multiboot2 информацию
+#include "../include/types.h"
+
+void ski(u64 mb_info_addr);
 
 #endif
