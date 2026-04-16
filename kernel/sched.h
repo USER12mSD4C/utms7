@@ -47,7 +47,7 @@ typedef struct process {
     u64 user_rip;
 } process_t;
 
-void sched_init(void);
+int sched_init(void);
 int sched_create_kthread(const char* name, void (*entry)(void*), void* arg);
 void sched_start(void);
 void sched_yield(void);

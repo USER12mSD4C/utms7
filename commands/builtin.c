@@ -99,18 +99,18 @@ static int cmd_ps(int argc, char** argv) {
         shell_print("no processes\n");
         return 0;
     }
-    
+
     // Выделяем массив указателей
     process_t* procs[count];
     sched_get_processes(procs, count);
-    
+
     shell_print("PID  PPID  STATE  NAME\n");
     for (int i = 0; i < count; i++) {
         shell_print_num(procs[i]->pid);
         shell_print("   ");
         shell_print_num(procs[i]->ppid);
         shell_print("   ");
-        
+
         // Используем правильные константы из sched.h
         switch(procs[i]->state) {
             case PROC_READY: shell_print("R     "); break;
@@ -141,7 +141,7 @@ static int cmd_kill(int argc, char** argv) {
         pid = pid * 10 + (*p - '0');
         p++;
     }
-    
+
     // sched_kill возвращает int, проверяем
     if (sched_kill(pid) == 0) {
         shell_print("killed ");
@@ -163,10 +163,10 @@ static int cmd_ping(int argc, char** argv) {
         shell_print("Usage: ping <hostname> or <ip>\n");
         return -1;
     }
-    
+
     u32 ip = 0;
     int a, b, c, d;
-    
+
     if (sscanf(argv[1], "%d.%d.%d.%d", &a, &b, &c, &d) == 4) {
         ip = (a << 24) | (b << 16) | (c << 8) | d;
     } else {
@@ -180,7 +180,7 @@ static int cmd_ping(int argc, char** argv) {
         }
         shell_print("OK\n");
     }
-    
+
     shell_print("PING ");
     shell_print(argv[1]);
     shell_print(" (");
@@ -189,7 +189,7 @@ static int cmd_ping(int argc, char** argv) {
     shell_print("."); shell_print_num((ip >> 8) & 0xFF);
     shell_print("."); shell_print_num(ip & 0xFF);
     shell_print("): 56 data bytes\n");
-    
+
     for (int i = 0; i < 4; i++) {
         if (icmp_ping(ip, 1000) == 0) {
             shell_print("  64 bytes from ");
@@ -219,7 +219,7 @@ static int cmd_ifconfig(int argc, char** argv) {
         if (i < 5) shell_print(":");
     }
     shell_print("\n");
-    
+
     u32 ip = net_get_ip();
     shell_print("  IP:  ");
     shell_print_num((ip >> 24) & 0xFF);
@@ -227,7 +227,7 @@ static int cmd_ifconfig(int argc, char** argv) {
     shell_print("."); shell_print_num((ip >> 8) & 0xFF);
     shell_print("."); shell_print_num(ip & 0xFF);
     shell_print("\n");
-    
+
     u32 gw = net_get_gateway();
     shell_print("  GW:  ");
     shell_print_num((gw >> 24) & 0xFF);
@@ -235,7 +235,7 @@ static int cmd_ifconfig(int argc, char** argv) {
     shell_print("."); shell_print_num((gw >> 8) & 0xFF);
     shell_print("."); shell_print_num(gw & 0xFF);
     shell_print("\n");
-    
+
     u32 mask = net_get_netmask();
     shell_print("  MASK: ");
     shell_print_num((mask >> 24) & 0xFF);
@@ -243,7 +243,7 @@ static int cmd_ifconfig(int argc, char** argv) {
     shell_print("."); shell_print_num((mask >> 8) & 0xFF);
     shell_print("."); shell_print_num(mask & 0xFF);
     shell_print("\n");
-    
+
     u32 dns = net_get_dns();
     shell_print("  DNS: ");
     shell_print_num((dns >> 24) & 0xFF);
@@ -251,7 +251,7 @@ static int cmd_ifconfig(int argc, char** argv) {
     shell_print("."); shell_print_num((dns >> 8) & 0xFF);
     shell_print("."); shell_print_num(dns & 0xFF);
     shell_print("\n");
-    
+
     return 0;
 }
 
@@ -261,10 +261,10 @@ static int cmd_route(int argc, char** argv) {
     u32 gw = net_get_gateway();
     u32 mask = net_get_netmask();
     u32 network = ip & mask;
-    
+
     shell_print("Kernel IP routing table\n");
     shell_print("Destination     Gateway         Genmask         Iface\n");
-    
+
     shell_print_num((network >> 24) & 0xFF);
     shell_print("."); shell_print_num((network >> 16) & 0xFF);
     shell_print("."); shell_print_num((network >> 8) & 0xFF);
@@ -275,14 +275,14 @@ static int cmd_route(int argc, char** argv) {
     shell_print("."); shell_print_num((mask >> 8) & 0xFF);
     shell_print("."); shell_print_num(mask & 0xFF);
     shell_print("     eth0\n");
-    
+
     shell_print("0.0.0.0         ");
     shell_print_num((gw >> 24) & 0xFF);
     shell_print("."); shell_print_num((gw >> 16) & 0xFF);
     shell_print("."); shell_print_num((gw >> 8) & 0xFF);
     shell_print("."); shell_print_num(gw & 0xFF);
     shell_print("     0.0.0.0         eth0\n");
-    
+
     return 0;
 }
 
@@ -354,15 +354,15 @@ static int cmd_wget(int argc, char** argv) {
     shell_print("Downloading ");
     shell_print(argv[1]);
     shell_print("...\n");
-    
+
     u8* data;
     u32 size;
-    
+
     if (http_get(argv[1], &data, &size) != 0) {
         shell_print("Download failed\n");
         return -1;
     }
-    
+
     char filename[256];
     const char* last_slash = strrchr(argv[1], '/');
     if (last_slash) {
@@ -370,11 +370,11 @@ static int cmd_wget(int argc, char** argv) {
     } else {
         strcpy(filename, "download.bin");
     }
-    
+
     shell_print("Saving to ");
     shell_print(filename);
     shell_print("... ");
-    
+
     if (ufs_write(filename, data, size) == 0) {
         shell_print("OK (");
         shell_print_num(size);
@@ -392,10 +392,10 @@ static int cmd_time(int argc, char** argv) {
     (void)argc; (void)argv;
     extern u32 get_seconds(void);
     extern u32 get_ticks(void);
-    
+
     u32 sec = get_seconds();
     u32 ms = get_ticks() % 1000;
-    
+
     shell_print("Uptime: ");
     shell_print_num(sec);
     shell_print(".");
@@ -406,7 +406,7 @@ static int cmd_time(int argc, char** argv) {
     return 0;
 }
 
-void commands_init(void) {
+int commands_init(void) {
     shell_register_command("help", cmd_help, "show help");
     shell_register_command("clear", cmd_clear, "clear screen");
     shell_register_command("mem", cmd_mem, "show memory");
@@ -424,4 +424,5 @@ void commands_init(void) {
     shell_register_command("nslookup", cmd_nslookup, "DNS lookup");
     shell_register_command("wget", cmd_wget, "download file");
     shell_register_command("time", cmd_time, "show system uptime");
+    return 0;
 }

@@ -14,13 +14,13 @@ typedef struct {
     char desc[64];
 } shell_command_t;
 
-void shell_run(void);
+int shell_run(void);
 int shell_register_command(const char* name, int (*func)(int argc, char** argv), const char* desc);
 void shell_unregister_command(const char* name);
 void shell_print(const char* str);
 void shell_print_num(u32 num);
 void shell_print_hex(u32 num);
-void shell_init(void);
+int shell_init(void);
 int shell_was_interrupted(void);
 void shell_interrupt(void);
 void shell_set_interrupt_handler(void (*handler)(void));

@@ -80,11 +80,11 @@ typedef struct {
 static e1000_softc_t *sc = NULL;
 
 static inline u32 e1000_read32(u32 reg) {
-    return *(volatile u32*)((uintptr_t)sc->mmio_base + reg);
+    return *(volatile u32*)((u64)sc->mmio_base + reg);
 }
 
 static inline void e1000_write32(u32 reg, u32 val) {
-    *(volatile u32*)((uintptr_t)sc->mmio_base + reg) = val;
+    *(volatile u32*)((u64)sc->mmio_base + reg) = val;
 }
 
 static void e1000_read_mac(void) {

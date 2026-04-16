@@ -34,7 +34,7 @@ typedef struct {
     int pipe_to_next;
 } shell_cmd_t;
 
-void shell_init(void) {
+int shell_init(void) {
     cmd_count = 0;
     for (int i = 0; i < MAX_COMMANDS; i++) {
         commands[i].name[0] = '\0';
@@ -44,6 +44,7 @@ void shell_init(void) {
     for (int i = 0; i < MAX_HISTORY; i++) history[i][0] = '\0';
     history_count = 0;
     history_pos = -1;
+    return 0;
 }
 
 static void add_to_history(const char *line) {
@@ -79,13 +80,13 @@ void shell_unregister_command(const char *name) {
 // Парсинг команды с поддержкой перенаправлений и пайпов
 static int parse_command(char *line, shell_cmd_t *cmd) {
     memset(cmd, 0, sizeof(shell_cmd_t));
-    
+
     char *p = line;
     int arg_idx = 0;
     int in_quote = 0;
     char quote_char = 0;
     char *arg_start = p;
-    
+
     while (*p && arg_idx < 15) {
         if (!in_quote && (*p == '"' || *p == '\'')) {
             in_quote = 1;
@@ -94,7 +95,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             p++;
             continue;
         }
-        
+
         if (in_quote && *p == quote_char) {
             in_quote = 0;
             *p = '\0';
@@ -102,7 +103,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             p++;
             continue;
         }
-        
+
         if (!in_quote && (*p == ' ' || *p == '\t')) {
             if (arg_start != p) {
                 *p = '\0';
@@ -112,7 +113,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             arg_start = p;
             continue;
         }
-        
+
         if (!in_quote && *p == '>') {
             if (arg_start != p) {
                 *p = '\0';
@@ -132,7 +133,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             }
             continue;
         }
-        
+
         if (!in_quote && *p == '<') {
             if (arg_start != p) {
                 *p = '\0';
@@ -148,7 +149,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             }
             continue;
         }
-        
+
         if (!in_quote && *p == '2' && *(p+1) == '>') {
             if (arg_start != p) {
                 *p = '\0';
@@ -167,7 +168,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             }
             continue;
         }
-        
+
         if (!in_quote && *p == '|') {
             if (arg_start != p) {
                 *p = '\0';
@@ -177,7 +178,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             p++;
             return 1;
         }
-        
+
         if (!in_quote && *p == '&' && *(p+1) == '&') {
             if (arg_start != p) {
                 *p = '\0';
@@ -186,7 +187,7 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             p += 2;
             return 2;
         }
-        
+
         if (!in_quote && *p == '|' && *(p+1) == '|') {
             if (arg_start != p) {
                 *p = '\0';
@@ -195,15 +196,15 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
             p += 2;
             return 3;
         }
-        
+
         p++;
     }
-    
+
     if (arg_start != p && arg_idx < 15) {
         cmd->args[arg_idx++] = arg_start;
     }
     cmd->argc = arg_idx;
-    
+
     return 0;
 }
 
@@ -212,14 +213,14 @@ static int execute_redirected(shell_cmd_t *cmd) {
     int saved_stdin = -1, saved_stdout = -1, saved_stderr = -1;
     int new_stdin = -1, new_stdout = -1, new_stderr = -1;
     int result = -1;
-    
+
     // Если команда "cat" без аргументов и есть output_file — это создание файла
     if (cmd->argc == 1 && strcmp(cmd->args[0], "cat") == 0 && cmd->output_file) {
         int fd = open(cmd->output_file, 0x41, 0644); // O_WRONLY | O_CREAT
         if (fd >= 0) close(fd);
         return 0;
     }
-    
+
     // Перенаправление ввода
     if (cmd->input_file) {
         new_stdin = open(cmd->input_file, 0);
@@ -232,7 +233,7 @@ static int execute_redirected(shell_cmd_t *cmd) {
         saved_stdin = dup(0);
         dup2(new_stdin, 0);
     }
-    
+
     // Перенаправление вывода
     if (cmd->output_file) {
         int flags = 0x41; // O_WRONLY | O_CREAT
@@ -247,7 +248,7 @@ static int execute_redirected(shell_cmd_t *cmd) {
         saved_stdout = dup(1);
         dup2(new_stdout, 1);
     }
-    
+
     // Перенаправление ошибок
     if (cmd->error_file) {
         int flags = 0x41;
@@ -261,7 +262,7 @@ static int execute_redirected(shell_cmd_t *cmd) {
         saved_stderr = dup(2);
         dup2(new_stderr, 2);
     }
-    
+
     // Выполнение команды
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(cmd->args[0], commands[i].name) == 0) {
@@ -269,13 +270,13 @@ static int execute_redirected(shell_cmd_t *cmd) {
             break;
         }
     }
-    
+
     if (result == -1) {
         shell_print("unknown command: ");
         shell_print(cmd->args[0]);
         shell_print("\n");
     }
-    
+
 cleanup:
     // Восстановление дескрипторов
     if (saved_stdin >= 0) {
@@ -293,51 +294,51 @@ cleanup:
         close(saved_stderr);
         if (new_stderr >= 0) close(new_stderr);
     }
-    
+
     return result;
 }
 
 // Выполнение пайпа (через временный файл)
 static int execute_pipe(shell_cmd_t *cmd1, shell_cmd_t *cmd2) {
     char pipe_file[] = "/tmp/pipeXXXXXX";
-    
+
     // Создаём временный файл
     int pipe_fd = open(pipe_file, 0x42, 0644); // O_RDWR | O_CREAT | O_TRUNC
     if (pipe_fd < 0) {
         shell_print("Cannot create pipe file\n");
         return -1;
     }
-    
+
     // Сохраняем stdout
     int saved_stdout = dup(1);
-    
+
     // Перенаправляем stdout в pipe
     dup2(pipe_fd, 1);
-    
+
     // Выполняем первую команду
     int result1 = execute_redirected(cmd1);
-    
+
     // Восстанавливаем stdout
     dup2(saved_stdout, 1);
     close(saved_stdout);
-    
+
     if (result1 == 0) {
         // Перенаправляем stdin из pipe
         int saved_stdin = dup(0);
         lseek(pipe_fd, 0, 0);
         dup2(pipe_fd, 0);
-        
+
         // Выполняем вторую команду
         int result2 = execute_redirected(cmd2);
-        
+
         // Восстанавливаем stdin
         dup2(saved_stdin, 0);
         close(saved_stdin);
     }
-    
+
     close(pipe_fd);
     unlink(pipe_file);
-    
+
     return 0;
 }
 
@@ -367,17 +368,17 @@ void shell_print_hex(u32 num) { vga_write_hex(num); }
 
 int shell_execute(const char *cmd_line) {
     if (!cmd_line || !cmd_line[0]) return 0;
-    
+
     char buf[MAX_LINE_LEN];
     strcpy(buf, cmd_line);
-    
+
     // Убираем trailing newline
     int len = strlen(buf);
     if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
-    
+
     shell_cmd_t cmd1, cmd2;
     int parse_result = parse_command(buf, &cmd1);
-    
+
     if (parse_result == 1 && cmd1.pipe_to_next) {
         // Есть пайп — парсим вторую команду
         char *pipe_pos = strchr(buf, '|');
@@ -408,7 +409,7 @@ int shell_execute(const char *cmd_line) {
         }
         return result;
     }
-    
+
     return execute_redirected(&cmd1);
 }
 
@@ -430,12 +431,12 @@ static void clear_line(u8 input_x, u8 input_y) {
     vga_setpos(input_x, input_y);
 }
 
-void shell_run(void) {
+int shell_run(void) {
     char line[MAX_LINE_LEN];
     int pos = 0;
     u8 cursor_x = 0, cursor_y = 0;
     int key;
-    
+
     while (1) {
         print_prompt();
         vga_getpos(&cursor_x, &cursor_y);
@@ -443,12 +444,12 @@ void shell_run(void) {
         pos = 0;
         history_pos = -1;
         line[0] = '\0';
-        
+
         while (1) {
             if (!keyboard_data_ready()) continue;
-            
+
             key = keyboard_getc();
-            
+
             if (key == 0xE0) {
                 if (history_pos < history_count - 1) {
                     history_pos++;
@@ -462,7 +463,7 @@ void shell_run(void) {
                 }
                 continue;
             }
-            
+
             if (key == 0xE1) {
                 if (history_pos > 0) {
                     history_pos--;
@@ -483,7 +484,7 @@ void shell_run(void) {
                 }
                 continue;
             }
-            
+
             if (key == 0xE2) {
                 if (cursor_x > input_x) {
                     cursor_x--;
@@ -491,7 +492,7 @@ void shell_run(void) {
                 }
                 continue;
             }
-            
+
             if (key == 0xE3) {
                 if (cursor_x - input_x < pos) {
                     cursor_x++;
@@ -499,11 +500,11 @@ void shell_run(void) {
                 }
                 continue;
             }
-            
+
             if (key == '\t') {
                 continue;
             }
-            
+
             if (key == '\b' || key == 0x7F) {
                 if (cursor_x > input_x) {
                     int idx = cursor_x - input_x - 1;
@@ -517,7 +518,7 @@ void shell_run(void) {
                 }
                 continue;
             }
-            
+
             if (key == '\n' || key == '\r') {
                 line[pos] = '\0';
                 vga_putchar('\n');
@@ -527,7 +528,7 @@ void shell_run(void) {
                 }
                 break;
             }
-            
+
             if (key >= 32 && key <= 126) {
                 if (pos < MAX_LINE_LEN - 1) {
                     int idx = cursor_x - input_x;
@@ -543,4 +544,5 @@ void shell_run(void) {
             }
         }
     }
+    return 0;
 }

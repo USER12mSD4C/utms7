@@ -228,7 +228,12 @@ static void free_process(process_t *p) {
         free_address_space((u64*)p->cr3);
         p->cr3 = 0;
     }
-    for (int i = 0; i < 32; i++) p->fds[i] = 0;
+    for (int i = 0; i < 32; i++) {
+        p->fds[i].used = 0;
+        p->fds[i].type = 0;
+        p->fds[i].data.file.pos = 0;
+        p->fds[i].data.file.path[0] = '\0';
+    }
 }
 
 // === Ассемблерный переключатель контекста ===
@@ -278,7 +283,7 @@ __asm__ (
 );
 
 // === Инициализация планировщика ===
-void sched_init(void) {
+int sched_init(void) {
     memset(processes, 0, sizeof(processes));
     ready_queue = sleep_queue = NULL;
     current = NULL;
@@ -290,7 +295,7 @@ void sched_init(void) {
 
     // Создаём idle-процесс
     process_t *idle = find_free_proc();
-    if (!idle) return;
+    if (!idle) return 1;
     idle->pid = alloc_pid();
     strcpy(idle->name, "idle");
     idle->state = PROC_READY;
@@ -308,12 +313,19 @@ void sched_init(void) {
     frame->ss = 0x10;
     idle->kstack_top = (u64)frame;
 
-    for (int i = 0; i < 32; i++) idle->fds[i] = 0;
+    for (int i = 0; i < 32; i++) {
+        idle->fds[i].used = 0;
+        idle->fds[i].type = 0;
+        idle->fds[i].data.file.pos = 0;
+        idle->fds[i].data.file.path[0] = '\0';
+    }
     enqueue_ready(idle);
     current = idle;
     process_count = 1;
 
     pit_init();
+
+    return 0;
 }
 
 // === Создание потока ядра ===
@@ -348,7 +360,12 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     p->kstack_top = (u64)frame;
 
     p->heap_start = p->heap_end = 0;
-    for (int i = 0; i < 32; i++) p->fds[i] = 0;
+    for (int i = 0; i < 32; i++) {
+        p->fds[i].used = 0;
+        p->fds[i].type = 0;
+        p->fds[i].data.file.pos = 0;
+        p->fds[i].data.file.path[0] = '\0';
+    }
     enqueue_ready(p);
     process_count++;
     return p->pid;

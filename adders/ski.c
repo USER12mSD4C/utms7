@@ -8,6 +8,24 @@
 #include "../kernel/syscall.h"
 #include "../include/multiboot2.h"
 #include "../include/string.h"
+#include "../kernel/paging.h"
+#include "../kernel/sched.h"
+#include "../kernel/syscall.h"
+#include "../kernel/kinit.h"
+#include "../drivers/pci.h"
+#include "../net/net.h"
+#include "../include/shell_api.h"
+#include "../commands/builtin.h"
+#include "../commands/fs.h"
+
+extern void disk_commands_init(void);
+extern void commands_init(void);
+extern void fs_commands_init(void);
+extern void shell_init(void);
+extern void shell_run(void);
+extern void kinit_run_all(void);
+extern void sched_start(void);
+extern int sched_create_kthread(const char*, void(*)(void*), void*);
 
 static const char* version = "0.1";
 
@@ -61,10 +79,7 @@ void ski(u64 mb_info_addr) {
         vga_write("[memory:FAIL] no memory map\n");
         while(1) __asm__ volatile("hlt");
     }
-    if (memory_init(mem_start, mem_size) != 0) {
-        vga_write("[memory:FAIL]\n");
-        while(1) __asm__ volatile("hlt");
-    }
+    memory_init(mem_start, mem_size);
     vga_write("[memory:OK]\n");
 
     // 3. Основная таблица (генерируется X‑макросом)

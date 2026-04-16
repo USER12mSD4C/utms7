@@ -45,7 +45,7 @@
 #define SYS_gettime     52
 #define SYS_fork        57
 
-void syscall_init(void);
+int syscall_init(void);
 long syscall_handler_c(long num, long a1, long a2, long a3, long a4, long a5, long a6);
 
 #endif

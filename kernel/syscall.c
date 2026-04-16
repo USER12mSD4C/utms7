@@ -585,7 +585,7 @@ static long sys_gettime(long a1, long a2, long a3, long a4, long a5, long a6) {
 typedef long (*syscall_t)(long, long, long, long, long, long);
 static syscall_t syscall_table[64];
 
-void syscall_init(void) {
+int syscall_init(void) {
     for (int i = 0; i < 64; i++) syscall_table[i] = NULL;
 
     syscall_table[0] = sys_exit;
@@ -625,6 +625,8 @@ void syscall_init(void) {
     syscall_table[50] = sys_meminfo;
     syscall_table[51] = sys_ps;
     syscall_table[52] = sys_gettime;
+
+    return 0;
 }
 
 long syscall_handler_c(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
