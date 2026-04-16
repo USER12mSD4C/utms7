@@ -8,8 +8,8 @@ i dont recommend use it, still untested
 
 ## last huge update
 
-- kapi and syscalls for bin
-- upac package manager
+- ski init system
+- multitask (in work)
 
 ## Requirements
 
