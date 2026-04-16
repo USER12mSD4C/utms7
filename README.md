@@ -41,8 +41,7 @@ static const char __vesa_name[] __attribute__((section(".module_name"))) = "vesa
 static int (*__vesa_entry)(void) __attribute__((section(".module_entry"))) = vesa_init;
 ```
 ## how it works?
-dunno, but kanye is holding my code
-<img width="1920" height="1051" alt="image" src="https://github.com/user-attachments/assets/2c1b2048-8db3-4630-86de-dd53eee5c871" />
+hamburger
 
 ## useful
 - how to prepare disk?
@@ -53,6 +52,8 @@ udisk create /dev/sdX {amount of MB in partition}
 mkfs.ufs /dev/sdX1
 mount /dev/sdX1 /
 ```
+
+cheeszeburgerh
 
 - how to update system or install packages?
 
