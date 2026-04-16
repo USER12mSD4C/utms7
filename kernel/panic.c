@@ -26,13 +26,13 @@ static void print_num(u32 num) {
 
 void panic(const char* message) {
     __asm__ volatile ("cli");
-    
+
     vga_setcolor(0x4F, 0);
     vga_clear();
     vga_write("d-tF&P handler: ");
     vga_write(message);
     vga_write("\n");
-    
+
     u64 rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp;
     __asm__ volatile(
         "mov %%rax, %0\n"
@@ -46,15 +46,16 @@ void panic(const char* message) {
         : "=m"(rax), "=m"(rbx), "=m"(rcx), "=m"(rdx),
           "=m"(rsi), "=m"(rdi), "=m"(rbp), "=m"(rsp)
     );
-    
+
     vga_write("RAX="); print_hex(rax); vga_write(" RBX="); print_hex(rbx); vga_write("\n");
     vga_write("RCX="); print_hex(rcx); vga_write(" RDX="); print_hex(rdx); vga_write("\n");
     vga_write("RSI="); print_hex(rsi); vga_write(" RDI="); print_hex(rdi); vga_write("\n");
     vga_write("RBP="); print_hex(rbp); vga_write(" RSP="); print_hex(rsp); vga_write("\n");
-    
+    vga_write("ye - Mari Kart\n");
+
     outb(0xE9, 'P');
     while (*message) outb(0xE9, *message++);
-    
+
     while(1) { __asm__ volatile ("hlt"); }
 }
 
@@ -69,6 +70,7 @@ void panic_assert(const char* file, u32 line, const char* expr) {
     vga_write(" ");
     vga_write(expr);
     vga_write("\n");
+    vga_write("ye - Mari Kart\n");
     while(1) { __asm__ volatile ("hlt"); }
 }
 
