@@ -510,9 +510,10 @@ int sched_kill(int pid) {
     return -1;
 }
 
-void sched_start(void) {
-    if (!current) return;
+int sched_start(void) {
+    if (!current) return 0;
     __asm__ volatile ("sti");
     sched_yield();
     while(1) __asm__ volatile ("hlt");
+    return 0;
 }

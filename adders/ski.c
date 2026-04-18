@@ -24,7 +24,7 @@ extern void fs_commands_init(void);
 extern void shell_init(void);
 extern void shell_run(void);
 extern void kinit_run_all(void);
-extern void sched_start(void);
+extern int sched_start(void);
 extern int sched_create_kthread(const char*, void(*)(void*), void*);
 
 static const char* version = "0.1";
@@ -107,7 +107,6 @@ void ski(u64 mb_info_addr) {
                 vga_write("OK\n"); \
             } \
         } while(0);
-
     #include "../kernel/init_table.h"
     #undef X
 

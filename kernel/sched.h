@@ -49,7 +49,7 @@ typedef struct process {
 
 int sched_init(void);
 int sched_create_kthread(const char* name, void (*entry)(void*), void* arg);
-void sched_start(void);
+int sched_start(void);
 void sched_yield(void);
 void sched_sleep(u32 ms);
 void sched_exit(int code);

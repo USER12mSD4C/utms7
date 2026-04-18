@@ -60,7 +60,6 @@ static int cmd_ls(int argc, char** argv) {
     }
 
     if (count == 0) {
-        // Пустая директория - ничего не выводим
         if (entries) kfree(entries);
         return 0;
     }

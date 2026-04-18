@@ -4,7 +4,7 @@
 
 #include "../include/types.h"
 
-void net_init(void);
+int net_init(void);
 void net_handle_packet(u8 *packet, int len);
 void net_eth_send(u8 *dst_mac, u16 type, u8 *data, int len);
 u8* net_get_mac(void);

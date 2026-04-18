@@ -298,7 +298,6 @@ int module_unload(const char* name) {
     return -1;
 }
 
-// Загружает ВСЕ модули из папки /modules, сортируя по приоритету
 int kinit_run_all(void) {
     vga_write("\nKinit: scanning /modules/\n");
 

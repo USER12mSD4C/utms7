@@ -23,9 +23,9 @@ static u32 our_dns = 0;
 static int network_ready = 0;
 static int nic_type = 0;  // 0 = none, 1 = e1000, 2 = rtl8139
 
-void net_init(void) {
+int net_init(void) {
     vga_write("\nNetwork: Scanning for devices...\n");
-    
+
     // Ищем Intel e1000
     pci_dev_t *dev = pci_find_device(0x8086, 0x100E);
     if (dev) {
@@ -36,7 +36,7 @@ void net_init(void) {
         vga_write(":");
         vga_write_hex(dev->func);
         vga_write(")\n");
-        
+
 if (e1000_init(dev) == 0) {
     e1000_get_mac(our_mac);
     // Проверяем, что MAC не нулевой
@@ -68,7 +68,7 @@ if (e1000_init(dev) == 0) {
             vga_write("Intel e1000 init failed\n");
         }
     }
-    
+
     // Если e1000 не найден или не загрузился, ищем RTL8139
     if (!network_ready) {
         dev = pci_find_device(0x10EC, 0x8139);
@@ -80,7 +80,7 @@ if (e1000_init(dev) == 0) {
             vga_write(":");
             vga_write_hex(dev->func);
             vga_write(")\n");
-            
+
             if (rtl8139_init(dev) == 0) {
                 rtl8139_get_mac(our_mac);
                 network_ready = 1;
@@ -96,17 +96,18 @@ if (e1000_init(dev) == 0) {
             }
         }
     }
-    
+
     if (!network_ready) {
         vga_write("No network device found, using dummy MAC\n");
         our_mac[0] = 0x52; our_mac[1] = 0x54; our_mac[2] = 0x00;
         our_mac[3] = 0x12; our_mac[4] = 0x34; our_mac[5] = 0x56;
+        return 0;
     }
-    
+
     arp_cache_init();
     udp_init();
     tcp_init();
-    
+
     if (network_ready) {
         vga_write("Starting DHCP...\n");
         for (int attempt = 0; attempt < 3; attempt++) {
@@ -121,7 +122,7 @@ if (e1000_init(dev) == 0) {
             vga_write(" failed\n");
         }
     }
-    
+
     if (our_ip == 0) {
         our_ip = 0x0A00020F;      // 10.0.2.15
         our_gateway = 0x0A000202; // 10.0.2.2
@@ -129,7 +130,7 @@ if (e1000_init(dev) == 0) {
         our_dns = 0x0A000202;     // 10.0.2.2
         vga_write("Using static IP: 10.0.2.15 (QEMU mode)\n");
     }
-    
+
     vga_write("\n=== Network Configuration ===\n");
     vga_write("IP:     ");
     vga_write_num((our_ip >> 24) & 0xFF);
@@ -140,7 +141,7 @@ if (e1000_init(dev) == 0) {
     vga_write(".");
     vga_write_num(our_ip & 0xFF);
     vga_write("\n");
-    
+
     vga_write("Gateway: ");
     vga_write_num((our_gateway >> 24) & 0xFF);
     vga_write(".");
@@ -150,7 +151,7 @@ if (e1000_init(dev) == 0) {
     vga_write(".");
     vga_write_num(our_gateway & 0xFF);
     vga_write("\n");
-    
+
     vga_write("Netmask: ");
     vga_write_num((our_netmask >> 24) & 0xFF);
     vga_write(".");
@@ -160,7 +161,7 @@ if (e1000_init(dev) == 0) {
     vga_write(".");
     vga_write_num(our_netmask & 0xFF);
     vga_write("\n");
-    
+
     vga_write("DNS:     ");
     vga_write_num((our_dns >> 24) & 0xFF);
     vga_write(".");
@@ -171,15 +172,16 @@ if (e1000_init(dev) == 0) {
     vga_write_num(our_dns & 0xFF);
     vga_write("\n");
     vga_write("===========================\n\n");
-    
+
     vga_write("Network ready!\n");
+    return 0;
 }
 
 void net_handle_packet(u8 *packet, int len) {
     if (len < sizeof(eth_hdr_t)) return;
     eth_hdr_t *eth = (eth_hdr_t*)packet;
     u16 type = ntohs(eth->type);
-    
+
     switch (type) {
         case ETHERTYPE_ARP:
             arp_handle_packet(packet + sizeof(eth_hdr_t), len - sizeof(eth_hdr_t));
@@ -200,7 +202,7 @@ void net_eth_send(u8 *dst_mac, u16 type, u8 *data, int len) {
     memcpy(eth->src, our_mac, 6);
     eth->type = htons(type);
     memcpy(packet + sizeof(eth_hdr_t), data, len);
-    
+
     if (nic_type == 1 && e1000_present()) {
         e1000_send(packet, len + sizeof(eth_hdr_t));
     } else if (nic_type == 2 && rtl8139_present()) {
