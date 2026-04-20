@@ -18,12 +18,12 @@
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 
-extern void disk_commands_init(void);
-extern void commands_init(void);
-extern void fs_commands_init(void);
-extern void shell_init(void);
-extern void shell_run(void);
-extern void kinit_run_all(void);
+extern int disk_commands_init(void);
+extern int commands_init(void);
+extern int fs_commands_init(void);
+extern int shell_init(void);
+extern int shell_run(void);
+extern int kinit_run_all(void);
 extern int sched_start(void);
 extern int sched_create_kthread(const char*, void(*)(void*), void*);
 
@@ -99,7 +99,7 @@ void ski(u64 mb_info_addr) {
             vga_write("] "); \
             vga_write(name); \
             vga_write("... "); \
-            int res = func(##__VA_ARGS__); \
+            int res = func(__VA_ARGS__); \
             if (res != 0) { \
                 vga_write("FAIL\n"); \
                 if (crit) while(1) __asm__ volatile("hlt"); \

@@ -13,11 +13,11 @@ typedef struct {
     char desc[CMD_MAX_DESC];
 } shell_command_t;
 
-void shell_init(void);
+int shell_init(void);
 int shell_register_command(const char* name, int (*func)(int argc, char** argv), const char* desc);
 int shell_unregister_command(const char* name);
 int shell_execute(const char* cmd_line);
-void shell_run(void);
+int shell_run(void);
 char** shell_split_args(char* str, int* argc);
 void shell_print(const char* str);
 void shell_print_num(u32 num);

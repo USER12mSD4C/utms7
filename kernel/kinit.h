@@ -12,6 +12,6 @@ typedef struct {
 } kinit_module_t;
 
 // Основные функции
-void kinit_run_all(void);
+int kinit_run_all(void);
 
 #endif

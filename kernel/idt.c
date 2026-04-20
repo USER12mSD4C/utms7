@@ -27,7 +27,7 @@ struct idt_ptr {
 
 static struct idt_entry idt[IDT_ENTRIES] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
-static irq_handler_t irq_handlers[16];
+irq_handler_t irq_handlers[16];
 u32 system_ticks = 0;
 
 // Внешние ассемблерные точки входа
@@ -105,12 +105,6 @@ void irq_mask(int irq) {
 void exception_handler_c(int num, int error_code) {
     panic("Unhandled CPU exception");
     (void)num; (void)error_code;
-}
-
-void irq_handler_dispatch(int irq) {
-    if (irq >= 0 && irq < 16 && irq_handlers[irq])
-        irq_handlers[irq]();
-    send_eoi(irq);
 }
 
 static void irq0_handler_c(void) {
@@ -228,9 +222,6 @@ int timer_init(void) {
     outb(0x40, (divisor >> 8) & 0xFF);
     return 0;
 }
-
-u32 get_ticks(void) { return system_ticks; }
-u32 get_seconds(void) { return system_ticks / 100; }
 
 void idt_get_info(u16 *limit, u64 *base) {
     struct idt_ptr ptr;

@@ -57,7 +57,15 @@ kernel/isr.o: kernel/isr.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 eoc
 
+kernel/sched_asm.o: kernel/sched_asm.S
+	$(AS) $(ASFLAGS) -o $@ $<
+eoc
+
 kernel/syscall_asm.o: kernel/syscall.asm
+	$(AS) $(ASFLAGS) -o $@ $<
+eoc
+
+kernel/sched_asm.o: kernel/sched_asm.S
 	$(AS) $(ASFLAGS) -o $@ $<
 eoc
 
@@ -70,8 +78,8 @@ eoc
 
 # == ОБЪЕКТЫ ==
 
-CORE = kernel/kernel.o kernel/kinit.o kernel/elf.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o
-ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o
+CORE = kernel/kernel.o kernel/kinit.o kernel/elf.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o
+ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/sched_asm.o
 DRV = drivers/vga.o drivers/vesa.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
 LIB = lib/string.o lib/font.o lib/path.o lib/zlib.o lib/libc.o
@@ -97,10 +105,13 @@ iso: kernel.bin kom
 	echo " CREATING ISO "
 	mkdir -p iso/boot/grub iso/modules
 	cp kernel.bin iso/boot/kernel.bin
-	cp modules/*.ko iso/modules/ 2>/dev/null || true
-	echo 'set timeout=0' > iso/boot/grub/grub.cfg
-	echo 'menuentry "UTMS" { multiboot2 /boot/kernel.bin; boot }' >> iso/boot/grub/grub.cfg
-	grub-mkrescue -o utms.iso iso/
+	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
+	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
+	sh -c 'echo "menuentry \"UTMS\" {" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    multiboot2 /boot/kernel.bin" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "}" >> iso/boot/grub/grub.cfg'
+	/usr/bin/grub-mkrescue -o utms.iso iso/
 eoc
 
 disk5g.img:

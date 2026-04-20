@@ -12,7 +12,6 @@
 #define PROC_ZOMBIE     5
 
 #define TIME_SLICE_MS   10
-
 #define MAX_PROCESSES   64
 
 typedef struct {
@@ -63,5 +62,9 @@ void sched_tick(void);
 u32 get_ticks(void);
 u64 get_microseconds(void);
 u32 get_seconds(void);
+
+extern volatile int sched_need_resched;
+void sched_switch(void);
+extern u64 kstack_top_offset_value;
 
 #endif
