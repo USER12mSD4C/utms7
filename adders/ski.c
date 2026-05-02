@@ -88,6 +88,7 @@ void ski(u64 mb_info_addr) {
     #include "../kernel/init_table.h"
     #undef X
 
+    __asm__ volatile ("cli");
     int current = 0;
     #define X(name, func, crit, ...) \
         do { \

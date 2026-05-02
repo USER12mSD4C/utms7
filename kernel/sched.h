@@ -1,4 +1,4 @@
-// файл: kernel/sched.h
+// kernel/sched.h
 #ifndef SCHED_H
 #define SCHED_H
 
@@ -64,7 +64,6 @@ u64 get_microseconds(void);
 u32 get_seconds(void);
 
 extern volatile int sched_need_resched;
-void sched_switch(void);
-extern u64 kstack_top_offset_value;
+process_t* sched_schedule(void);
 
 #endif

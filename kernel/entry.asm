@@ -114,6 +114,7 @@ _start:
 
 bits 64
 start64:
+    cli
     mov ax, 0x10
     mov ds, ax
     mov es, ax

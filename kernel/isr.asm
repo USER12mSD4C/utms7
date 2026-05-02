@@ -1,11 +1,14 @@
-; kernel/isr.asm
+; kernel/isr.asm – финальная версия
 bits 64
 section .text
 
 extern exception_handler_c
 extern irq_handler_dispatch
 extern current
+extern sched_need_resched
+extern sched_schedule
 extern kstack_top_offset_value
+extern cr3_offset_value
 
 %macro SAVE_REGS 0
     push rax
@@ -77,7 +80,7 @@ irq%1:
     push %2
     SAVE_REGS
 
-    ; сохраняем указатель стека в current->kstack_top
+    ; сохраняем RSP в current->kstack_top
     mov rax, [current]
     add rax, [kstack_top_offset_value]
     mov [rax], rsp
@@ -85,6 +88,22 @@ irq%1:
     mov rdi, %2
     call irq_handler_dispatch
 
+    cmp byte [sched_need_resched], 0
+    je irq%1_no_switch
+
+    call sched_schedule
+
+    ; загружаем RSP и CR3 нового процесса
+    mov rax, [current]
+    add rax, [kstack_top_offset_value]
+    mov rsp, [rax]
+
+    mov rax, [current]
+    add rax, [cr3_offset_value]
+    mov rax, [rax]
+    mov cr3, rax
+
+irq%1_no_switch:
     RESTORE_REGS
     add rsp, 16
     iretq
