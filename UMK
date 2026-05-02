@@ -65,10 +65,6 @@ kernel/syscall_asm.o: kernel/syscall.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 eoc
 
-kernel/sched_asm.o: kernel/sched_asm.S
-	$(AS) $(ASFLAGS) -o $@ $<
-eoc
-
 # == ИНСТРУМЕНТЫ ==
 
 tools/mkmod: tools/mkmod.c
@@ -79,7 +75,7 @@ eoc
 # == ОБЪЕКТЫ ==
 
 CORE = kernel/kernel.o kernel/kinit.o kernel/elf.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o
-ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/sched_asm.o
+ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o
 DRV = drivers/vga.o drivers/vesa.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
 LIB = lib/string.o lib/font.o lib/path.o lib/zlib.o lib/libc.o

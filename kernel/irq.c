@@ -1,3 +1,4 @@
+// kernel/irq.c
 #include "idt.h"
 #include "sched.h"
 
@@ -8,7 +9,6 @@ void irq_handler_dispatch(int irq) {
         irq_handlers[irq]();
     }
 
-    // Если нужно переключение, вызываем планировщик
     if (sched_need_resched) {
         sched_switch();
     }

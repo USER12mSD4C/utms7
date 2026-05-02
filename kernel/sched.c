@@ -23,8 +23,6 @@ struct interrupt_frame {
     u64 rip, cs, rflags, rsp, ss;
 };
 
-extern void switch_to_context(u64 *old_rsp, u64 new_rsp, u64 new_cr3);
-
 static process_t processes[MAX_PROCESSES];
 process_t *current = NULL;
 static process_t *ready_queue = NULL;
@@ -37,7 +35,7 @@ static volatile u32 pit_ticks = 0;
 static volatile u64 tsc_offset = 0;
 static volatile u64 tsc_freq_hz = 0;
 
-// Смещение поля kstack_top в структуре process_t (вычисляется в sched_init)
+// Смещение поля kstack_top в структуре process_t (вычисляется при init)
 u64 kstack_top_offset_value = 0;
 
 static inline u64 rdtsc(void) {
@@ -229,7 +227,6 @@ int sched_init(void) {
     tsc_freq_hz = 0;
     tsc_offset = 0;
 
-    // Вычисляем смещение kstack_top для использования в ассемблере
     kstack_top_offset_value = (u64)&((process_t*)0)->kstack_top;
 
     process_t *idle = find_free_proc();
@@ -291,6 +288,7 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     return p->pid;
 }
 
+// Финальное переключение контекста без порчи kstack_top
 void sched_switch(void) {
     process_t *prev = current;
     process_t *next;
@@ -320,7 +318,18 @@ void sched_switch(void) {
     current = next;
     sched_need_resched = 0;
 
-    switch_to_context(&prev->kstack_top, next->kstack_top, next->cr3);
+    u64 new_rsp = next->kstack_top;
+    u64 new_cr3 = next->cr3;
+
+    __asm__ volatile (
+        "mov %0, %%rsp\n"
+        "mov %1, %%cr3\n"
+        :
+        : "r"(new_rsp), "r"(new_cr3)
+        : "memory"
+    );
+    // Сюда мы никогда не вернёмся
+    __builtin_unreachable();
 }
 
 void sched_tick(void) {
@@ -334,7 +343,6 @@ void sched_yield(void) {
     __asm__ volatile ("cli");
     sched_need_resched = 1;
     sched_switch();
-    __asm__ volatile ("sti");
 }
 
 void sched_sleep(u32 ms) {
@@ -354,7 +362,6 @@ void sched_exit(int code) {
     free_process(current);
     process_count--;
     sched_yield();
-    while (1) __asm__ volatile ("hlt");
 }
 
 int sched_waitpid(u32 pid, int *status) {
