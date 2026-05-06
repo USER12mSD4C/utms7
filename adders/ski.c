@@ -29,7 +29,6 @@ extern int sched_create_kthread(const char*, void(*)(void*), void*);
 
 static const char* version = "0.1";
 
-// Вспомогательная печать числа
 static void print_num(u32 n) {
     char buf[16];
     int i = 0;
@@ -38,28 +37,40 @@ static void print_num(u32 n) {
     while (i-- > 0) vga_putchar(buf[i]);
 }
 
-// Получение памяти (оставим как отдельную функцию)
-static int get_first_available_memory(u32 mb_info_addr, u64* out_start, u64* out_size) {
+static void init_memory_from_multiboot(u32 mb_info_addr) {
     multiboot2_info_header_t* header = (multiboot2_info_header_t*)(u64)mb_info_addr;
     multiboot2_tag_t* tag = (multiboot2_tag_t*)(header + 1);
+
+    int found = 0;
+    u64 first_start = 0, first_size = 0;
+
     while (tag->type != MULTIBOOT2_TAG_END) {
         if (tag->type == MULTIBOOT2_TAG_MMAP) {
             multiboot2_tag_mmap_t* mmap_tag = (multiboot2_tag_mmap_t*)tag;
             multiboot2_mmap_entry_t* entry = (multiboot2_mmap_entry_t*)(mmap_tag + 1);
             u32 entry_count = (mmap_tag->size - sizeof(multiboot2_tag_mmap_t)) / mmap_tag->entry_size;
+
             for (u32 i = 0; i < entry_count; i++) {
                 if (entry->type == MULTIBOOT2_MEMORY_AVAILABLE) {
-                    *out_start = entry->base_addr;
-                    *out_size = entry->length;
-                    return 0;
+                    if (!found) {
+                        first_start = entry->base_addr;
+                        first_size = entry->length;
+                        found = 1;
+                        memory_init(first_start, first_size);
+                    } else {
+                        memory_add_region(entry->base_addr, entry->length);
+                    }
                 }
                 entry = (multiboot2_mmap_entry_t*)((u8*)entry + mmap_tag->entry_size);
             }
-            break;
         }
         tag = (multiboot2_tag_t*)((u8*)tag + ((tag->size + 7) & ~7));
     }
-    return -1;
+
+    if (!found) {
+        vga_write("[memory:FAIL] no available memory\n");
+        while(1) __asm__ volatile("hlt");
+    }
 }
 
 void ski(u64 mb_info_addr) {
@@ -67,22 +78,14 @@ void ski(u64 mb_info_addr) {
     vga_write(version);
     vga_write("\n\n");
 
-    // 1. Критичные ранние инициализации
     if (gdt_init() != 0) { vga_write("[GDT:FAIL]\n"); while(1) __asm__ volatile("hlt"); }
     vga_write("[GDT:OK]\n");
     if (idt_init() != 0) { vga_write("[IDT:FAIL]\n"); while(1) __asm__ volatile("hlt"); }
     vga_write("[IDT:OK]\n");
 
-    // 2. Память
-    u64 mem_start, mem_size;
-    if (get_first_available_memory((u32)mb_info_addr, &mem_start, &mem_size) != 0) {
-        vga_write("[memory:FAIL] no memory map\n");
-        while(1) __asm__ volatile("hlt");
-    }
-    memory_init(mem_start, mem_size);
+    init_memory_from_multiboot((u32)mb_info_addr);
     vga_write("[memory:OK]\n");
 
-    // 3. Основная таблица (генерируется X‑макросом)
     int total = 0;
     #define X(name, func, crit, ...) total++;
     #include "../kernel/init_table.h"
