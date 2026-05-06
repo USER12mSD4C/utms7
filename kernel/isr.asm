@@ -1,4 +1,4 @@
-; kernel/isr.asm – финальная версия
+; kernel/isr.asm
 bits 64
 section .text
 
@@ -80,11 +80,14 @@ irq%1:
     push %2
     SAVE_REGS
 
-    ; сохраняем RSP в current->kstack_top
+    ; Сохраняем RSP в current->kstack_top
     mov rax, [current]
+    test rax, rax
+    jz irq%1_skip_save
     add rax, [kstack_top_offset_value]
     mov [rax], rsp
 
+irq%1_skip_save:
     mov rdi, %2
     call irq_handler_dispatch
 
@@ -93,8 +96,10 @@ irq%1:
 
     call sched_schedule
 
-    ; загружаем RSP и CR3 нового процесса
+    ; Загружаем RSP и CR3 нового процесса
     mov rax, [current]
+    test rax, rax
+    jz irq%1_no_switch
     add rax, [kstack_top_offset_value]
     mov rsp, [rax]
 

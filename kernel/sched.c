@@ -29,6 +29,7 @@ static process_t *sleep_queue = NULL;
 static u32 next_pid = 1;
 static u32 process_count = 0;
 volatile int sched_need_resched = 0;
+static volatile int sched_locked = 0;
 
 static volatile u32 pit_ticks = 0;
 static volatile u64 tsc_offset = 0;
@@ -80,31 +81,30 @@ static void pit_init(void) {
     irq_unmask(PIT_IRQ);
 }
 
-static inline void cli(void) { __asm__ volatile ("cli"); }
-static inline void sti(void) { __asm__ volatile ("sti"); }
-
+// cli/sti не нужны — мы всегда в контексте прерывания
 static void enqueue_ready(process_t *p) {
     if (!p || p->state != PROC_READY) return;
-    cli();
     p->next = NULL;
-    if (!ready_queue) ready_queue = p;
-    else {
+    if (!ready_queue) {
+        ready_queue = p;
+    } else {
         process_t *last = ready_queue;
         while (last->next) last = last->next;
         last->next = p;
     }
-    sti();
 }
 
 static process_t* dequeue_ready(void) {
-    cli();
     process_t *p = ready_queue;
     if (p) ready_queue = ready_queue->next;
-    sti();
     return p;
 }
 
-static u32 alloc_pid(void) { u32 pid = next_pid++; if (next_pid >= 10000) next_pid = 1; return pid; }
+static u32 alloc_pid(void) {
+    u32 pid = next_pid++;
+    if (next_pid >= 10000) next_pid = 1;
+    return pid;
+}
 
 static process_t* find_free_proc(void) {
     for (int i = 0; i < MAX_PROCESSES; i++)
@@ -115,7 +115,9 @@ static process_t* find_free_proc(void) {
     return NULL;
 }
 
-static void idle_loop(void) { while (1) __asm__ volatile ("hlt"); }
+static void idle_loop(void) {
+    while (1) __asm__ volatile ("hlt");
+}
 
 extern void thread_entry_wrapper(void);
 __asm__ (
@@ -131,21 +133,30 @@ __asm__ (
     "    call *%rax\n"
     "    xorl %edi, %edi\n"
     "    call sched_exit\n"
+    "    cli\n"
+    "    hlt\n"
+    "    jmp .\n"
 );
 
 int sched_init(void) {
     __asm__ volatile ("cli");
     memset(processes, 0, sizeof(processes));
-    ready_queue = sleep_queue = NULL; current = NULL;
-    next_pid = 1; process_count = 0;
-    pit_ticks = 0; tsc_freq_hz = 0; tsc_offset = 0;
+    ready_queue = sleep_queue = NULL;
+    current = NULL;
+    next_pid = 1;
+    process_count = 0;
+    pit_ticks = 0;
+    tsc_freq_hz = 0;
+    tsc_offset = 0;
+    sched_locked = 0;
 
     kstack_top_offset_value = (u64)&((process_t*)0)->kstack_top;
     cr3_offset_value = (u64)&((process_t*)0)->cr3;
 
     process_t *idle = find_free_proc();
     if (!idle) return -1;
-    idle->pid = alloc_pid(); strcpy(idle->name, "idle");
+    idle->pid = alloc_pid();
+    strcpy(idle->name, "idle");
     idle->state = PROC_READY;
     idle->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
     idle->kstack_top = idle->kstack + KERNEL_STACK_SIZE - sizeof(struct interrupt_frame);
@@ -154,73 +165,174 @@ int sched_init(void) {
     struct interrupt_frame *frame = (struct interrupt_frame*)idle->kstack_top;
     memset(frame, 0, sizeof(*frame));
     frame->rip = (u64)idle_loop;
-    frame->cs = 0x08; frame->rflags = 0x202;
+    frame->cs = 0x08;
+    frame->rflags = 0x202;
     frame->rsp = idle->kstack_top + sizeof(struct interrupt_frame);
     frame->ss = 0x10;
 
-    enqueue_ready(idle); current = idle; process_count = 1;
+    enqueue_ready(idle);
+    current = idle;
+    process_count = 1;
+
     pit_init();
+    calibrate_tsc();
     return 0;
 }
 
 int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     process_t *p = find_free_proc();
     if (!p) return -1;
-    p->pid = alloc_pid(); p->ppid = current ? current->pid : 0;
-    strncpy(p->name, name, 31); p->state = PROC_READY;
+
+    p->pid = alloc_pid();
+    p->ppid = current ? current->pid : 0;
+    strncpy(p->name, name, 31);
+    p->state = PROC_READY;
     p->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
     p->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
-    if (!p->kstack) { p->state = PROC_UNUSED; return -1; }
+    if (!p->kstack) {
+        p->state = PROC_UNUSED;
+        return -1;
+    }
     p->kstack_top = p->kstack + KERNEL_STACK_SIZE - sizeof(struct interrupt_frame);
-    p->cr3 = (u64)0x1000;
+    p->cr3 = current ? current->cr3 : (u64)0x1000;
 
     struct interrupt_frame *frame = (struct interrupt_frame*)p->kstack_top;
     memset(frame, 0, sizeof(*frame));
     frame->rip = (u64)thread_entry_wrapper;
-    frame->cs = 0x08; frame->rflags = 0x202;
+    frame->cs = 0x08;
+    frame->rflags = 0x202;
     frame->rsp = p->kstack_top + sizeof(struct interrupt_frame);
     frame->ss = 0x10;
 
     u64 *stack = (u64*)(p->kstack_top + sizeof(struct interrupt_frame));
-    *--stack = (u64)entry; *--stack = (u64)arg;
+    *--stack = (u64)entry;
+    *--stack = (u64)arg;
     frame->rsp = (u64)stack;
 
     for (int i = 0; i < 32; i++) p->fds[i].used = 0;
-    enqueue_ready(p); process_count++;
+    enqueue_ready(p);
+    process_count++;
     return p->pid;
 }
 
 process_t* sched_schedule(void) {
-    process_t *prev = current, *next;
+    // Защита от рекурсивного входа
+    if (sched_locked) return current;
+    sched_locked = 1;
+
+    process_t *prev = current;
+    process_t *next;
+
+    // Пробуждаем спящие
     u32 now = get_ticks();
     while (sleep_queue && sleep_queue->sleep_until <= now) {
-        process_t *p = sleep_queue; sleep_queue = sleep_queue->next;
-        p->state = PROC_READY; enqueue_ready(p);
+        process_t *p = sleep_queue;
+        sleep_queue = sleep_queue->next;
+        p->state = PROC_READY;
+        enqueue_ready(p);
     }
+
     next = dequeue_ready();
     if (!next) next = prev;
-    if (next == prev) { sched_need_resched = 0; return next; }
-    if (prev->state == PROC_RUNNING) { prev->state = PROC_READY; enqueue_ready(prev); }
+    if (next == prev) {
+        sched_need_resched = 0;
+        sched_locked = 0;
+        return next;
+    }
+
+    if (prev && prev->state == PROC_RUNNING) {
+        prev->state = PROC_READY;
+        enqueue_ready(prev);
+    }
+
     next->state = PROC_RUNNING;
     next->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
     current = next;
     sched_need_resched = 0;
+    sched_locked = 0;
     return next;
 }
 
 void sched_tick(void) {
     if (!current) return;
     if (current->ticks_left > 0) current->ticks_left--;
-    if (current->ticks_left == 0 && current->state == PROC_RUNNING) sched_need_resched = 1;
+    if (current->ticks_left == 0 && current->state == PROC_RUNNING)
+        sched_need_resched = 1;
 }
 
-void sched_yield(void) { cli(); sched_need_resched = 1; sched_schedule(); sti(); }
-void sched_sleep(u32 ms) { /* заглушка */ }
-void sched_exit(int code) { (void)code; }
-int sched_waitpid(u32 pid, int *status) { (void)pid; (void)status; return -1; }
-u32 sched_get_pid(void) { return current ? current->pid : 0; }
-u32 sched_get_ppid(void) { return current ? current->ppid : 0; }
-process_t* sched_current(void) { return current; }
-int sched_get_processes(process_t** buf, int max) { return 0; }
-int sched_kill(int pid) { (void)pid; return -1; }
-int sched_start(void) { if (!current) return -1; sti(); while (1) __asm__ volatile ("hlt"); return 0; }
+void sched_yield(void) {
+    __asm__ volatile ("cli");
+    sched_need_resched = 1;
+    sched_schedule();
+    __asm__ volatile ("sti");
+}
+
+void sched_sleep(u32 ms) {
+    if (!current) return;
+    __asm__ volatile ("cli");
+    current->state = PROC_SLEEPING;
+    current->sleep_until = get_ticks() + ms;
+    current->next = sleep_queue;
+    sleep_queue = current;
+    sched_need_resched = 1;
+    sched_schedule();
+    __asm__ volatile ("sti");
+}
+
+void sched_exit(int code) {
+    __asm__ volatile ("cli");
+    if (current) {
+        current->state = PROC_ZOMBIE;
+        current->exit_code = code;
+    }
+    sched_need_resched = 1;
+    sched_schedule();
+    // Никогда не должны сюда вернуться
+    while (1) __asm__ volatile ("hlt");
+}
+
+int sched_waitpid(u32 pid, int *status) {
+    (void)pid; (void)status;
+    // Заглушка: в будущем ждать по PID
+    return -1;
+}
+
+u32 sched_get_pid(void) {
+    return current ? current->pid : 0;
+}
+
+u32 sched_get_ppid(void) {
+    return current ? current->ppid : 0;
+}
+
+process_t* sched_current(void) {
+    return current;
+}
+
+int sched_get_processes(process_t** buf, int max) {
+    int count = 0;
+    for (int i = 0; i < MAX_PROCESSES && count < max; i++) {
+        if (processes[i].state != PROC_UNUSED) {
+            buf[count++] = &processes[i];
+        }
+    }
+    return count;
+}
+
+int sched_kill(int pid) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].pid == pid && processes[i].state != PROC_UNUSED) {
+            processes[i].state = PROC_ZOMBIE;
+            processes[i].exit_code = -1;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int sched_start(void) {
+    if (!current) return -1;
+    __asm__ volatile ("sti");
+    while (1) __asm__ volatile ("hlt");
+    return 0;
+}
