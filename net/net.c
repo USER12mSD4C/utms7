@@ -37,34 +37,37 @@ int net_init(void) {
         vga_write_hex(dev->func);
         vga_write(")\n");
 
-if (e1000_init(dev) == 0) {
-    e1000_get_mac(our_mac);
-    // Проверяем, что MAC не нулевой
-    int zero_mac = 1;
-    for (int i = 0; i < 6; i++) {
-        if (our_mac[i] != 0) {
-            zero_mac = 0;
-            break;
-        }
-    }
-    if (zero_mac) {
-        vga_write("Warning: zero MAC, using default\n");
-        our_mac[0] = 0x52;
-        our_mac[1] = 0x54;
-        our_mac[2] = 0x00;
-        our_mac[3] = 0x12;
-        our_mac[4] = 0x34;
-        our_mac[5] = 0x56;
-    }
-    network_ready = 1;
-    nic_type = 1;
-    vga_write("Intel e1000 driver loaded, MAC: ");
-    for (int i = 0; i < 6; i++) {
-        vga_write_hex(our_mac[i]);
-        if (i < 5) vga_write(":");
-    }
-    vga_write("\n");
-} else {
+        if (e1000_init(dev) == 0) {
+            e1000_get_mac(our_mac);
+
+            int zero_mac = 1;
+            for (int i = 0; i < 6; i++) {
+                if (our_mac[i] != 0) {
+                    zero_mac = 0;
+                    break;
+                }
+            }
+            if (zero_mac) {
+                vga_write("Warning: zero MAC, using default\n");
+                our_mac[0] = 0x52; our_mac[1] = 0x54; our_mac[2] = 0x00;
+                our_mac[3] = 0x12; our_mac[4] = 0x34; our_mac[5] = 0x56;
+            }
+
+            network_ready = 1;
+            nic_type = 1;
+
+            our_ip = 0x0A00020F;
+            our_gateway = 0x0A000202;
+            our_netmask = 0xFFFFFF00;
+            our_dns = 0x0A000202;
+
+            vga_write("Intel e1000 loaded, IP: 10.0.2.15, MAC: ");
+            for (int i = 0; i < 6; i++) {
+                vga_write_hex(our_mac[i]);
+                if (i < 5) vga_write(":");
+            }
+            vga_write("\n");
+        } else {
             vga_write("Intel e1000 init failed\n");
         }
     }
@@ -109,27 +112,20 @@ if (e1000_init(dev) == 0) {
     tcp_init();
 
     if (network_ready) {
-        vga_write("Starting DHCP...\n");
-        for (int attempt = 0; attempt < 3; attempt++) {
-            dhcp_start();
-            for (int i = 0; i < 500; i++) {
-                for (int j = 0; j < 10000; j++) __asm__ volatile ("pause");
-                if (our_ip != 0) break;
-            }
-            if (our_ip != 0) break;
-            vga_write("DHCP attempt ");
-            vga_write_num(attempt + 1);
-            vga_write(" failed\n");
-        }
-    }
-
-    if (our_ip == 0) {
         our_ip = 0x0A00020F;      // 10.0.2.15
         our_gateway = 0x0A000202; // 10.0.2.2
         our_netmask = 0xFFFFFF00; // 255.255.255.0
         our_dns = 0x0A000202;     // 10.0.2.2
         vga_write("Using static IP: 10.0.2.15 (QEMU mode)\n");
     }
+
+//    if (our_ip == 0) {
+//       our_ip = 0x0A00020F;      // 10.0.2.15
+//        our_gateway = 0x0A000202; // 10.0.2.2
+//        our_netmask = 0xFFFFFF00; // 255.255.255.0
+//        our_dns = 0x0A000202;     // 10.0.2.2
+//        vga_write("Using static IP: 10.0.2.15 (QEMU mode)\n");
+//    }
 
     vga_write("\n=== Network Configuration ===\n");
     vga_write("IP:     ");

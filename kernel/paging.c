@@ -24,56 +24,62 @@ static void* alloc_page_table(void) {
 
 int paging_init(void) {
     next_free_table = PAGE_TABLE_POOL_ADDR;
-    
+
     if ((pml4[0] & PAGE_PRESENT) == 0) return -1;
-    
+
     pml4[510] = PDPT2_ADDR | PAGE_PRESENT | PAGE_WRITABLE;
-    
+
     u64* pdpt2 = (u64*)PDPT2_ADDR;
     pdpt2[0] = PD2_ADDR | PAGE_PRESENT | PAGE_WRITABLE;
-    
+
     u64* pd2 = (u64*)PD2_ADDR;
     for (int i = 0; i < 512; i++) pd2[i] = 0;
     pd2[0x7E8] = 0xFD000000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE;
-    
+
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4));
-    
+
     return 0;
 }
 
 int paging_map(u64 phys_addr, u64 virt_addr, u64 flags) {
     u64 pml4_idx = (virt_addr >> 39) & 0x1FF;
     u64 pdpt_idx = (virt_addr >> 30) & 0x1FF;
-    u64 pd_idx = (virt_addr >> 21) & 0x1FF;
-    u64 pt_idx = (virt_addr >> 12) & 0x1FF;
-    
+    u64 pd_idx    = (virt_addr >> 21) & 0x1FF;
+    u64 pt_idx    = (virt_addr >> 12) & 0x1FF;
+
+    // PML4
     if ((pml4[pml4_idx] & PAGE_PRESENT) == 0) {
         u64* new_pdpt = (u64*)alloc_page_table();
         if (!new_pdpt) return -1;
         pml4[pml4_idx] = (u64)new_pdpt | PAGE_PRESENT | PAGE_WRITABLE;
     }
-    
     u64* pdpt = (u64*)(pml4[pml4_idx] & ~0xFFF);
-    
+
+    // PDPT
     if ((pdpt[pdpt_idx] & PAGE_PRESENT) == 0) {
         u64* new_pd = (u64*)alloc_page_table();
         if (!new_pd) return -1;
         pdpt[pdpt_idx] = (u64)new_pd | PAGE_PRESENT | PAGE_WRITABLE;
     }
-    
     u64* pd = (u64*)(pdpt[pdpt_idx] & ~0xFFF);
-    
+
+    // Если просят huge page — мапим 2MB
+    if (flags & PAGE_HUGE) {
+        pd[pd_idx] = (phys_addr & ~0x1FFFFF) | flags;
+        __asm__ volatile ("invlpg (%0)" : : "r"(virt_addr) : "memory");
+        return 0;
+    }
+
+    // Иначе — 4K page
     if ((pd[pd_idx] & PAGE_PRESENT) == 0) {
         u64* new_pt = (u64*)alloc_page_table();
         if (!new_pt) return -1;
         pd[pd_idx] = (u64)new_pt | PAGE_PRESENT | PAGE_WRITABLE;
     }
-    
     u64* pt = (u64*)(pd[pd_idx] & ~0xFFF);
     pt[pt_idx] = (phys_addr & ~0xFFF) | flags;
-    
+
     __asm__ volatile ("invlpg (%0)" : : "r"(virt_addr) : "memory");
-    
     return 0;
 }
 
@@ -81,34 +87,36 @@ u64* create_address_space(void) {
     u64* new_pml4 = (u64*)kmalloc(4096);
     if (!new_pml4) return NULL;
     memset(new_pml4, 0, 4096);
-    
+
     u64* kernel_pml4 = (u64*)PML4_ADDR;
     for (int i = 256; i < 512; i++) {
         new_pml4[i] = kernel_pml4[i];
     }
-    
+
     return new_pml4;
 }
 
-void free_address_space(u64* pml4) {
-    if (!pml4 || pml4 == (u64*)PML4_ADDR) return;
-    
+void free_address_space(u64* pml4_ptr) {
+    if (!pml4_ptr || pml4_ptr == (u64*)PML4_ADDR) return;
+
     for (int i = 0; i < 256; i++) {
-        if (pml4[i] & PAGE_PRESENT) {
-            u64* pdpt = (u64*)(pml4[i] & ~0xFFF);
+        if (pml4_ptr[i] & PAGE_PRESENT) {
+            u64* pdpt = (u64*)(pml4_ptr[i] & ~0xFFF);
             for (int j = 0; j < 512; j++) {
                 if (pdpt[j] & PAGE_PRESENT) {
                     u64* pd = (u64*)(pdpt[j] & ~0xFFF);
                     for (int k = 0; k < 512; k++) {
                         if (pd[k] & PAGE_PRESENT) {
-                            u64* pt = (u64*)(pd[k] & ~0xFFF);
-                            for (int l = 0; l < 512; l++) {
-                                if (pt[l] & PAGE_PRESENT) {
-                                    u64 phys = pt[l] & ~0xFFF;
-                                    kfree((void*)phys);
+                            if (!(pd[k] & PAGE_HUGE)) {
+                                u64* pt = (u64*)(pd[k] & ~0xFFF);
+                                for (int l = 0; l < 512; l++) {
+                                    if (pt[l] & PAGE_PRESENT) {
+                                        u64 phys = pt[l] & ~0xFFF;
+                                        kfree((void*)phys);
+                                    }
                                 }
+                                kfree(pt);
                             }
-                            kfree(pt);
                         }
                     }
                     kfree(pd);
@@ -117,43 +125,44 @@ void free_address_space(u64* pml4) {
             kfree(pdpt);
         }
     }
-    
-    kfree(pml4);
+    kfree(pml4_ptr);
 }
 
-int paging_map_for_process(u64* pml4, u64 phys, u64 virt, u64 flags) {
+int paging_map_for_process(u64* pml4_ptr, u64 phys, u64 virt, u64 flags) {
     u64 pml4_idx = (virt >> 39) & 0x1FF;
     u64 pdpt_idx = (virt >> 30) & 0x1FF;
-    u64 pd_idx = (virt >> 21) & 0x1FF;
-    u64 pt_idx = (virt >> 12) & 0x1FF;
-    
-    if ((pml4[pml4_idx] & PAGE_PRESENT) == 0) {
+    u64 pd_idx    = (virt >> 21) & 0x1FF;
+    u64 pt_idx    = (virt >> 12) & 0x1FF;
+
+    if ((pml4_ptr[pml4_idx] & PAGE_PRESENT) == 0) {
         u64* new_pdpt = (u64*)kmalloc(4096);
         if (!new_pdpt) return -1;
         memset(new_pdpt, 0, 4096);
-        pml4[pml4_idx] = (u64)new_pdpt | PAGE_PRESENT | PAGE_WRITABLE;
+        pml4_ptr[pml4_idx] = (u64)new_pdpt | PAGE_PRESENT | PAGE_WRITABLE;
     }
-    
-    u64* pdpt = (u64*)(pml4[pml4_idx] & ~0xFFF);
-    
+    u64* pdpt = (u64*)(pml4_ptr[pml4_idx] & ~0xFFF);
+
     if ((pdpt[pdpt_idx] & PAGE_PRESENT) == 0) {
         u64* new_pd = (u64*)kmalloc(4096);
         if (!new_pd) return -1;
         memset(new_pd, 0, 4096);
         pdpt[pdpt_idx] = (u64)new_pd | PAGE_PRESENT | PAGE_WRITABLE;
     }
-    
     u64* pd = (u64*)(pdpt[pdpt_idx] & ~0xFFF);
-    
+
+    if (flags & PAGE_HUGE) {
+        pd[pd_idx] = (phys & ~0x1FFFFF) | flags;
+        return 0;
+    }
+
     if ((pd[pd_idx] & PAGE_PRESENT) == 0) {
         u64* new_pt = (u64*)kmalloc(4096);
         if (!new_pt) return -1;
         memset(new_pt, 0, 4096);
         pd[pd_idx] = (u64)new_pt | PAGE_PRESENT | PAGE_WRITABLE;
     }
-    
     u64* pt = (u64*)(pd[pd_idx] & ~0xFFF);
     pt[pt_idx] = (phys & ~0xFFF) | flags;
-    
+
     return 0;
 }

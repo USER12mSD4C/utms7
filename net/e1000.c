@@ -121,14 +121,13 @@ static void e1000_read_mac(void) {
 
 static int e1000_map_mmio(void) {
     u64 phys = sc->mmio_base;
-    u64 virt = phys;
-
-    for (u64 offset = 0; offset < MMIO_SIZE; offset += 4096) {
-        if (paging_map(phys + offset, virt + offset, PAGE_PRESENT | PAGE_WRITABLE) != 0) {
+    // Мапим 2MB huge page для MMIO
+    for (u64 offset = 0; offset < MMIO_SIZE; offset += 0x200000) {
+        if (paging_map(phys + offset, phys + offset,
+                       PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE) != 0) {
             return -1;
         }
     }
-
     return 0;
 }
 
