@@ -1,4 +1,3 @@
-// kernel/sched.h
 #ifndef SCHED_H
 #define SCHED_H
 

@@ -16,5 +16,6 @@
 #define __KERNEL_DS GDT_KERNEL_DATA
 
 int gdt_init(void);
+void tss_set_rsp0(u64 rsp);
 
 #endif

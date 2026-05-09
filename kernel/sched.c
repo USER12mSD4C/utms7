@@ -6,9 +6,10 @@
 #include "../include/string.h"
 #include "../include/io.h"
 #include "../drivers/vga.h"
+#include "gdt.h"
 
 #define TIME_SLICE_MS       10
-#define KERNEL_STACK_SIZE   4096    // 4096 — проверено, работает
+#define KERNEL_STACK_SIZE   4096
 #define MAX_PROCESSES       64
 #define PIT_BASE_FREQ       1193182
 #define PIT_DIVIDER         1193
@@ -60,26 +61,6 @@ u32 get_ticks(void) {
     return pit_ticks + (u32)((delta_tsc * 1000) / tsc_freq_hz);
 }
 
-static void calibrate_tsc(void) {
-    u32 start_tick = pit_ticks;
-    while (pit_ticks == start_tick) cpu_relax();
-
-    u64 tsc_start = rdtsc();
-    start_tick = pit_ticks;
-
-    u32 target = start_tick + 100;
-    while (pit_ticks < target) cpu_relax();
-
-    u64 tsc_end = rdtsc();
-    u32 pit_delta = pit_ticks - start_tick;
-
-    if (pit_delta > 0) {
-        tsc_freq_hz = (tsc_end - tsc_start) * PIT_TARGET_HZ / pit_delta;
-        tsc_offset = tsc_start;
-        tsc_calibrated = 1;
-    }
-}
-
 u64 get_microseconds(void) {
     if (!tsc_calibrated) return (u64)pit_ticks * (1000000 / PIT_TARGET_HZ);
     return (get_ticks() * 1000);
@@ -97,7 +78,6 @@ static void pit_handler(void) {
     if (sched_initialized) {
         sched_tick();
     }
-    outb(0x20, 0x20);
 }
 
 static void pit_init(void) {
@@ -216,6 +196,8 @@ int sched_init(void) {
     frame->rflags = 0x202;
     frame->rsp = idle->kstack_top + sizeof(struct interrupt_frame);
     frame->ss = 0x10;
+    // Настройка TSS для обработки прерываний
+    tss_set_rsp0(idle->kstack_top + sizeof(struct interrupt_frame));
 
     enqueue_ready(idle);
     current = idle;
@@ -350,12 +332,11 @@ process_t* sched_schedule(void) {
     }
 
     next = dequeue_ready();
-    if (!next) next = prev;
 
-    if (next == prev) {
+    if (!next) {
         sched_need_resched = 0;
         sched_locked = 0;
-        return next;
+        return prev;
     }
 
     if (prev && prev->state == PROC_RUNNING) {

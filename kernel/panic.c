@@ -2,6 +2,7 @@
 #include "../drivers/vga.h"
 #include "../include/io.h"
 #include "../include/string.h"
+#include "sched.h"
 
 static void print_hex(u64 num) {
     char hex[] = "0123456789ABCDEF";
@@ -26,6 +27,12 @@ static void print_num(u32 num) {
 
 void panic(const char* message) {
     __asm__ volatile ("cli");
+
+    // Переключаемся на стек ядра из current если возможно
+    process_t *p = sched_current();
+    if (p && p->kstack_top) {
+        __asm__ volatile ("mov %0, %%rsp" : : "r"(p->kstack_top));
+    }
 
     vga_setcolor(0x4F, 0);
     vga_clear();
@@ -74,7 +81,6 @@ void panic_assert(const char* file, u32 line, const char* expr) {
     while(1) { __asm__ volatile ("hlt"); }
 }
 
-// Для двойной ошибки
 void double_fault_handler(void) {
     panic("DOUBLE FAULT");
 }

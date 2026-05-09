@@ -192,7 +192,7 @@ int idt_init(void) {
     irq_remap();
     for (int i = 0; i < 16; i++) irq_mask(i);
 
-    idt_register_irq(0, irq0_handler_c);
+    //idt_register_irq(0, NULL);
     idt_register_irq(1, irq1_handler_c);
     idt_register_irq(2, irq2_handler_c);
     idt_register_irq(3, irq3_handler_c);

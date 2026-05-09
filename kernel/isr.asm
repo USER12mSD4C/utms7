@@ -80,35 +80,29 @@ irq%1:
     push %2
     SAVE_REGS
 
-    ; Сохраняем RSP в current->kstack_top
-    mov rax, [current]
+    ; Сохраняем RSP если current валиден
+    mov rax, [rel current]
     test rax, rax
-    jz irq%1_skip_save
-    add rax, [kstack_top_offset_value]
+    jz %%skip_save
+    add rax, [rel kstack_top_offset_value]
     mov [rax], rsp
 
-irq%1_skip_save:
+    ; Сохраняем CR3 если current валиден
+    mov rax, [rel current]
+    test rax, rax
+    jz %%skip_save
+    mov rbx, cr3
+    add rax, [rel cr3_offset_value]
+    mov [rax], rbx
+
+%%skip_save:
+    ; Вызываем обработчик IRQ (он не меняет контекст)
     mov rdi, %2
     call irq_handler_dispatch
 
-    cmp byte [sched_need_resched], 0
-    je irq%1_no_switch
+    ; Планировщик не вызываем из IRQ — флаг проверяется в sched_start()
 
-    call sched_schedule
-
-    ; Загружаем RSP и CR3 нового процесса
-    mov rax, [current]
-    test rax, rax
-    jz irq%1_no_switch
-    add rax, [kstack_top_offset_value]
-    mov rsp, [rax]
-
-    mov rax, [current]
-    add rax, [cr3_offset_value]
-    mov rax, [rax]
-    mov cr3, rax
-
-irq%1_no_switch:
+%%no_switch:
     RESTORE_REGS
     add rsp, 16
     iretq

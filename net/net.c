@@ -115,8 +115,8 @@ int net_init(void) {
         our_ip = 0x0A00020F;      // 10.0.2.15
         our_gateway = 0x0A000202; // 10.0.2.2
         our_netmask = 0xFFFFFF00; // 255.255.255.0
-        our_dns = 0x0A000202;     // 10.0.2.2
-        vga_write("Using static IP: 10.0.2.15 (QEMU mode)\n");
+        our_dns = 0x08080808;     // 8.8.8.8
+        vga_write("Using static IP: 10.0.2.15\n");
     }
 
 //    if (our_ip == 0) {
