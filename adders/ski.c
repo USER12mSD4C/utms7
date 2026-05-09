@@ -78,10 +78,14 @@ void ski(u64 mb_info_addr) {
     vga_write(version);
     vga_write("\n\n");
 
-    if (gdt_init() != 0) { vga_write("[GDT:FAIL]\n"); while(1) __asm__ volatile("hlt"); }
-    vga_write("[GDT:OK]\n");
+    __asm__ volatile ("cli");
     if (idt_init() != 0) { vga_write("[IDT:FAIL]\n"); while(1) __asm__ volatile("hlt"); }
     vga_write("[IDT:OK]\n");
+    if (gdt_init() != 0) { vga_write("[GDT:FAIL]\n"); while(1) __asm__ volatile("hlt"); }
+    vga_write("[GDT:OK]\n");
+    tss_init();
+    vga_write("[TSS:OK]\n");
+    __asm__ volatile ("sti");
 
     init_memory_from_multiboot((u32)mb_info_addr);
     vga_write("[memory:OK]\n");
