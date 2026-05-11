@@ -3,10 +3,6 @@
 
 #include "../include/types.h"
 
-#define GDT_ENTRIES 5
-#define GDT_SIZE 7
-
-#define GDT_NULL_ENTRY   0x00
 #define GDT_KERNEL_CODE  0x08
 #define GDT_KERNEL_DATA  0x10
 #define GDT_USER_CODE    0x18

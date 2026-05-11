@@ -14,6 +14,7 @@ typedef struct {
     char desc[64];
 } shell_command_t;
 
+int shell_start_thread(void);
 int shell_run(void);
 int shell_register_command(const char* name, int (*func)(int argc, char** argv), const char* desc);
 void shell_unregister_command(const char* name);

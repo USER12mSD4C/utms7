@@ -33,10 +33,18 @@ int paging_init(void) {
     pdpt2[0] = PD2_ADDR | PAGE_PRESENT | PAGE_WRITABLE;
 
     u64* pd2 = (u64*)PD2_ADDR;
-    for (int i = 0; i < 512; i++) pd2[i] = 0;
+    u64* pd = (u64*)PD_ADDR;
+
+    // Копируем существующий маппинг
+    for (int i = 0; i < 512; i++) {
+        pd2[i] = pd[i];
+    }
+
+    // Добавляем MMIO
     pd2[0x7E8] = 0xFD000000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE;
 
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4));
+    __asm__ volatile ("invlpg (%0)" : : "r"(0) : "memory");
 
     return 0;
 }

@@ -4,47 +4,49 @@ section .text
 
 extern exception_handler_c
 extern irq_handler_dispatch
-extern current
 extern sched_need_resched
-extern sched_schedule
-extern kstack_top_offset_value
-extern cr3_offset_value
+extern sched_do_switch
+extern current
+
+; === МАКРОСЫ ===
 
 %macro SAVE_REGS 0
-    push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
     push r15
+    push r14
+    push r13
+    push r12
+    push r11
+    push r10
+    push r9
+    push r8
+    push rbp
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    push rbx
+    push rax
 %endmacro
 
 %macro RESTORE_REGS 0
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
     pop rax
+    pop rbx
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
+    pop rbp
+    pop r8
+    pop r9
+    pop r10
+    pop r11
+    pop r12
+    pop r13
+    pop r14
+    pop r15
 %endmacro
+
+; === ОБРАБОТЧИКИ ИСКЛЮЧЕНИЙ ===
 
 %macro ISR_NOERRCODE 1
 global isr_wrapper%1
@@ -65,42 +67,36 @@ isr_wrapper%1:
 
 isr_common:
     SAVE_REGS
-    mov rdi, [rsp + 120]
-    mov rsi, [rsp + 128]
+    mov rdi, [rsp + 120]  ; error_code (первый аргумент)
+    mov rsi, [rsp + 128]  ; vector (второй аргумент)
     call exception_handler_c
     RESTORE_REGS
     add rsp, 16
     iretq
 
-%macro IRQ 2
+; === ОБРАБОТЧИКИ IRQ ===
+
+; Макрос для IRQ 0-7 (мастер PIC)
+%macro IRQ_MASTER 2
 global irq%1
 irq%1:
     cli
     push 0
     push %2
     SAVE_REGS
-
-    ; Сохраняем RSP если current валиден
-    mov rax, [rel current]
-    test rax, rax
-    jz %%skip_save
-    add rax, [rel kstack_top_offset_value]
-    mov [rax], rsp
-
-    ; Сохраняем CR3 если current валиден
-    mov rax, [rel current]
-    test rax, rax
-    jz %%skip_save
-    mov rbx, cr3
-    add rax, [rel cr3_offset_value]
-    mov [rax], rbx
-
-%%skip_save:
-    ; Вызываем обработчик IRQ (он не меняет контекст)
-    mov rdi, %2
+    mov rdi, %1
     call irq_handler_dispatch
 
-    ; Планировщик не вызываем из IRQ — флаг проверяется в sched_start()
+    ; Отправляем EOI мастеру
+    mov al, 0x20
+    out 0x20, al
+
+    ; Проверяем переключение контекста
+    cmp byte [rel sched_need_resched], 0
+    je %%no_switch
+    mov rdi, rsp
+    call sched_do_switch
+    mov rsp, rax
 
 %%no_switch:
     RESTORE_REGS
@@ -108,6 +104,70 @@ irq%1:
     iretq
 %endmacro
 
+; Макрос для IRQ 8-15 (слейв PIC)
+%macro IRQ_SLAVE 2
+global irq%1
+irq%1:
+    cli
+    push 0
+    push %2
+    SAVE_REGS
+    mov rdi, %1
+    call irq_handler_dispatch
+
+    ; Отправляем EOI слейву и мастеру
+    mov al, 0x20
+    out 0xA0, al
+    out 0x20, al
+
+    ; Проверяем переключение контекста
+    cmp byte [rel sched_need_resched], 0
+    je %%no_switch_slave
+    mov rdi, rsp
+    call sched_do_switch
+    mov rsp, rax
+
+%%no_switch_slave:
+    RESTORE_REGS
+    add rsp, 16
+    iretq
+%endmacro
+
+; Генерируем IRQ 0-7 (мастер PIC)
+IRQ_MASTER 0, 32
+IRQ_MASTER 1, 33
+IRQ_MASTER 2, 34
+IRQ_MASTER 3, 35
+IRQ_MASTER 4, 36
+IRQ_MASTER 5, 37
+IRQ_MASTER 6, 38
+IRQ_MASTER 7, 39
+
+; Генерируем IRQ 8-15 (слейв PIC)
+IRQ_SLAVE 8, 40
+IRQ_SLAVE 9, 41
+IRQ_SLAVE 10, 42
+IRQ_SLAVE 11, 43
+IRQ_SLAVE 12, 44
+IRQ_SLAVE 13, 45
+IRQ_SLAVE 14, 46
+IRQ_SLAVE 15, 47
+
+; === ПЕРЕКЛЮЧЕНИЕ КОНТЕКСТА (int 0x80) ===
+global isr_wrapper_128
+isr_wrapper_128:
+    cli
+    push 0
+    push 128
+    SAVE_REGS
+    mov rdi, rsp
+    call sched_do_switch
+    mov rsp, rax
+    RESTORE_REGS
+    add rsp, 16
+    iretq
+
+; === ИСКЛЮЧЕНИЯ ===
 ISR_NOERRCODE 0
 ISR_NOERRCODE 1
 ISR_NOERRCODE 2
@@ -140,20 +200,3 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_ERRCODE   30
 ISR_NOERRCODE 31
-
-IRQ 0, 0
-IRQ 1, 1
-IRQ 2, 2
-IRQ 3, 3
-IRQ 4, 4
-IRQ 5, 5
-IRQ 6, 6
-IRQ 7, 7
-IRQ 8, 8
-IRQ 9, 9
-IRQ 10, 10
-IRQ 11, 11
-IRQ 12, 12
-IRQ 13, 13
-IRQ 14, 14
-IRQ 15, 15

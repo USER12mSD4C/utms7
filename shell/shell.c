@@ -1,4 +1,3 @@
-// shell/shell.c
 #include "../include/string.h"
 #include "../drivers/vga.h"
 #include "../drivers/keyboard.h"
@@ -6,6 +5,7 @@
 #include "../kernel/memory.h"
 #include "../include/path.h"
 #include "../commands/fs.h"
+#include "../kernel/sched.h"    // <-- ДОБАВИТЬ эту строку
 #include "shell.h"
 
 // Прототипы функций libc, которые используем
@@ -431,6 +431,15 @@ static void clear_line(u8 input_x, u8 input_y) {
     vga_setpos(input_x, input_y);
 }
 
+int shell_start_thread(void) {
+    int pid = sched_create_kthread("shell", (void(*)(void*))shell_run, NULL);
+    if (pid < 0) {
+        shell_print("SHELL: Failed to create shell thread\n");
+        return 0; // Возвращаем 0, чтобы не прерывать загрузку
+    }
+    return 0;
+}
+
 int shell_run(void) {
     char line[MAX_LINE_LEN];
     int pos = 0;
@@ -446,7 +455,10 @@ int shell_run(void) {
         line[0] = '\0';
 
         while (1) {
-            if (!keyboard_data_ready()) continue;
+            // Ждем нажатия клавиши
+            while (!keyboard_data_ready()) {
+                __asm__ volatile ("hlt");  // Даем процессору отдохнуть
+            }
 
             key = keyboard_getc();
 

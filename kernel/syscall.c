@@ -29,15 +29,44 @@ static int is_user_pointer(void* ptr) {
     return (addr >= 0x400000 && addr < 0x800000000000);
 }
 
+// Безопасное копирование из пользовательского пространства
+// с временным переключением CR3
 static int copy_from_user(void* dest, const void* src, u64 size) {
-    if (!is_user_pointer((void*)src)) return -1;
+    process_t *p = sched_current();
+    if (!p || !is_user_pointer((void*)src)) return -1;
+
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+    }
+
     memcpy(dest, src, size);
+
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+    }
+
     return 0;
 }
 
+// Безопасное копирование в пользовательское пространство
 static int copy_to_user(void* dest, const void* src, u64 size) {
-    if (!is_user_pointer(dest)) return -1;
+    process_t *p = sched_current();
+    if (!p || !is_user_pointer(dest)) return -1;
+
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+    }
+
     memcpy(dest, src, size);
+
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+    }
+
     return 0;
 }
 
@@ -56,10 +85,19 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6) 
     if (!is_user_pointer((void*)buf)) return -1;
 
     if (fd == 1 || fd == 2) {
-        char* str = (char*)buf;
-        for (long i = 0; i < count; i++) {
-            vga_putchar(str[i]);
+        // Для консольного вывода копируем во временный буфер
+        char* temp = kmalloc(count + 1);
+        if (!temp) return -1;
+        if (copy_from_user(temp, (void*)buf, count) != 0) {
+            kfree(temp);
+            return -1;
         }
+        temp[count] = '\0';
+
+        for (long i = 0; i < count; i++) {
+            vga_putchar(temp[i]);
+        }
+        kfree(temp);
         return count;
     }
 
@@ -68,7 +106,10 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6) 
     if (p->fds[fd].type == 0) {
         char* data = kmalloc(count + 1);
         if (!data) return -1;
-        copy_from_user(data, (void*)buf, count);
+        if (copy_from_user(data, (void*)buf, count) != 0) {
+            kfree(data);
+            return -1;
+        }
         data[count] = '\0';
 
         int res = ufs_write(p->fds[fd].data.file.path, (u8*)data, count);
@@ -90,11 +131,19 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6) {
     if (!is_user_pointer((void*)buf)) return -1;
 
     if (fd == 0) {
-        char* buffer = (char*)buf;
+        char* buffer = kmalloc(count);
+        if (!buffer) return -1;
+
         for (long i = 0; i < count; i++) {
             while (!keyboard_data_ready());
             buffer[i] = keyboard_getc();
         }
+
+        if (copy_to_user((void*)buf, buffer, count) != 0) {
+            kfree(buffer);
+            return -1;
+        }
+        kfree(buffer);
         return count;
     }
 
@@ -108,10 +157,16 @@ static long sys_read(long fd, long buf, long count, long a4, long a5, long a6) {
         long pos = p->fds[fd].data.file.pos;
         long to_copy = count;
         if (pos + to_copy > size) to_copy = size - pos;
-        if (to_copy > 0) {
-            copy_to_user((void*)buf, data + pos, to_copy);
-            p->fds[fd].data.file.pos += to_copy;
+        if (to_copy <= 0) {
+            kfree(data);
+            return 0;
         }
+
+        if (copy_to_user((void*)buf, data + pos, to_copy) != 0) {
+            kfree(data);
+            return -1;
+        }
+        p->fds[fd].data.file.pos += to_copy;
 
         kfree(data);
         return to_copy;
@@ -127,7 +182,7 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     int fd = -1;
@@ -174,10 +229,22 @@ static long sys_brk(long addr, long a2, long a3, long a4, long a5, long a6) {
         u64 pages = (addr - p->heap_end + 4095) / 4096;
         u64* pml4 = (u64*)p->cr3;
 
+        // Сохраняем текущий CR3 и переключаемся на CR3 процесса
+        u64 old_cr3;
+        __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+        if (old_cr3 != p->cr3) {
+            __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+        }
+
         for (u64 i = 0; i < pages; i++) {
             u64 phys = (u64)kmalloc(4096);
             u64 virt = p->heap_end + i * 4096;
             paging_map_for_process(pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+        }
+
+        // Восстанавливаем CR3
+        if (old_cr3 != p->cr3) {
+            __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
         }
     }
 
@@ -216,9 +283,20 @@ static long sys_mmap(long addr, long size, long prot, long flags, long fd, long 
     u64 virt = p->heap_end;
     u64* pml4 = (u64*)p->cr3;
 
+    // Сохраняем и переключаем CR3
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+    }
+
     for (u64 i = 0; i < pages; i++) {
         u64 phys = (u64)kmalloc(4096);
         paging_map_for_process(pml4, phys, virt + i * 4096, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+    }
+
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
     }
 
     p->heap_end = virt + pages * 4096;
@@ -237,7 +315,7 @@ static long sys_exec(long path, long argv, long envp, long a4, long a5, long a6)
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     u8 *elf_data;
@@ -287,7 +365,7 @@ static long sys_stat(long path, long statbuf, long a3, long a4, long a5, long a6
     if (!is_user_pointer((void*)path) || !is_user_pointer((void*)statbuf)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     if (!ufs_exists(path_buf)) return -1;
@@ -297,7 +375,7 @@ static long sys_stat(long path, long statbuf, long a3, long a4, long a5, long a6
     st.is_dir = ufs_isdir(path_buf) ? 1 : 0;
     st.blocks = (st.size + 511) / 512;
 
-    copy_to_user((void*)statbuf, &st, sizeof(st));
+    if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;
     return 0;
 }
 
@@ -312,7 +390,7 @@ static long sys_fstat(long fd, long statbuf, long a3, long a4, long a5, long a6)
     st.is_dir = ufs_isdir(p->fds[fd].data.file.path) ? 1 : 0;
     st.blocks = (st.size + 511) / 512;
 
-    copy_to_user((void*)statbuf, &st, sizeof(st));
+    if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;
     return 0;
 }
 
@@ -321,7 +399,7 @@ static long sys_mkdir(long path, long mode, long a3, long a4, long a5, long a6) 
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     return ufs_mkdir(path_buf);
@@ -332,7 +410,7 @@ static long sys_rmdir(long path, long a2, long a3, long a4, long a5, long a6) {
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     return ufs_rmdir(path_buf);
@@ -343,7 +421,7 @@ static long sys_unlink(long path, long a2, long a3, long a4, long a5, long a6) {
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     return ufs_delete(path_buf);
@@ -354,8 +432,8 @@ static long sys_rename(long old, long new, long a3, long a4, long a5, long a6) {
     if (!is_user_pointer((void*)old) || !is_user_pointer((void*)new)) return -1;
 
     char old_buf[256], new_buf[256];
-    copy_from_user(old_buf, (void*)old, 255);
-    copy_from_user(new_buf, (void*)new, 255);
+    if (copy_from_user(old_buf, (void*)old, 255) != 0) return -1;
+    if (copy_from_user(new_buf, (void*)new, 255) != 0) return -1;
 
     return ufs_mv(old_buf, new_buf);
 }
@@ -365,7 +443,7 @@ static long sys_chdir(long path, long a2, long a3, long a4, long a5, long a6) {
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     if (!ufs_isdir(path_buf)) return -1;
@@ -386,7 +464,7 @@ static long sys_getcwd(long buf, long size, long a3, long a4, long a5, long a6) 
     unsigned long len = strlen(cwd) + 1;
     if (len > (unsigned long)size) return -1;
 
-    copy_to_user((void*)buf, cwd, len);
+    if (copy_to_user((void*)buf, cwd, len) != 0) return -1;
     return len;
 }
 
@@ -395,7 +473,7 @@ static long sys_readdir(long path, long entries, long count, long a4, long a5, l
     if (!is_user_pointer((void*)path) || !is_user_pointer((void*)entries)) return -1;
 
     char path_buf[256];
-    copy_from_user(path_buf, (void*)path, 255);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
     FSNode* kernel_entries;
@@ -414,7 +492,10 @@ static long sys_readdir(long path, long entries, long count, long a4, long a5, l
         user_entry.first_block = 0;
         user_entry.next_block = 0;
 
-        copy_to_user((void*)((char*)entries + i * sizeof(FSNode)), &user_entry, sizeof(FSNode));
+        if (copy_to_user((void*)((char*)entries + i * sizeof(FSNode)), &user_entry, sizeof(FSNode)) != 0) {
+            kfree(kernel_entries);
+            return -1;
+        }
     }
 
     kfree(kernel_entries);
@@ -433,7 +514,9 @@ static long sys_disk_list(long disks, long max, long a3, long a4, long a5, long 
     for (int i = 0; i < 4 && count < max; i++) {
         disk_info_t* d = udisk_get_info(i);
         if (d && d->present) {
-            copy_to_user((void*)((char*)disks + count * sizeof(disk_info_t)), d, sizeof(disk_info_t));
+            if (copy_to_user((void*)((char*)disks + count * sizeof(disk_info_t)), d, sizeof(disk_info_t)) != 0) {
+                return -1;
+            }
             count++;
         }
     }
@@ -447,8 +530,8 @@ static long sys_partition_mount(long dev, long point, long a3, long a4, long a5,
 
     char dev_buf[32];
     char point_buf[256];
-    copy_from_user(dev_buf, (void*)dev, 31);
-    copy_from_user(point_buf, (void*)point, 255);
+    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
+    if (copy_from_user(point_buf, (void*)point, 255) != 0) return -1;
     dev_buf[31] = '\0';
     point_buf[255] = '\0';
 
@@ -487,7 +570,10 @@ static long sys_send(long fd, long buf, long len, long flags, long a5, long a6) 
 
     u8 *data = kmalloc(len);
     if (!data) return -1;
-    copy_from_user(data, (void*)buf, len);
+    if (copy_from_user(data, (void*)buf, len) != 0) {
+        kfree(data);
+        return -1;
+    }
 
     int res = tcp_send(fd, data, len);
     kfree(data);
@@ -503,7 +589,10 @@ static long sys_recv(long fd, long buf, long len, long flags, long a5, long a6) 
 
     int res = tcp_recv(fd, data, len);
     if (res > 0) {
-        copy_to_user((void*)buf, data, res);
+        if (copy_to_user((void*)buf, data, res) != 0) {
+            kfree(data);
+            return -1;
+        }
     }
 
     kfree(data);
@@ -515,13 +604,13 @@ static long sys_gethostbyname(long name, long ip, long a3, long a4, long a5, lon
     if (!is_user_pointer((void*)name) || !is_user_pointer((void*)ip)) return -1;
 
     char name_buf[256];
-    copy_from_user(name_buf, (void*)name, 255);
+    if (copy_from_user(name_buf, (void*)name, 255) != 0) return -1;
     name_buf[255] = '\0';
 
     u32 ip_addr = dns_lookup(name_buf, net_get_dns());
     if (ip_addr == 0) return -1;
 
-    copy_to_user((void*)ip, &ip_addr, 4);
+    if (copy_to_user((void*)ip, &ip_addr, 4) != 0) return -1;
     return 0;
 }
 
@@ -541,9 +630,9 @@ static long sys_meminfo(long total, long used, long free, long a4, long a5, long
     u64 u = memory_used();
     u64 f = memory_free();
 
-    copy_to_user((void*)total, &t, 8);
-    copy_to_user((void*)used, &u, 8);
-    copy_to_user((void*)free, &f, 8);
+    if (copy_to_user((void*)total, &t, 8) != 0) return -1;
+    if (copy_to_user((void*)used, &u, 8) != 0) return -1;
+    if (copy_to_user((void*)free, &f, 8) != 0) return -1;
     return 0;
 }
 
@@ -569,7 +658,9 @@ static long sys_ps(long processes, long max, long a3, long a4, long a5, long a6)
         entry.ppid = kernel_procs[i]->ppid;
         strcpy(entry.name, kernel_procs[i]->name);
         entry.state = kernel_procs[i]->state;
-        copy_to_user((void*)((char*)processes + i * sizeof(ps_entry_t)), &entry, sizeof(ps_entry_t));
+        if (copy_to_user((void*)((char*)processes + i * sizeof(ps_entry_t)), &entry, sizeof(ps_entry_t)) != 0) {
+            return -1;
+        }
     }
 
     return to_copy;

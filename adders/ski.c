@@ -17,6 +17,9 @@
 #include "../include/shell_api.h"
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
+#include "../drivers/keyboard.h"
+
+extern u64 __bss_end;
 
 extern int disk_commands_init(void);
 extern int commands_init(void);
@@ -27,7 +30,7 @@ extern int kinit_run_all(void);
 extern int sched_start(void);
 extern int sched_create_kthread(const char*, void(*)(void*), void*);
 
-static const char* version = "0.1";
+static const char* version = "0.2";
 
 static void print_num(u32 n) {
     char buf[16];
@@ -56,6 +59,12 @@ static void init_memory_from_multiboot(u32 mb_info_addr) {
                         first_start = entry->base_addr;
                         first_size = entry->length;
                         found = 1;
+                        if (first_start < (u64)&__bss_end) {
+                            u64 adjust = (u64)&__bss_end - first_start;
+                            first_start = (u64)&__bss_end;
+                            if (first_size > adjust) first_size -= adjust;
+                            else first_size = 0;
+                        }
                         memory_init(first_start, first_size);
                     } else {
                         memory_add_region(entry->base_addr, entry->length);
@@ -78,24 +87,39 @@ void ski(u64 mb_info_addr) {
     vga_write(version);
     vga_write("\n\n");
 
+    // === ЭТАП 0: GDT, IDT, TSS ===
     __asm__ volatile ("cli");
-    if (idt_init() != 0) { vga_write("[IDT:FAIL]\n"); while(1) __asm__ volatile("hlt"); }
-    vga_write("[IDT:OK]\n");
-    if (gdt_init() != 0) { vga_write("[GDT:FAIL]\n"); while(1) __asm__ volatile("hlt"); }
-    vga_write("[GDT:OK]\n");
+
+    vga_write("[GDT]... ");
+    if (gdt_init() != 0) {
+        vga_write("FAIL\n");
+        while(1) __asm__ volatile("hlt");
+    }
+    vga_write("OK\n");
+
+    vga_write("[IDT]... ");
+    if (idt_init() != 0) {
+        vga_write("FAIL\n");
+        while(1) __asm__ volatile("hlt");
+    }
+    vga_write("OK\n");
+
     tss_init();
-    vga_write("[TSS:OK]\n");
+    vga_write("[TSS]... OK\n");
+
     __asm__ volatile ("sti");
 
+    // === ЭТАП 1: Память ===
+    vga_write("[memory]... ");
     init_memory_from_multiboot((u32)mb_info_addr);
-    vga_write("[memory:OK]\n");
+    vga_write("OK\n\n");
 
+    // === ЭТАП 2-7: Всё остальное из init_table.h ===
     int total = 0;
     #define X(name, func, crit, ...) total++;
     #include "../kernel/init_table.h"
     #undef X
 
-    __asm__ volatile ("cli");
     int current = 0;
     #define X(name, func, crit, ...) \
         do { \
@@ -106,11 +130,16 @@ void ski(u64 mb_info_addr) {
             print_num(total); \
             vga_write("] "); \
             vga_write(name); \
-            vga_write("... "); \
+            for (int _i = 0; _i < 20 - sizeof(name); _i++) vga_putchar(' '); \
             int res = func(__VA_ARGS__); \
             if (res != 0) { \
-                vga_write("FAIL\n"); \
-                if (crit) while(1) __asm__ volatile("hlt"); \
+                vga_write("FAIL (code="); \
+                print_num(res); \
+                vga_write(")\n"); \
+                if (crit) { \
+                    vga_write("CRITICAL FAILURE, HALTING\n"); \
+                    while(1) __asm__ volatile("hlt"); \
+                } \
             } else { \
                 vga_write("OK\n"); \
             } \
@@ -121,4 +150,6 @@ void ski(u64 mb_info_addr) {
     vga_write("\nDisks found: ");
     vga_write_num(disk_get_disk_count());
     vga_write("\n");
+
+    vga_write("shi done nga\n\n");
 }

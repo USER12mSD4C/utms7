@@ -13,5 +13,4 @@ void irq_handler_dispatch(int irq) {
     if (irq >= 0 && irq < 16 && irq_handlers[irq]) {
         irq_handlers[irq]();
     }
-    send_eoi(irq);
 }
