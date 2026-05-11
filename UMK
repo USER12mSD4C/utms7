@@ -107,6 +107,7 @@ iso: kernel.bin kom
 	cp kernel.bin iso/boot/kernel.bin
 	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
 	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
+	sh -c 'echo "set gfxpayload=text" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "menuentry \"UTMS\" {" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    multiboot2 /boot/kernel.bin" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'

@@ -103,6 +103,7 @@ void irq_mask(int irq) {
 
 // Упрощенный обработчик исключений - использует аргументы функции
 void exception_handler_c(int error_code, int num) {
+    __asm__ volatile ("cli");
     vga_setcolor(0x4F, 0);
     vga_clear();
     vga_write("EXCEPTION: ");
@@ -160,7 +161,9 @@ void exception_handler_c(int error_code, int num) {
     vga_write("RFL="); vga_write_hex(saved_rflags); vga_write("  RSP="); vga_write_hex(saved_rsp); vga_write("\n");
     vga_write("SS ="); vga_write_hex(saved_ss); vga_write("\n");
 
-    while(1) __asm__ volatile("hlt");
+    while(1) {
+        __asm__ volatile("cli; hlt");
+    }
 }
 
 // Обработчики IRQ
@@ -266,7 +269,7 @@ int idt_init(void) {
     idt_register_irq(15, irq15_handler_c);
 
     irq_unmask(0); // таймер
-    //irq_unmask(1); // клавиатура
+    irq_unmask(1); // клавиатура
 
     return 0;
 }

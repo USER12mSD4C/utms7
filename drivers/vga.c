@@ -47,8 +47,14 @@ static void vga_scroll(void) {
 
 void vga_putchar(char c) {
     if (c == '\n') {
+        // Очищаем только остаток текущей строки
+        u16 blank = (color << 8) | ' ';
+        for (int i = cursor_x; i < 80; i++) {
+            vga[cursor_y * 80 + i] = blank;
+        }
         cursor_x = 0;
         cursor_y++;
+        // БЕЗ очистки новой строки
         if (cursor_y >= 25) {
             vga_scroll();
             cursor_y = 24;
@@ -86,17 +92,17 @@ void vga_putchar(char c) {
 void vga_write_num(u32 num) {
     char buf[16];
     int i = 0;
-    
+
     if (num == 0) {
         vga_putchar('0');
         return;
     }
-    
+
     while (num > 0) {
         buf[i++] = '0' + (num % 10);
         num /= 10;
     }
-    
+
     while (i > 0) {
         vga_putchar(buf[--i]);
     }
