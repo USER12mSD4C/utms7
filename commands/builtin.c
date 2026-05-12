@@ -1,7 +1,7 @@
 // commands/builtin.c
 #include "../include/shell_api.h"
 #include "../include/string.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../drivers/vesa.h"
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
@@ -59,7 +59,7 @@ static int cmd_help(int argc, char** argv) {
 
 static int cmd_clear(int argc, char** argv) {
     (void)argc; (void)argv;
-    vga_clear();
+    print_clear();
     if (vesa_is_active()) vesa_clear(0, 0, 0);
     return 0;
 }

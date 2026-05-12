@@ -5,7 +5,7 @@
 #include "panic.h"
 #include "gdt.h"
 #include "sched.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 #define IDT_ENTRIES 256
 #define IDT_INTERRUPT_GATE 0x8E
@@ -104,13 +104,13 @@ void irq_mask(int irq) {
 // Упрощенный обработчик исключений - использует аргументы функции
 void exception_handler_c(int error_code, int num) {
     __asm__ volatile ("cli");
-    vga_setcolor(0x4F, 0);
-    vga_clear();
-    vga_write("EXCEPTION: ");
-    vga_write_num(num);
-    vga_write(" err=");
-    vga_write_hex(error_code);
-    vga_write("\n\n");
+    print_setcolor(0x4F, 0);
+    print_clear();
+    print("EXCEPTION: ");
+    printnum(num);
+    print(" err=");
+    printhex(error_code);
+    print("\n\n");
 
     // Получаем указатель на фрейм из текущего RSP
     // После SAVE_REGS в isr_common: RSP указывает на начало структуры (rax)
@@ -149,17 +149,17 @@ void exception_handler_c(int error_code, int num) {
     saved_rsp    = frame[20]; // +160
     saved_ss     = frame[21]; // +168
 
-    vga_write("RAX="); vga_write_hex(saved_rax); vga_write("\n");
-    vga_write("RBX="); vga_write_hex(saved_rbx); vga_write("  RCX="); vga_write_hex(saved_rcx); vga_write("\n");
-    vga_write("RDX="); vga_write_hex(saved_rdx); vga_write("  RSI="); vga_write_hex(saved_rsi); vga_write("\n");
-    vga_write("RDI="); vga_write_hex(saved_rdi); vga_write("  RBP="); vga_write_hex(saved_rbp); vga_write("\n");
-    vga_write("R8 ="); vga_write_hex(saved_r8);  vga_write("  R9 ="); vga_write_hex(saved_r9);  vga_write("\n");
-    vga_write("R10="); vga_write_hex(saved_r10); vga_write("  R11="); vga_write_hex(saved_r11); vga_write("\n");
-    vga_write("R12="); vga_write_hex(saved_r12); vga_write("  R13="); vga_write_hex(saved_r13); vga_write("\n");
-    vga_write("R14="); vga_write_hex(saved_r14); vga_write("  R15="); vga_write_hex(saved_r15); vga_write("\n\n");
-    vga_write("RIP="); vga_write_hex(saved_rip); vga_write("  CS="); vga_write_hex(saved_cs); vga_write("\n");
-    vga_write("RFL="); vga_write_hex(saved_rflags); vga_write("  RSP="); vga_write_hex(saved_rsp); vga_write("\n");
-    vga_write("SS ="); vga_write_hex(saved_ss); vga_write("\n");
+    print("RAX="); printhex(saved_rax); print("\n");
+    print("RBX="); printhex(saved_rbx); print("  RCX="); printhex(saved_rcx); print("\n");
+    print("RDX="); printhex(saved_rdx); print("  RSI="); printhex(saved_rsi); print("\n");
+    print("RDI="); printhex(saved_rdi); print("  RBP="); printhex(saved_rbp); print("\n");
+    print("R8 ="); printhex(saved_r8);  print("  R9 ="); printhex(saved_r9);  print("\n");
+    print("R10="); printhex(saved_r10); print("  R11="); printhex(saved_r11); print("\n");
+    print("R12="); printhex(saved_r12); print("  R13="); printhex(saved_r13); print("\n");
+    print("R14="); printhex(saved_r14); print("  R15="); printhex(saved_r15); print("\n\n");
+    print("RIP="); printhex(saved_rip); print("  CS="); printhex(saved_cs); print("\n");
+    print("RFL="); printhex(saved_rflags); print("  RSP="); printhex(saved_rsp); print("\n");
+    print("SS ="); printhex(saved_ss); print("\n");
 
     while(1) {
         __asm__ volatile("cli; hlt");

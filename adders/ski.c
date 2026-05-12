@@ -1,5 +1,5 @@
 // adders/ski.c
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../kernel/memory.h"
 #include "../fs/ufs.h"
 #include "../drivers/disk.h"
@@ -18,6 +18,7 @@
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 #include "../drivers/keyboard.h"
+#include "../shell/shell.h"
 
 extern u64 __bss_end;
 
@@ -35,9 +36,9 @@ static const char* version = "0.2";
 static void print_num(u32 n) {
     char buf[16];
     int i = 0;
-    if (n == 0) { vga_putchar('0'); return; }
+    if (n == 0) { print_char('0'); return; }
     while (n > 0) { buf[i++] = '0' + (n % 10); n /= 10; }
-    while (i-- > 0) vga_putchar(buf[i]);
+    while (i-- > 0) print_char(buf[i]);
 }
 
 static void init_memory_from_multiboot(u32 mb_info_addr) {
@@ -77,42 +78,42 @@ static void init_memory_from_multiboot(u32 mb_info_addr) {
     }
 
     if (!found) {
-        vga_write("[memory:FAIL] no available memory\n");
+        print("[memory:FAIL] no available memory\n");
         while(1) __asm__ volatile("hlt");
     }
 }
 
 void ski(u64 mb_info_addr) {
-    vga_write("ski version ");
-    vga_write(version);
-    vga_write("\n\n");
+    print("ski version ");
+    print(version);
+    print("\n\n");
 
     // === ЭТАП 0: GDT, IDT, TSS ===
     __asm__ volatile ("cli");
 
-    vga_write("[GDT]... ");
+    print("[GDT]... ");
     if (gdt_init() != 0) {
-        vga_write("FAIL\n");
+        print("FAIL\n");
         while(1) __asm__ volatile("hlt");
     }
-    vga_write("OK\n");
+    print("OK\n");
 
-    vga_write("[IDT]... ");
+    print("[IDT]... ");
     if (idt_init() != 0) {
-        vga_write("FAIL\n");
+        print("FAIL\n");
         while(1) __asm__ volatile("hlt");
     }
-    vga_write("OK\n");
+    print("OK\n");
 
     tss_init();
-    vga_write("[TSS]... OK\n");
+    print("[TSS]... OK\n");
 
     __asm__ volatile ("sti");
 
     // === ЭТАП 1: Память ===
-    vga_write("[memory]... ");
+    print("[memory]... ");
     init_memory_from_multiboot((u32)mb_info_addr);
-    vga_write("OK\n\n");
+    print("OK\n\n");
 
     // === ЭТАП 2-7: Всё остальное из init_table.h ===
     int total = 0;
@@ -124,32 +125,32 @@ void ski(u64 mb_info_addr) {
     #define X(name, func, crit, ...) \
         do { \
             current++; \
-            vga_write("["); \
+            print("["); \
             print_num(current); \
-            vga_write("/"); \
+            print("/"); \
             print_num(total); \
-            vga_write("] "); \
-            vga_write(name); \
-            for (int _i = 0; _i < 20 - sizeof(name); _i++) vga_putchar(' '); \
+            print("] "); \
+            print(name); \
+            for (int _i = 0; _i < 20 - sizeof(name); _i++) print_char(' '); \
             int res = func(__VA_ARGS__); \
             if (res != 0) { \
-                vga_write("FAIL (code="); \
+                print("FAIL (code="); \
                 print_num(res); \
-                vga_write(")\n"); \
+                print(")\n"); \
                 if (crit) { \
-                    vga_write("CRITICAL FAILURE, HALTING\n"); \
+                    print("CRITICAL FAILURE, HALTING\n"); \
                     while(1) __asm__ volatile("hlt"); \
                 } \
             } else { \
-                vga_write("OK\n"); \
+                print("OK\n"); \
             } \
         } while(0);
     #include "../kernel/init_table.h"
     #undef X
 
-    vga_write("\nDisks found: ");
-    vga_write_num(disk_get_disk_count());
-    vga_write("\n");
+    print("\nDisks found: ");
+    printnum(disk_get_disk_count());
+    print("\n");
 
-    vga_write("shi done nga\n\n");
+    print("shi done nga\n\n");
 }

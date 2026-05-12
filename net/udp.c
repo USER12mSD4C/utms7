@@ -5,7 +5,7 @@
 #include "../include/string.h"
 #include "../include/endian.h"
 #include "../kernel/memory.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 #define UDP_MAX_PORTS 16
 #define UDP_BUFFER_SIZE 8192
@@ -34,7 +34,7 @@ static u16 udp_checksum(ip_hdr_t *ip, udp_hdr_t *udp, int len) {
 
 void udp_init(void) {
     for (int i = 0; i < UDP_MAX_PORTS; i++) socks[i].used = 0;
-    vga_write("UDP initialized\n");
+    print("UDP initialized\n");
 }
 
 int udp_send(u32 dst, u16 srcp, u16 dstp, u8 *data, int len) {

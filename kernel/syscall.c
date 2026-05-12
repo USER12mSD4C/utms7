@@ -3,7 +3,7 @@
 #include "sched.h"
 #include "idt.h"
 #include "../fs/ufs.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../drivers/keyboard.h"
 #include "../drivers/disk.h"
 #include "../include/udisk.h"
@@ -95,7 +95,7 @@ static long sys_write(long fd, long buf, long count, long a4, long a5, long a6) 
         temp[count] = '\0';
 
         for (long i = 0; i < count; i++) {
-            vga_putchar(temp[i]);
+            print_char(temp[i]);
         }
         kfree(temp);
         return count;

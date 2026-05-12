@@ -27,22 +27,14 @@ int paging_init(void) {
 
     if ((pml4[0] & PAGE_PRESENT) == 0) return -1;
 
-    pml4[510] = PDPT2_ADDR | PAGE_PRESENT | PAGE_WRITABLE;
+    // Больше не копируем PD в PD2, потому что PD2 уже настроена
+    // в entry.asm точно так же, как PD.
 
-    u64* pdpt2 = (u64*)PDPT2_ADDR;
-    pdpt2[0] = PD2_ADDR | PAGE_PRESENT | PAGE_WRITABLE;
-
+    // Добавляем MMIO (LFB) в PD2 на всякий случай
     u64* pd2 = (u64*)PD2_ADDR;
-    u64* pd = (u64*)PD_ADDR;
-
-    // Копируем существующий маппинг
-    for (int i = 0; i < 512; i++) {
-        pd2[i] = pd[i];
-    }
-
-    // Добавляем MMIO
     pd2[0x7E8] = 0xFD000000 | PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE;
 
+    // Сбрасываем TLB
     __asm__ volatile ("mov %0, %%cr3" : : "r"(pml4));
     __asm__ volatile ("invlpg (%0)" : : "r"(0) : "memory");
 

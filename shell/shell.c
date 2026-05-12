@@ -1,5 +1,5 @@
 #include "../include/string.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
 #include "../kernel/memory.h"
@@ -362,9 +362,9 @@ char **shell_split_args(char *str, int *argc) {
     return argv;
 }
 
-void shell_print(const char *str) { vga_write(str); }
-void shell_print_num(u32 num) { vga_write_num(num); }
-void shell_print_hex(u32 num) { vga_write_hex(num); }
+void shell_print(const char *str) { print(str); }
+void shell_print_num(u32 num) { printnum(num); }
+void shell_print_hex(u32 num) { printhex(num); }
 
 int shell_execute(const char *cmd_line) {
     if (!cmd_line || !cmd_line[0]) return 0;
@@ -424,11 +424,11 @@ static void print_prompt(void) {
 }
 
 static void clear_line(u8 input_x, u8 input_y) {
-    vga_setpos(input_x, input_y);
+    print_setpos(input_x, input_y);
     for (int i = 0; i < 80 - input_x; i++) {
-        vga_putchar(' ');
+        print_char(' ');
     }
-    vga_setpos(input_x, input_y);
+    print_setpos(input_x, input_y);
 }
 
 int shell_start_thread(void) {
@@ -448,7 +448,7 @@ int shell_run(void) {
 
     while (1) {
         print_prompt();
-        vga_getpos(&cursor_x, &cursor_y);
+        print_getpos(&cursor_x, &cursor_y);
         u8 input_x = cursor_x, input_y = cursor_y;
         pos = 0;
         history_pos = -1;
@@ -468,10 +468,10 @@ int shell_run(void) {
                     strcpy(line, history[history_pos]);
                     pos = strlen(line);
                     clear_line(input_x, input_y);
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
+                    print_setpos(input_x, input_y);
+                    for (int i = 0; i < pos; i++) print_char(line[i]);
                     cursor_x = input_x + pos;
-                    vga_setpos(cursor_x, input_y);
+                    print_setpos(cursor_x, input_y);
                 }
                 continue;
             }
@@ -482,17 +482,17 @@ int shell_run(void) {
                     strcpy(line, history[history_pos]);
                     pos = strlen(line);
                     clear_line(input_x, input_y);
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
+                    print_setpos(input_x, input_y);
+                    for (int i = 0; i < pos; i++) print_char(line[i]);
                     cursor_x = input_x + pos;
-                    vga_setpos(cursor_x, input_y);
+                    print_setpos(cursor_x, input_y);
                 } else if (history_pos == 0) {
                     history_pos = -1;
                     line[0] = '\0';
                     pos = 0;
                     clear_line(input_x, input_y);
                     cursor_x = input_x;
-                    vga_setpos(cursor_x, input_y);
+                    print_setpos(cursor_x, input_y);
                 }
                 continue;
             }
@@ -500,7 +500,7 @@ int shell_run(void) {
             if (key == 0xE2) {
                 if (cursor_x > input_x) {
                     cursor_x--;
-                    vga_setpos(cursor_x, input_y);
+                    print_setpos(cursor_x, input_y);
                 }
                 continue;
             }
@@ -508,7 +508,7 @@ int shell_run(void) {
             if (key == 0xE3) {
                 if (cursor_x - input_x < pos) {
                     cursor_x++;
-                    vga_setpos(cursor_x, input_y);
+                    print_setpos(cursor_x, input_y);
                 }
                 continue;
             }
@@ -523,17 +523,17 @@ int shell_run(void) {
                     for (int i = idx; i < pos; i++) line[i] = line[i+1];
                     pos--;
                     cursor_x--;
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
-                    vga_putchar(' ');
-                    vga_setpos(cursor_x, input_y);
+                    print_setpos(input_x, input_y);
+                    for (int i = 0; i < pos; i++) print_char(line[i]);
+                    print_char(' ');
+                    print_setpos(cursor_x, input_y);
                 }
                 continue;
             }
 
             if (key == '\n' || key == '\r') {
                 line[pos] = '\0';
-                vga_putchar('\n');
+                print_char('\n');
                 if (pos > 0) {
                     add_to_history(line);
                     shell_execute(line);
@@ -548,9 +548,9 @@ int shell_run(void) {
                     line[idx] = key;
                     pos++;
                     cursor_x++;
-                    vga_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) vga_putchar(line[i]);
-                    vga_setpos(cursor_x, input_y);
+                    print_setpos(input_x, input_y);
+                    for (int i = 0; i < pos; i++) print_char(line[i]);
+                    print_setpos(cursor_x, input_y);
                 }
                 continue;
             }

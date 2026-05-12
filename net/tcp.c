@@ -6,7 +6,7 @@
 #include "../include/endian.h"
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 #define MAX_SOCKETS 32
 #define TCP_RETRANSMIT_MS 500
@@ -147,7 +147,7 @@ void tcp_init(void) {
         sockets[i].rcv_buf = NULL;
         sockets[i].snd_buf = NULL;
     }
-    vga_write("TCP initialized\n");
+    print("TCP initialized\n");
 }
 
 // Создание сокета

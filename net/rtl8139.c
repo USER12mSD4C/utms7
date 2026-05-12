@@ -4,7 +4,7 @@
 #include "../include/string.h"
 #include "../kernel/memory.h"
 #include "../drivers/pci.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 extern void net_handle_packet(u8 *packet, int len);
 
@@ -60,7 +60,7 @@ int rtl8139_init(pci_dev_t *pci) {
     sc->tx_idx = 0;
     sc->attached = 1;
     
-    vga_write("  RTL8139: IO base=0x"); vga_write_hex(sc->iobase); vga_write("\n");
+    print("  RTL8139: IO base=0x"); printhex(sc->iobase); print("\n");
     
     u32 cmd = pci_read_config(pci->bus, pci->slot, pci->func, 0x04);
     cmd |= 0x07;
@@ -73,9 +73,9 @@ int rtl8139_init(pci_dev_t *pci) {
     
     for (int i = 0; i < 6; i++) sc->mac[i] = rtl_read8(RTL_IDR0 + i);
     
-    vga_write("  RTL8139: MAC ");
-    for (int i = 0; i < 6; i++) { vga_write_hex(sc->mac[i]); if (i < 5) vga_write(":"); }
-    vga_write("\n");
+    print("  RTL8139: MAC ");
+    for (int i = 0; i < 6; i++) { printhex(sc->mac[i]); if (i < 5) print(":"); }
+    print("\n");
     
     sc->rxbuf = kmalloc(RX_BUF_SIZE + 256);
     if (!sc->rxbuf) goto fail;
@@ -95,7 +95,7 @@ int rtl8139_init(pci_dev_t *pci) {
     rtl_write16(RTL_ISR, 0xFFFF);
     rtl_write8(RTL_CMD, RTL_CMD_RX_ENB | RTL_CMD_TX_ENB);
     
-    vga_write("  RTL8139: OK\n");
+    print("  RTL8139: OK\n");
     return 0;
     
 fail:
@@ -108,19 +108,19 @@ fail:
 
 void rtl8139_dump_regs(void) {
     if (!sc) {
-        vga_write("RTL8139: not attached\n");
+        print("RTL8139: not attached\n");
         return;
     }
     
-    vga_write("RTL8139 registers:\n");
-    vga_write("  CMD: 0x"); vga_write_hex(rtl_read8(RTL_CMD)); vga_write("\n");
-    vga_write("  ISR: 0x"); vga_write_hex(rtl_read16(RTL_ISR)); vga_write("\n");
-    vga_write("  IMR: 0x"); vga_write_hex(rtl_read16(RTL_IMR)); vga_write("\n");
+    print("RTL8139 registers:\n");
+    print("  CMD: 0x"); printhex(rtl_read8(RTL_CMD)); print("\n");
+    print("  ISR: 0x"); printhex(rtl_read16(RTL_ISR)); print("\n");
+    print("  IMR: 0x"); printhex(rtl_read16(RTL_IMR)); print("\n");
     
     for (int i = 0; i < 4; i++) {
-        vga_write("  TSD"); vga_write_num(i); vga_write(": 0x");
-        vga_write_hex(rtl_read32(RTL_TSD + i * 4));
-        vga_write("\n");
+        print("  TSD"); printnum(i); print(": 0x");
+        printhex(rtl_read32(RTL_TSD + i * 4));
+        print("\n");
     }
 }
 

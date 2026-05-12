@@ -1,4 +1,4 @@
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../include/string.h"
 #include "../fs/ufs.h"
 #include "memory.h"
@@ -28,12 +28,11 @@ static kernel_sym_t kernel_syms[] = {
     {"memory_free", memory_free},
 
     // Видео
-    {"vga_write", vga_write},
-    {"vga_putchar", vga_putchar},
-    {"vga_clear", vga_clear},
-    {"vga_setcolor", vga_setcolor},
-    {"vga_setpos", vga_setpos},
-    {"vga_update_cursor", vga_update_cursor},
+    {"print", print},
+    {"printnum", printnum},
+    {"printhex", printhex},
+    {"print_clear", print_clear},
+    {"print_setcolor", print_setcolor},
 
     // Диск
     {"disk_read", disk_read},
@@ -121,9 +120,9 @@ static int resolve_module_symbols(loaded_module_t* mod) {
             } else {
                 // Пропускаем специальные символы
                 if (sym_name[0] != '_' && strcmp(sym_name, "_GLOBAL_OFFSET_TABLE_") != 0) {
-                    vga_write("  unresolved: ");
-                    vga_write(sym_name);
-                    vga_write("\n");
+                    print("  unresolved: ");
+                    print(sym_name);
+                    print("\n");
                     unresolved++;
                 }
             }
@@ -299,13 +298,13 @@ int module_unload(const char* name) {
 }
 
 int kinit_run_all(void) {
-    vga_write("\nKinit: scanning /modules/\n");
+    print("\nKinit: scanning /modules/\n");
 
     FSNode* entries;
     u32 count;
 
     if (ufs_readdir("/modules", &entries, &count) != 0) {
-        vga_write("  No /modules/ directory found\n");
+        print("  No /modules/ directory found\n");
     }
 
     // Сначала считаем сколько .ko файлов
@@ -320,15 +319,15 @@ int kinit_run_all(void) {
     }
 
     if (module_count == 0) {
-        vga_write("  No .ko modules found\n");
+        print("  No .ko modules found\n");
         kfree(entries);
     }
 
-    vga_write("  Found ");
+    print("  Found ");
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", module_count);
-    vga_write(buf);
-    vga_write(" modules\n\n");
+    print(buf);
+    print(" modules\n\n");
 
     // Загружаем все модули
     int loaded = 0;
@@ -342,37 +341,37 @@ int kinit_run_all(void) {
             char path[256];
             snprintf(path, sizeof(path), "/modules/%s", entries[i].name);
 
-            vga_write("  Loading ");
-            vga_write(entries[i].name);
-            vga_write("... ");
+            print("  Loading ");
+            print(entries[i].name);
+            print("... ");
 
             int result = module_load(path);
 
             if (result == 0) {
-                vga_setcolor(0x0A, 0x00);
-                vga_write("OK\n");
+                print_setcolor(0x0A, 0x00);
+                print("OK\n");
                 loaded++;
             } else {
-                vga_setcolor(0x0C, 0x00);
-                vga_write("FAILED\n");
+                print_setcolor(0x0C, 0x00);
+                print("FAILED\n");
                 failed++;
             }
-            vga_setcolor(0x07, 0x00);
+            print_setcolor(0x07, 0x00);
         }
     }
 
     kfree(entries);
 
-    vga_write("\nKinit: ");
+    print("\nKinit: ");
     snprintf(buf, sizeof(buf), "%d", loaded);
-    vga_write(buf);
-    vga_write(" loaded, ");
+    print(buf);
+    print(" loaded, ");
     snprintf(buf, sizeof(buf), "%d", failed);
-    vga_write(buf);
-    vga_write(" failed\n");
+    print(buf);
+    print(" failed\n");
 
     // Вызываем entry() для всех успешно загруженных модулей
-    vga_write("\nKinit: initializing modules\n");
+    print("\nKinit: initializing modules\n");
 
     loaded_module_t* mod = module_list;
     int init_ok = 0;
@@ -380,32 +379,32 @@ int kinit_run_all(void) {
 
     while (mod) {
         if (mod->entry) {
-            vga_write("  ");
-            vga_write(mod->name);
+            print("  ");
+            print(mod->name);
             int len = strlen(mod->name);
-            for (int j = len; j < 16; j++) vga_putchar(' ');
+            for (int j = len; j < 16; j++) print_char(' ');
 
             int result = mod->entry();
             if (result == 0) {
-                vga_setcolor(0x0A, 0x00);
-                vga_write("OK\n");
+                print_setcolor(0x0A, 0x00);
+                print("OK\n");
                 init_ok++;
             } else {
-                vga_setcolor(0x0C, 0x00);
-                vga_write("FAILED\n");
+                print_setcolor(0x0C, 0x00);
+                print("FAILED\n");
                 init_failed++;
             }
-            vga_setcolor(0x07, 0x00);
+            print_setcolor(0x07, 0x00);
         }
         mod = mod->next;
     }
 
-    vga_write("\nKinit: ");
+    print("\nKinit: ");
     snprintf(buf, sizeof(buf), "%d", init_ok);
-    vga_write(buf);
-    vga_write(" initialized, ");
+    print(buf);
+    print(" initialized, ");
     snprintf(buf, sizeof(buf), "%d", init_failed);
-    vga_write(buf);
-    vga_write(" failed\n");
+    print(buf);
+    print(" failed\n");
     return 0;
 }

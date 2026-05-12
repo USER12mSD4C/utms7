@@ -5,7 +5,7 @@
 #include "../net/dns.h"
 #include "../net/net.h"
 #include "../lib/zlib.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 #define UPAC_ROOT "/etc/upac"
 #define UPAC_DB UPAC_ROOT "/core.db"
@@ -28,11 +28,11 @@ typedef struct {
 } upac_pkg_t;
 
 static void upac_print(const char *s) {
-    vga_write(s);
+    print(s);
 }
 
 static void upac_print_num(u32 n) {
-    vga_write_num(n);
+    printnum(n);
 }
 
 static int upac_mkdir_recursive(const char *path) {

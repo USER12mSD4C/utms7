@@ -1,5 +1,5 @@
 #include "xhci.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../kernel/memory.h"
 #include "../include/string.h"
 #include "../include/io.h"
@@ -8,7 +8,7 @@ static volatile xhci_cap_regs_t *cap_regs;
 static volatile xhci_op_regs_t *op_regs;
 
 void xhci_init(void) {
-    vga_write("Initializing XHCI... ");
+    print("Initializing XHCI... ");
     
     // TODO: найти контроллер через PCI
     cap_regs = (xhci_cap_regs_t*)XHCI_BASE;
@@ -22,7 +22,7 @@ void xhci_init(void) {
     
     // Устанавливаем размер страницы
     if (op_regs->pagesize != 1) {
-        vga_write("FAILED (page size)\n");
+        print("FAILED (page size)\n");
         return;
     }
     
@@ -38,7 +38,7 @@ void xhci_init(void) {
         __asm__ volatile ("pause");
     }
     
-    vga_write("OK\n");
+    print("OK\n");
 }
 
 int xhci_handle_device(int port) {

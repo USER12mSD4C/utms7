@@ -1,6 +1,6 @@
 // shell/uss.c
 #include "../include/string.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
 #include "../kernel/memory.h"
@@ -116,15 +116,15 @@ static void uss_ensure_stack_capacity(int needed) {
 // ==================== БАЗОВЫЕ ФУНКЦИИ ====================
 
 static void uss_print(const char *s) {
-    vga_write(s);
+    print(s);
 }
 
 static void uss_print_num(u32 n) {
-    vga_write_num(n);
+    printnum(n);
 }
 
 static void uss_print_str(const char* s) {
-    vga_write(s);
+    print(s);
 }
 
 static void uss_error(const char* msg) {

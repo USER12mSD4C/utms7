@@ -1,7 +1,7 @@
 #include "disk.h"
 #include "../include/io.h"
 #include "../include/string.h"
-#include "vga.h"
+#include "../drivers/vesa.h"
 
 #define ATA_PRIMARY_IO     0x1F0
 #define ATA_PRIMARY_DCR     0x3F6
@@ -209,13 +209,13 @@ u64 disk_get_sectors(u8 drive) {
 void disk_list_disks(void) {
     for (int i = 0; i < 4; i++) {
         if (disks[i].present) {
-            vga_write("  sd");
-            vga_putchar('a' + i);
-            vga_write(": ");
-            vga_write(disks[i].model);
-            vga_write(" (");
-            vga_write_num((u32)(disks[i].sectors / 2048)); // в МБ примерно
-            vga_write(" MB)\n");
+            print("  sd");
+            print_char('a' + i);
+            print(": ");
+            print(disks[i].model);
+            print(" (");
+            printnum((u32)(disks[i].sectors / 2048)); // в МБ примерно
+            print(" MB)\n");
         }
     }
 }

@@ -5,7 +5,7 @@
 #include "../include/string.h"
 #include "../include/endian.h"
 #include "../kernel/memory.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 #define ARP_CACHE_SIZE 16
 
@@ -94,15 +94,15 @@ void arp_handle_packet(u8 *packet, int len) {
     
     arp_pkt_t *arp = (arp_pkt_t*)packet;
     
-    vga_write("ARP: ");
-    if (ntohs(arp->op) == ARP_OP_REQUEST) vga_write("REQUEST ");
-    else vga_write("REPLY ");
-    vga_write("from ");
-    vga_write_num((arp->spa >> 24) & 0xFF);
-    vga_write("."); vga_write_num((arp->spa >> 16) & 0xFF);
-    vga_write("."); vga_write_num((arp->spa >> 8) & 0xFF);
-    vga_write("."); vga_write_num(arp->spa & 0xFF);
-    vga_write("\n");
+    print("ARP: ");
+    if (ntohs(arp->op) == ARP_OP_REQUEST) print("REQUEST ");
+    else print("REPLY ");
+    print("from ");
+    printnum((arp->spa >> 24) & 0xFF);
+    print("."); printnum((arp->spa >> 16) & 0xFF);
+    print("."); printnum((arp->spa >> 8) & 0xFF);
+    print("."); printnum(arp->spa & 0xFF);
+    print("\n");
     
     if (ntohs(arp->op) == ARP_OP_REQUEST && arp->tpa == net_get_ip()) {
         arp_pkt_t reply;
@@ -117,7 +117,7 @@ void arp_handle_packet(u8 *packet, int len) {
         reply.tpa = arp->spa;
         
         net_eth_send(arp->sha, ETHERTYPE_ARP, (u8*)&reply, sizeof(arp_pkt_t));
-        vga_write("ARP: sent reply\n");
+        print("ARP: sent reply\n");
     }
     
     arp_cache_add(arp->spa, arp->sha);

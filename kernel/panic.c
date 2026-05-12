@@ -1,5 +1,5 @@
 #include "panic.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "../include/io.h"
 #include "../include/string.h"
 #include "sched.h"
@@ -7,7 +7,7 @@
 static void print_hex(u64 num) {
     char hex[] = "0123456789ABCDEF";
     for (int i = 60; i >= 0; i -= 4) {
-        vga_putchar(hex[(num >> i) & 0xF]);
+        print_char(hex[(num >> i) & 0xF]);
     }
 }
 
@@ -15,14 +15,14 @@ static void print_num(u32 num) {
     char buf[16];
     int i = 0;
     if (num == 0) {
-        vga_putchar('0');
+        print_char('0');
         return;
     }
     while (num > 0) {
         buf[i++] = '0' + (num % 10);
         num /= 10;
     }
-    while (i > 0) vga_putchar(buf[--i]);
+    while (i > 0) print_char(buf[--i]);
 }
 
 void panic(const char* message) {
@@ -36,11 +36,11 @@ void panic(const char* message) {
     }
 
     // Устанавливаем цвета для panic
-    vga_setcolor(0x4F, 0);
-    vga_clear();
-    vga_write("KERNEL PANIC: ");
-    vga_write(message);
-    vga_write("\n\n");
+    print_setcolor(0x4F, 0);
+    print_clear();
+    print("KERNEL PANIC: ");
+    print(message);
+    print("\n\n");
 
     // Сохраняем регистры
     u64 rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8, r9, r10, r11, r12, r13, r14, r15;
@@ -71,21 +71,21 @@ void panic(const char* message) {
     // RIP получаем из стека (адрес возврата)
     rip = (u64)__builtin_return_address(0);
 
-    vga_write("Registers:\n");
-    vga_write("RAX="); print_hex(rax); vga_write(" RBX="); print_hex(rbx); vga_write("\n");
-    vga_write("RCX="); print_hex(rcx); vga_write(" RDX="); print_hex(rdx); vga_write("\n");
-    vga_write("RSI="); print_hex(rsi); vga_write(" RDI="); print_hex(rdi); vga_write("\n");
-    vga_write("RBP="); print_hex(rbp); vga_write(" RSP="); print_hex(rsp); vga_write("\n");
-    vga_write("R8 ="); print_hex(r8);  vga_write(" R9 ="); print_hex(r9);  vga_write("\n");
-    vga_write("R10="); print_hex(r10); vga_write(" R11="); print_hex(r11); vga_write("\n");
-    vga_write("R12="); print_hex(r12); vga_write(" R13="); print_hex(r13); vga_write("\n");
-    vga_write("R14="); print_hex(r14); vga_write(" R15="); print_hex(r15); vga_write("\n\n");
+    print("Registers:\n");
+    print("RAX="); print_hex(rax); print(" RBX="); print_hex(rbx); print("\n");
+    print("RCX="); print_hex(rcx); print(" RDX="); print_hex(rdx); print("\n");
+    print("RSI="); print_hex(rsi); print(" RDI="); print_hex(rdi); print("\n");
+    print("RBP="); print_hex(rbp); print(" RSP="); print_hex(rsp); print("\n");
+    print("R8 ="); print_hex(r8);  print(" R9 ="); print_hex(r9);  print("\n");
+    print("R10="); print_hex(r10); print(" R11="); print_hex(r11); print("\n");
+    print("R12="); print_hex(r12); print(" R13="); print_hex(r13); print("\n");
+    print("R14="); print_hex(r14); print(" R15="); print_hex(r15); print("\n\n");
 
-    vga_write("CR0="); print_hex(cr0); vga_write(" CR2="); print_hex(cr2); vga_write("\n");
-    vga_write("CR3="); print_hex(cr3); vga_write(" CR4="); print_hex(cr4); vga_write("\n");
-    vga_write("RIP="); print_hex(rip); vga_write("\n\n");
+    print("CR0="); print_hex(cr0); print(" CR2="); print_hex(cr2); print("\n");
+    print("CR3="); print_hex(cr3); print(" CR4="); print_hex(cr4); print("\n");
+    print("RIP="); print_hex(rip); print("\n\n");
 
-    vga_write("System halted.\n");
+    print("System halted.\n");
 
     // Отправляем в порт отладки
     outb(0xE9, 'P');
@@ -104,16 +104,16 @@ void panic(const char* message) {
 
 void panic_assert(const char* file, u32 line, const char* expr) {
     __asm__ volatile ("cli");
-    vga_setcolor(0x4F, 0);
-    vga_clear();
-    vga_write("ASSERTION FAILED\n");
-    vga_write("File: ");
-    vga_write(file);
-    vga_write("\nLine: ");
+    print_setcolor(0x4F, 0);
+    print_clear();
+    print("ASSERTION FAILED\n");
+    print("File: ");
+    print(file);
+    print("\nLine: ");
     print_num(line);
-    vga_write("\nExpr: ");
-    vga_write(expr);
-    vga_write("\n\nSystem halted.\n");
+    print("\nExpr: ");
+    print(expr);
+    print("\n\nSystem halted.\n");
     while(1) {
         __asm__ volatile ("cli; hlt");
     }
@@ -122,10 +122,10 @@ void panic_assert(const char* file, u32 line, const char* expr) {
 void double_fault_handler(void) {
     // Для double fault используем отдельный стек (IST в IDT)
     __asm__ volatile ("cli");
-    vga_setcolor(0x4F, 0);
-    vga_clear();
-    vga_write("DOUBLE FAULT\n");
-    vga_write("System halted.\n");
+    print_setcolor(0x4F, 0);
+    print_clear();
+    print("DOUBLE FAULT\n");
+    print("System halted.\n");
     while(1) {
         __asm__ volatile ("cli; hlt");
     }

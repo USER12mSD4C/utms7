@@ -4,7 +4,7 @@
 #include "idt.h"
 #include "../include/string.h"
 #include "../include/io.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 #include "gdt.h"
 
 #define TIME_SLICE_MS       10
@@ -534,10 +534,10 @@ int sched_kill(int pid) {
 
 int sched_start(void) {
     if (!current || !sched_initialized) {
-        vga_write("SCHED: not initialized\n");
+        print("SCHED: not initialized\n");
         return -1;
     }
-    vga_write("SCHED: running\n");
+    print("SCHED: running\n");
 
     return 0;
 }

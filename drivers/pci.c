@@ -1,6 +1,6 @@
 #include "pci.h"
 #include "../include/io.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 #define PCI_CONFIG_ADDR 0xCF8
 #define PCI_CONFIG_DATA 0xCFC
@@ -18,7 +18,7 @@ void pci_write_config(u8 bus, u8 slot, u8 func, u8 offset, u32 value) {
 }
 
 int pci_init(void) {
-    vga_write("PCI: scanning...\n");
+    print("PCI: scanning...\n");
 
     for (int bus = 0; bus < 256; bus++) {
         for (int slot = 0; slot < 32; slot++) {
@@ -33,23 +33,23 @@ int pci_init(void) {
             u8 subclass = (class_reg >> 16) & 0xFF;
 
             // Выводим найденные устройства
-            vga_write("  ");
-            vga_write_num(bus);
-            vga_write(":");
-            vga_write_num(slot);
-            vga_write(" ");
-            vga_write_hex(vendor);
-            vga_write(":");
-            vga_write_hex(device);
-            vga_write(" class=");
-            vga_write_num(class);
-            vga_write(".");
-            vga_write_num(subclass);
+            print("  ");
+            printnum(bus);
+            print(":");
+            printnum(slot);
+            print(" ");
+            printhex(vendor);
+            print(":");
+            printhex(device);
+            print(" class=");
+            printnum(class);
+            print(".");
+            printnum(subclass);
 
             if (class == 0x02) { // Network controller
-                vga_write(" NET");
+                print(" NET");
             }
-            vga_write("\n");
+            print("\n");
         }
     }
     return 0;
@@ -101,7 +101,7 @@ pci_dev_t* pci_find_device(u16 vendor, u16 device) {
 }
 
 void pci_scan_network(void) {
-    vga_write("PCI network devices:\n");
+    print("PCI network devices:\n");
 
     for (int bus = 0; bus < 256; bus++) {
         for (int slot = 0; slot < 32; slot++) {
@@ -116,20 +116,20 @@ void pci_scan_network(void) {
                 u16 vendor = id & 0xFFFF;
                 u16 device = (id >> 16) & 0xFFFF;
 
-                vga_write("  ");
-                vga_write_num(vendor);
-                vga_write(":");
-                vga_write_num(device);
-                vga_write(" - ");
+                print("  ");
+                printnum(vendor);
+                print(":");
+                printnum(device);
+                print(" - ");
 
                 if (vendor == 0x10EC && device == 0x8139) {
-                    vga_write("Realtek RTL8139");
+                    print("Realtek RTL8139");
                 } else if (vendor == 0x8086 && device == 0x100E) {
-                    vga_write("Intel PRO/1000");
+                    print("Intel PRO/1000");
                 } else {
-                    vga_write("Unknown NIC");
+                    print("Unknown NIC");
                 }
-                vga_write("\n");
+                print("\n");
             }
         }
     }

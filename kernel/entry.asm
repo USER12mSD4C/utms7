@@ -48,34 +48,35 @@ _start:
     rep stosb
 
     ; Теперь сохраняем в переменную
-    mov [multiboot_info], esi
+    mov [REL multiboot_info], esi
 
-    ; Setup paging (дальше идёт ваш существующий код)
+    ; Setup paging
     mov edi, 0x1000
     mov cr3, edi
     xor eax, eax
     mov ecx, 4096
     rep stosd
 
-    mov edi, 0x1000
+    mov edi, 0x1000            ; PML4
     mov eax, 0x2000
-    or eax, 3
-    mov [edi], eax
+    or eax, 3                  ; present + writable
+    mov [edi], eax             ; PML4[0] -> PDPT at 0x2000
 
     mov eax, 0x4000
     or eax, 3
-    mov [edi + 510*8], eax
+    mov [edi + 510*8], eax     ; PML4[510] -> PDPT2 at 0x4000
 
-    mov edi, 0x2000
+    mov edi, 0x2000            ; PDPT
     mov eax, 0x3000
     or eax, 3
-    mov [edi], eax
+    mov [edi], eax             ; PDPT[0] -> PD at 0x3000
 
-    mov edi, 0x4000
+    mov edi, 0x4000            ; PDPT2
     mov eax, 0x5000
     or eax, 3
-    mov [edi], eax
+    mov [edi], eax             ; PDPT2[0] -> PD2 at 0x5000
 
+    ; Заполняем основную PD (0x3000) identity mapping 1GB
     mov edi, 0x3000
     mov eax, 0x83
     mov ecx, 512
@@ -85,15 +86,22 @@ _start:
     add edi, 8
     loop .map_pd
 
+    ; --= ВОТ ЭТО БЫЛО УПУЩЕНО: =--
+    ; Точно так же заполняем PD2 (0x5000) identity mapping 1GB
     mov edi, 0x5000
-    xor eax, eax
-    mov ecx, 4096
-    rep stosd
+    mov eax, 0x83
+    mov ecx, 512
+.map_pd2:
+    mov [edi], eax
+    add eax, 0x200000
+    add edi, 8
+    loop .map_pd2
 
+    ; Добавляем LFB (0xFD000000) как 2MB страницу
     mov edi, 0x5000
     mov eax, 0xFD000000
     or eax, 0x83
-    mov [edi + 0x3F40], eax
+    mov [edi + 0x3F40], eax     ; 0x5000 + (0xFD000000 >> 21) * 8
 
     mov eax, cr4
     or eax, 1 << 5

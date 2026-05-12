@@ -8,16 +8,10 @@
 #define MAX_LINE_LEN 512
 #define MAX_HISTORY 16
 
-typedef struct {
-    char name[32];
-    int (*func)(int argc, char** argv);
-    char desc[64];
-} shell_command_t;
-
 int shell_start_thread(void);
 int shell_run(void);
 int shell_register_command(const char* name, int (*func)(int argc, char** argv), const char* desc);
-void shell_unregister_command(const char* name);
+int shell_unregister_command(const char* name);
 void shell_print(const char* str);
 void shell_print_num(u32 num);
 void shell_print_hex(u32 num);

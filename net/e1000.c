@@ -5,7 +5,7 @@
 #include "../kernel/memory.h"
 #include "../kernel/paging.h"
 #include "../drivers/pci.h"
-#include "../drivers/vga.h"
+#include "../drivers/vesa.h"
 
 #define E1000_VENDOR 0x8086
 #define E1000_DEVICE 0x100E
@@ -144,12 +144,12 @@ int e1000_init(pci_dev_t *pci) {
     sc->tx_cur = 0;
     sc->attached = 0;
 
-    vga_write("  E1000: MMIO base=0x");
-    vga_write_hex(sc->mmio_base);
-    vga_write("\n");
+    print("  E1000: MMIO base=0x");
+    printhex(sc->mmio_base);
+    print("\n");
 
     if (e1000_map_mmio() != 0) {
-        vga_write("  E1000: MMIO mapping failed\n");
+        print("  E1000: MMIO mapping failed\n");
         kfree(sc);
         sc = NULL;
         return -1;
@@ -165,7 +165,7 @@ int e1000_init(pci_dev_t *pci) {
         __asm__ volatile ("pause");
     }
     if (timeout <= 0) {
-        vga_write("  E1000: reset timeout\n");
+        print("  E1000: reset timeout\n");
         kfree(sc);
         sc = NULL;
         return -1;
@@ -173,12 +173,12 @@ int e1000_init(pci_dev_t *pci) {
 
     e1000_read_mac();
 
-    vga_write("  E1000: MAC ");
+    print("  E1000: MAC ");
     for (int i = 0; i < 6; i++) {
-        vga_write_hex(sc->mac[i]);
-        if (i < 5) vga_write(":");
+        printhex(sc->mac[i]);
+        if (i < 5) print(":");
     }
-    vga_write("\n");
+    print("\n");
 
     sc->rx_desc = kmalloc(sizeof(e1000_rx_desc_t) * RX_DESC_COUNT);
     sc->tx_desc = kmalloc(sizeof(e1000_tx_desc_t) * TX_DESC_COUNT);
@@ -222,7 +222,7 @@ int e1000_init(pci_dev_t *pci) {
     e1000_write32(E1000_CTRL, e1000_read32(E1000_CTRL) | E1000_CTRL_SLU);
 
     sc->attached = 1;
-    vga_write("  E1000: OK\n");
+    print("  E1000: OK\n");
     return 0;
 
 fail:
