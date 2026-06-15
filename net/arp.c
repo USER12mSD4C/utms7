@@ -5,7 +5,7 @@
 #include "../include/string.h"
 #include "../include/endian.h"
 #include "../kernel/memory.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define ARP_CACHE_SIZE 16
 

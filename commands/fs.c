@@ -1,7 +1,7 @@
 #include "../include/shell_api.h"
 #include "../include/string.h"
 #include "../fs/ufs.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../kernel/memory.h"
 #include "../drivers/disk.h"
 #include "../include/path.h"

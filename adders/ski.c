@@ -1,5 +1,5 @@
 // adders/ski.c
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../kernel/memory.h"
 #include "../fs/ufs.h"
 #include "../drivers/disk.h"

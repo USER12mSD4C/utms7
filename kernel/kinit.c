@@ -1,4 +1,4 @@
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../include/string.h"
 #include "../fs/ufs.h"
 #include "memory.h"

@@ -4,7 +4,7 @@
 #include "idt.h"
 #include "../include/string.h"
 #include "../include/io.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "gdt.h"
 
 #define TIME_SLICE_MS       10

@@ -10,6 +10,8 @@
 typedef long ssize_t;
 typedef long off_t;
 
+int ioctl(int fd, unsigned long request, void *arg);
+
 // Структуры
 struct stat {
     unsigned long st_size;

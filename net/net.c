@@ -3,7 +3,7 @@
 #include "../include/string.h"
 #include "../include/endian.h"
 #include "../kernel/memory.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../drivers/pci.h"
 #include "ethernet.h"
 #include "arp.h"

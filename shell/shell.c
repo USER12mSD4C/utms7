@@ -1,5 +1,5 @@
 #include "../include/string.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
 #include "../kernel/memory.h"
@@ -67,14 +67,15 @@ int shell_register_command(const char *name, int (*func)(int, char**), const cha
     return 0;
 }
 
-void shell_unregister_command(const char *name) {
+int shell_unregister_command(const char *name) {
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(commands[i].name, name) == 0) {
             for (int j = i; j < cmd_count - 1; j++) commands[j] = commands[j + 1];
             cmd_count--;
-            return;
+            return 0;
         }
     }
+    return -1;
 }
 
 // Парсинг команды с поддержкой перенаправлений и пайпов

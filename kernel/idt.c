@@ -5,7 +5,7 @@
 #include "panic.h"
 #include "gdt.h"
 #include "sched.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define IDT_ENTRIES 256
 #define IDT_INTERRUPT_GATE 0x8E

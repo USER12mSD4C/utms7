@@ -5,7 +5,7 @@
 #include "../kernel/memory.h"
 #include "../kernel/paging.h"
 #include "../drivers/pci.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define E1000_VENDOR 0x8086
 #define E1000_DEVICE 0x100E

@@ -8,20 +8,30 @@ section .multiboot2
 align 8
 header_start:
     dd 0xe85250d6          ; magic
-    dd 0                   ; architecture (0 = i386 protected mode)
-    dd header_end - header_start ; header_length
-    dd 0x100000000 - (0xe85250d6 + 0 + (header_end - header_start)) ; checksum
+    dd 0                   ; architecture
+    dd header_end - header_start
+    dd 0x100000000 - (0xe85250d6 + 0 + (header_end - header_start))
 
-    ; Тег запроса карты памяти (type = 6)
+    ; Тег фреймбуфера (type=5) — ЗАПРОС ГРАФИЧЕСКОГО РЕЖИМА
+    align 8
+    dw 5                   ; type = MULTIBOOT2_TAG_FRAMEBUFFER
+    dw 0                   ; flags
+    dd 20                  ; size
+    dd 1024                ; width
+    dd 768                 ; height
+    dd 32                  ; bpp
+
+    ; Тег запроса карты памяти (type=6)
     align 8
     dw 6                   ; type = MULTIBOOT2_TAG_MMAP
-    dw 0                   ; flags
-    dd 8                   ; size
-    ; Тег конца (type = 0, обязателен)
+    dw 0
+    dd 8
+
+    ; Тег конца
     align 8
-    dw 0                   ; type = MULTIBOOT2_TAG_END
-    dw 0                   ; flags
-    dd 8                   ; size
+    dw 0
+    dw 0
+    dd 8
 header_end:
 
 section .bss
@@ -37,9 +47,8 @@ multiboot_info:
 section .text
 _start:
     cli
-    mov esi, ebx                   ; сохраняем Multiboot info в ESI
+    mov esi, ebx
 
-    ; Clear BSS
     mov ecx, __bss_end
     mov eax, __bss_start
     sub ecx, eax
@@ -47,7 +56,6 @@ _start:
     xor eax, eax
     rep stosb
 
-    ; Теперь сохраняем в переменную
     mov [REL multiboot_info], esi
 
     ; Setup paging
@@ -57,26 +65,25 @@ _start:
     mov ecx, 4096
     rep stosd
 
-    mov edi, 0x1000            ; PML4
+    mov edi, 0x1000
     mov eax, 0x2000
-    or eax, 3                  ; present + writable
-    mov [edi], eax             ; PML4[0] -> PDPT at 0x2000
+    or eax, 3
+    mov [edi], eax
 
     mov eax, 0x4000
     or eax, 3
-    mov [edi + 510*8], eax     ; PML4[510] -> PDPT2 at 0x4000
+    mov [edi + 510*8], eax
 
-    mov edi, 0x2000            ; PDPT
+    mov edi, 0x2000
     mov eax, 0x3000
     or eax, 3
-    mov [edi], eax             ; PDPT[0] -> PD at 0x3000
+    mov [edi], eax
 
-    mov edi, 0x4000            ; PDPT2
+    mov edi, 0x4000
     mov eax, 0x5000
     or eax, 3
-    mov [edi], eax             ; PDPT2[0] -> PD2 at 0x5000
+    mov [edi], eax
 
-    ; Заполняем основную PD (0x3000) identity mapping 1GB
     mov edi, 0x3000
     mov eax, 0x83
     mov ecx, 512
@@ -86,8 +93,6 @@ _start:
     add edi, 8
     loop .map_pd
 
-    ; --= ВОТ ЭТО БЫЛО УПУЩЕНО: =--
-    ; Точно так же заполняем PD2 (0x5000) identity mapping 1GB
     mov edi, 0x5000
     mov eax, 0x83
     mov ecx, 512
@@ -97,11 +102,10 @@ _start:
     add edi, 8
     loop .map_pd2
 
-    ; Добавляем LFB (0xFD000000) как 2MB страницу
     mov edi, 0x5000
     mov eax, 0xFD000000
     or eax, 0x83
-    mov [edi + 0x3F40], eax     ; 0x5000 + (0xFD000000 >> 21) * 8
+    mov [edi + 0x3F40], eax
 
     mov eax, cr4
     or eax, 1 << 5
@@ -116,7 +120,6 @@ _start:
     or eax, 0x80000001
     mov cr0, eax
 
-    ; Minimal GDT for transition to long mode
     lgdt [temp_gdt_ptr]
     jmp 0x08:start64
 

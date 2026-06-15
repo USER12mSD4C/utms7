@@ -1,5 +1,5 @@
 #include "panic.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../include/io.h"
 #include "../include/string.h"
 #include "sched.h"

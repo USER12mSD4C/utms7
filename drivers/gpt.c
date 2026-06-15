@@ -1,7 +1,7 @@
 #include "../include/gpt.h"
 #include "../include/string.h"
 #include "disk.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../kernel/memory.h"
 
 // Статические GUID

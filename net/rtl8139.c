@@ -4,7 +4,7 @@
 #include "../include/string.h"
 #include "../kernel/memory.h"
 #include "../drivers/pci.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 extern void net_handle_packet(u8 *packet, int len);
 

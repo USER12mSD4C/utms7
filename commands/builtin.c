@@ -1,8 +1,7 @@
 // commands/builtin.c
 #include "../include/shell_api.h"
 #include "../include/string.h"
-#include "../drivers/vesa.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
 #include "../net/net.h"

@@ -3,6 +3,7 @@
 #define SHELL_H
 
 #include "../include/types.h"
+#include "../include/shell_api.h"
 
 #define MAX_COMMANDS 64
 #define MAX_LINE_LEN 512

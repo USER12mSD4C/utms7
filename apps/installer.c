@@ -1,5 +1,5 @@
 #include "../include/string.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../drivers/disk.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"

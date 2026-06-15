@@ -6,7 +6,7 @@
 #include "../include/endian.h"
 #include "../kernel/memory.h"
 #include "../kernel/sched.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define MAX_SOCKETS 32
 #define TCP_RETRANSMIT_MS 500

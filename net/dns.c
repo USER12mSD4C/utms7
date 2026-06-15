@@ -4,7 +4,7 @@
 #include "../include/string.h"
 #include "../include/endian.h"
 #include "../kernel/memory.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define DNS_PORT 53
 #define DNS_TYPE_A 1

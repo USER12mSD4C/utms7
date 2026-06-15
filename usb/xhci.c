@@ -1,5 +1,5 @@
 #include "xhci.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../kernel/memory.h"
 #include "../include/string.h"
 #include "../include/io.h"

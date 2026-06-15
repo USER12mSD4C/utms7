@@ -5,7 +5,7 @@
 #include "../net/dns.h"
 #include "../net/net.h"
 #include "../lib/zlib.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define UPAC_ROOT "/etc/upac"
 #define UPAC_DB UPAC_ROOT "/core.db"

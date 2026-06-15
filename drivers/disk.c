@@ -1,7 +1,7 @@
 #include "disk.h"
 #include "../include/io.h"
 #include "../include/string.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define ATA_PRIMARY_IO     0x1F0
 #define ATA_PRIMARY_DCR     0x3F6

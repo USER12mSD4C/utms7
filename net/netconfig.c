@@ -3,7 +3,7 @@
 #include "../include/string.h"
 #include "../fs/ufs.h"
 #include "../kernel/memory.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 static net_config_t config;
 

@@ -4,7 +4,7 @@
 #include "../fs/ufs.h"
 #include "disk.h"
 #include "../kernel/memory.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../include/shell_api.h"
 
 static disk_info_t disks[4];

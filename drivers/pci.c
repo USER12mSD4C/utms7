@@ -1,6 +1,6 @@
 #include "pci.h"
 #include "../include/io.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 
 #define PCI_CONFIG_ADDR 0xCF8
 #define PCI_CONFIG_DATA 0xCFC

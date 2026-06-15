@@ -3,7 +3,7 @@
 #include "sched.h"
 #include "idt.h"
 #include "../fs/ufs.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../drivers/keyboard.h"
 #include "../drivers/disk.h"
 #include "../include/udisk.h"
@@ -185,6 +185,18 @@ static long sys_open(long path, long flags, long mode, long a4, long a5, long a6
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
+    // Device nodes
+    if (strncmp(path_buf, "/dev/dri/card0", 14) == 0) {
+        int fd = -1;
+        for (int i = 0; i < MAX_FDS; i++) {
+            if (!p->fds[i].used) { fd = i; break; }
+        }
+        if (fd == -1) return -1;
+        p->fds[fd].used = 1;
+        p->fds[fd].type = 1;
+        return fd;
+    }
+
     int fd = -1;
     for (int i = 0; i < MAX_FDS; i++) {
         if (!p->fds[i].used) {
@@ -275,7 +287,7 @@ static long sys_yield(long a1, long a2, long a3, long a4, long a5, long a6) {
 }
 
 static long sys_mmap(long addr, long size, long prot, long flags, long fd, long offset) {
-    (void)addr; (void)prot; (void)flags; (void)fd; (void)offset;
+    (void)addr; (void)prot; (void)flags;
     process_t *p = sched_current();
     if (!p) return -1;
 
@@ -283,13 +295,33 @@ static long sys_mmap(long addr, long size, long prot, long flags, long fd, long 
     u64 virt = p->heap_end;
     u64* pml4 = (u64*)p->cr3;
 
-    // Сохраняем и переключаем CR3
     u64 old_cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
     if (old_cr3 != p->cr3) {
         __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
     }
 
+    // DRM device mapping
+    if (fd >= 0 && fd < MAX_FDS && p->fds[fd].used && p->fds[fd].type == 1) {
+        u64 phys = drm_mmap_fb(offset, size);
+        if (phys == 0) {
+            if (old_cr3 != p->cr3) {
+                __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+            }
+            return -1;
+        }
+        for (u64 i = 0; i < pages; i++) {
+            paging_map_for_process(pml4, phys + i * 4096, virt + i * 4096,
+                                   PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+        }
+        if (old_cr3 != p->cr3) {
+            __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+        }
+        p->heap_end = virt + pages * 4096;
+        return virt;
+    }
+
+    // Обычное выделение
     for (u64 i = 0; i < pages; i++) {
         u64 phys = (u64)kmalloc(4096);
         paging_map_for_process(pml4, phys, virt + i * 4096, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
@@ -725,4 +757,33 @@ long syscall_handler_c(long num, long a1, long a2, long a3, long a4, long a5, lo
         return -1;
     }
     return syscall_table[num](a1, a2, a3, a4, a5, a6);
+}
+
+static long sys_ioctl(long fd, long request, long arg, long a4, long a5, long a6) {
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+
+    // Пока только для DRM
+    if (p->fds[fd].type == 1) {  // type 1 = device
+        // arg — userspace-указатель. Нужно определить размер ioctl
+        // из макроса _IOC_SIZE и скопировать данные
+        u32 size = (request >> 16) & 0x3FFF;  // _IOC_SIZEMASK
+        void *kdata = NULL;
+        if (size > 0 && arg != 0) {
+            kdata = kmalloc(size);
+            if (copy_from_user(kdata, (void*)arg, size) != 0) {
+                kfree(kdata);
+                return -1;
+            }
+        }
+
+        int ret = drm_ioctl(request, (unsigned long)kdata);
+
+        if (size > 0 && arg != 0 && ret >= 0) {
+            copy_to_user((void*)arg, kdata, size);
+        }
+        if (kdata) kfree(kdata);
+        return ret;
+    }
+    return -1;
 }

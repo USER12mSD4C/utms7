@@ -1,6 +1,6 @@
 // shell/uss.c
 #include "../include/string.h"
-#include "../drivers/vesa.h"
+#include "../drivers/drm.h"
 #include "../drivers/keyboard.h"
 #include "../fs/ufs.h"
 #include "../kernel/memory.h"

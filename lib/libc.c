@@ -40,6 +40,11 @@
 #define SYS_gettime     52
 #define SYS_fork        57
 #define SYS_gethostbyname 47
+#define SYS_ioctl 58
+
+int ioctl(int fd, unsigned long request, void *arg) {
+    return syscall(SYS_ioctl, fd, (long)request, (long)arg, 0, 0, 0);
+}
 
 // Системные вызовы
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
