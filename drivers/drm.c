@@ -1,9 +1,4 @@
 // drivers/drm.c
-//
-// Minimal DRM/KMS-style graphics subsystem for UTMS7.
-//
-// This replaces the old drivers/vesa.c. The vesa/print symbol surface
-// is preserved so the rest of the kernel does not need to be touched.
 
 #include "drm.h"
 #include "../include/string.h"
@@ -16,12 +11,6 @@
 
 drm_device_t drm_dev;
 
-// =====================================================================
-// VGA-style 16-color palette (ARGB little-endian as written to FB).
-// Mirrors the palette the old vesa.c used, so anything that relies on
-// the colors stays the same.
-// =====================================================================
-
 static const u32 ansi_palette[16] = {
     0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA,
     0xFFAA0000, 0xFFAA00AA, 0xFFAA5500, 0xFFAAAAAA,
@@ -33,10 +22,6 @@ static const u32 ansi_palette[16] = {
 // Mode helpers
 // =====================================================================
 
-// Build a single mode entry from a width/height pair. hsync/vsync/clock
-// values are synthetic and only useful for introspection, since we
-// don't actually reprogram any display controller -- the FB is what it
-// is. We pad timings to standard 60 Hz values.
 static drm_display_mode_t make_mode(u32 w, u32 h) {
     drm_display_mode_t m;
     m.hdisplay    = w;
@@ -57,8 +42,6 @@ static drm_display_mode_t make_mode(u32 w, u32 h) {
 // Framebuffer object lifetime
 // =====================================================================
 
-// We need a small bump allocator for framebuffer objects created at
-// runtime (drm_framebuffer_create). The primary_fb lives in drm_dev.
 #define DRM_MAX_USER_FBS  4
 static drm_framebuffer_t user_fb_pool[DRM_MAX_USER_FBS];
 static int user_fb_used[DRM_MAX_USER_FBS];
@@ -81,8 +64,6 @@ drm_framebuffer_t* drm_framebuffer_create(u64 paddr, u32 width,
     fb->vaddr   = (void*)paddr;     // identity-mapped region
     fb->refcount = 1;
 
-    // Identity-map the physical region into kernel virtual memory.
-    // Using 2 MiB huge pages is fine; the boot FB is usually 8-32 MiB.
     for (u64 off = 0; off < fb->size; off += 0x200000) {
         paging_map(paddr + off, paddr + off,
                    PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE);
@@ -101,8 +82,6 @@ void drm_framebuffer_destroy(drm_framebuffer_t* fb) {
             return;
         }
     }
-    // Trying to destroy the primary FB or an unknown FB: silently
-    // ignore. The primary FB is owned by drm_dev.
 }
 
 // =====================================================================

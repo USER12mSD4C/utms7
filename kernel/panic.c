@@ -71,21 +71,40 @@ void panic(const char* message) {
     // RIP получаем из стека (адрес возврата)
     rip = (u64)__builtin_return_address(0);
 
-    print("Registers:\n");
-    print("RAX="); print_hex(rax); print(" RBX="); print_hex(rbx); print("\n");
-    print("RCX="); print_hex(rcx); print(" RDX="); print_hex(rdx); print("\n");
-    print("RSI="); print_hex(rsi); print(" RDI="); print_hex(rdi); print("\n");
-    print("RBP="); print_hex(rbp); print(" RSP="); print_hex(rsp); print("\n");
-    print("R8 ="); print_hex(r8);  print(" R9 ="); print_hex(r9);  print("\n");
-    print("R10="); print_hex(r10); print(" R11="); print_hex(r11); print("\n");
-    print("R12="); print_hex(r12); print(" R13="); print_hex(r13); print("\n");
-    print("R14="); print_hex(r14); print(" R15="); print_hex(r15); print("\n\n");
-
-    print("CR0="); print_hex(cr0); print(" CR2="); print_hex(cr2); print("\n");
-    print("CR3="); print_hex(cr3); print(" CR4="); print_hex(cr4); print("\n");
-    print("RIP="); print_hex(rip); print("\n\n");
-
-    print("System halted.\n");
+    print("++++++++.         +++++++++++++++-...............................\n");
+    print("+         ++++++++      +++++++++++-.............................Registers:\n");
+    print(" +++++++++++++++++++++++.-  +++++++++--.........................."); print("RAX="); print_hex(rax); print(" RBX="); print_hex(rbx); print("\n");
+    print("++++.                   ++++. .++++++++ ........................."); print("RCX="); print_hex(rcx); print(" RDX="); print_hex(rdx); print("\n");
+    print(" -++++++++++++-++++ -+++++++   +++. ++++++ ......................"); print("RSI="); print_hex(rsi); print(" RDI="); print_hex(rdi); print("\n");
+    print("++++++.     +++++-       ++++++++ ++ .+++++......................"); print("RBP="); print_hex(rbp); print(" RSP="); print_hex(rsp); print("\n");
+    print("+ ++   +  -+++++- ++--.      -++++. +- +++++-...................."); print("R8 ="); print_hex(r8);  print(" R9 ="); print_hex(r9);  print("\n");
+    print("+  +++++.--++++  ++   +++       -+++  +  ++++ ..................."); print("R10="); print_hex(r10); print(" R11="); print_hex(r11); print("\n");
+    print("+++++++++.++++++++++++.+++         ++. ++ ++++..................."); print("R12="); print_hex(r12); print(" R13="); print_hex(r13); print("\n");
+    print("+++++++.+ --++++.++++-  +++          ++  + +++..................."); print("R14="); print_hex(r14); print(" R15="); print_hex(r15); print("\n");
+    print("++++++   .--+++-.+++ .++++++          ++  + +++ .................\n");
+    print("++++ .   -. --.++-  ++.+++++++         ++  + +++................."); print("CR0="); print_hex(cr0); print(" CR2="); print_hex(cr2); print("\n");
+    print("++++ -  -     .-  + - ++++++++ +        ++ + +++................."); print("CR3="); print_hex(cr3); print(" CR4="); print_hex(cr4); print("\n");
+    print("++++++-. .  +.-++ . .+-++++--- .+        ++  +++................."); print("RIP="); print_hex(rip); print("\n");
+    print("++++++++++  + +++++-+++++++.++ .++        + ++++ ................\n");
+    print(" +++++++++++++++++..  --       ++-+    ++++ +++- ................\n");
+    print("  +++++++++++++++++    ++++++++++++   ++ .++   ..................\n");
+    print("  ++++++++-+++++++++++++++++ -- +++  +++++-- ....................\n");
+    print("   +++++++++. +++++++++.-++++++++-++++-  + ++....................\n");
+    print("   .+++-+-++++++++++++- ++-+++ ..++++++ ++++ ....................\n");
+    print(". .     +.      ++++++ .       -.- ++++-+..+-....................\n");
+    print(".-.++   .+- + ++++++++++  ++++++++++++-.+. - ....................\n");
+    print("-.-.         ++++++++++++++++++++++++++  +++ ....................\n");
+    print(".. +-     +-.-    ..+++++++++++++++++ ++++++ -...................\n");
+    print("+.+  --  +   -   . ++ -  +++++++++++++       -...................\n");
+    print(" -----. - . - ++++++-+++++++++++++++++  .     ...................\n");
+    print("+-.--. .   ++ +++++ - ...+++++++++++++ -++    ...................\n");
+    print(" ++---. - .+++++++    ++++++++++++++++ +++-   ...................\n");
+    print("++-+.--  +++++.     ++++++++++++++++++ ++++  .-..................\n");
+    print("-.+  +-+ +.     ++++++++++++++++++++  ++++++ -...................\n");
+    print("+ -++ ...-   +++++++++++++++++  -. - +++++++- ...................\n");
+    print("       -++. -+++++++++++. -    .  ++-++++++++ -..................\n");
+    print("..     -.---. +++++-.    ..-+-+ +++ ++++++++++-..................\n");
+    print("...+ -- +. + . .     .  .-. - +++++++++++++++++ .................\n");
 
     // Отправляем в порт отладки
     outb(0xE9, 'P');
@@ -125,7 +144,7 @@ void double_fault_handler(void) {
     print_setcolor(0x4F, 0);
     print_clear();
     print("DOUBLE FAULT\n");
-    print("System halted.\n");
+    print("not your fault, right?\n");
     while(1) {
         __asm__ volatile ("cli; hlt");
     }

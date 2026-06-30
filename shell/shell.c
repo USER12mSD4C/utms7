@@ -5,7 +5,7 @@
 #include "../kernel/memory.h"
 #include "../include/path.h"
 #include "../commands/fs.h"
-#include "../kernel/sched.h"    // <-- ДОБАВИТЬ эту строку
+#include "../kernel/sched.h"
 #include "shell.h"
 
 // Прототипы функций libc, которые используем
