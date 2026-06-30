@@ -8,8 +8,7 @@ i dont recommend use it, cause it isn't working
 
 ## last huge update
 
-- ski init system
-- multitask (in work)
+- DRM (Work In Progress)
 
 ## Requirements
 
