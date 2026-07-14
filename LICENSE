@@ -1,5 +1,5 @@
 UTMS OPEN PUBLISHING LICENSE (UOPL)
-Version 1.6.2
+Version 1.6.3
 
 Copyright (c) 2026 The UOPL Authors
 
@@ -13,10 +13,23 @@ Copyright (c) 2026 The UOPL Authors
      "Derivative Work" means any modification of the Program or work
      based on the Program.
      "Qualifying Entity" means a commercial entity (or group of
-     affiliated entities) that meets at least one of the following
-     criteria at any time during the term of use:
-          a) 500 or more employees; or
-          b) annual revenue exceeding 100 million USD.
+     affiliated entities under common control) that meets at least one
+     of the following criteria, measured as of the most recently
+     completed fiscal year at the time of measurement:
+          a) 500 or more employees, counting full-time, part-time
+             (pro-rated by full-time-equivalent), and long-term
+             contractors engaged for more than 6 continuous months; or
+          b) annual revenue exceeding 100 million USD, meaning the
+             entity's (and its affiliates', on a consolidated basis)
+             gross revenue for that fiscal year, converted to USD at
+             the exchange rate prevailing on the last day of that
+             fiscal year if earned in another currency.
+     Once an entity meets either criterion, it is a Qualifying Entity
+     for the remainder of its use of the Program, even if its employee
+     count or revenue later falls back below the threshold. This status
+     is not reassessed downward; Section 4.4 separately preserves an
+     entity's pre-existing projects from before it first met either
+     criterion.
      "Commercial Use" means any use of the Program that is intended
      for or results in commercial advantage or monetary compensation,
      including but not limited to:
@@ -24,10 +37,20 @@ Copyright (c) 2026 The UOPL Authors
              to third parties;
           b) using the Program to provide paid services;
           c) selling copies of the Program;
-          d) using the Program for internal business operations if the
-             entity's primary business is commercial and more than 50%
-             of its revenue derives from commercial activities.
+          d) using the Program for internal business operations of an
+             entity whose primary business activity is the sale of
+             goods or services to third parties (as opposed to, e.g.,
+             a non-profit, research institute, or educational body
+             whose primary activity is not such sale).
      "Licensor" means the original copyright holder(s) of the Program.
+     Where more than one person or entity holds the original copyright,
+     any one of them may independently exercise any discretionary power
+     granted to "the Licensor" under this License (e.g. Sections 3.4,
+     4.5, 4.6, 7.2(c)), and a recipient who reasonably relies on such an
+     exercise is not required to seek confirmation from the others.
+     Allocating rights and disputes among multiple original copyright
+     holders is a matter between them and does not affect this License
+     as applied to recipients.
 
 2.   GRANT OF RIGHTS
      2.1. Subject to Sections 3 and 4, You may use, copy, modify, and
@@ -70,21 +93,29 @@ Copyright (c) 2026 The UOPL Authors
           the Program in projects initiated before attaining Qualifying
           Entity status without additional permission. New projects
           initiated after attaining Qualifying Entity status require
-          permission under Section 4.1.
+          permission under Section 4.1. For this Section, a "project"
+          is a distinct product, service, or codebase in which the
+          Program was incorporated before the status change; continued
+          development, bug fixes, and version upgrades of that same
+          product or service are part of the same project, but
+          incorporating the Program into a separate, newly-created
+          product or service is a new project.
      4.5. Permission is considered granted if the Licensor responds to
           a request in writing (including email) and explicitly permits
           use. Silence or failure to respond does not constitute
           permission.
-     4.6. The Licensor may request, by email and registered mail with
-          proof of delivery, that an entity provide documented evidence of
-          its status (employee count or financial records). If the entity
-          fails to provide such evidence within 30 days of confirmed
-          delivery, it shall be conclusively presumed to be a Qualifying
-          Entity for the purposes of this License, and the Licensor may
-          demand any remedies available under this License or applicable
-          law. This presumption shall not apply if the entity proves that
-          the request was not actually received due to circumstances beyond
-          its reasonable control.
+     4.6. The Licensor may request, sent by both email and registered
+          mail with proof of delivery, that an entity provide documented
+          evidence of its status (employee count or financial records).
+          The 30-day period below runs from whichever of the two
+          deliveries is confirmed later. If the entity fails to provide
+          such evidence within 30 days of that confirmed delivery, it
+          shall be conclusively presumed to be a Qualifying Entity for
+          the purposes of this License, and the Licensor may pursue any
+          remedies available under this License or applicable law. This
+          presumption shall not apply if the entity proves that neither
+          notice was actually received due to circumstances beyond its
+          reasonable control.
      4.7. The Licensor bears the burden of proving that an entity
           qualifies as a Qualifying Entity under Section 1 in any legal
           dispute, unless the entity has failed to respond under
@@ -92,16 +123,18 @@ Copyright (c) 2026 The UOPL Authors
 
 5.   PATENT GRANT
      The Licensor hereby grants to each recipient of the Program a
-     worldwide, royalty-free, non-exclusive, perpetual patent license
-     to make, have made, use, sell, offer for sale, import, and
-     otherwise run, modify, and propagate the Program, to the extent
-     necessary to exercise the rights granted under this License. This
-     patent license applies only to patent claims licensable by the
-     Licensor that would be infringed by the Program alone. If any
-     entity initiates patent litigation against the Licensor or any
-     other party regarding the Program, all patent rights granted to
-     that entity under this License terminate as of the date such
-     litigation is filed.
+     worldwide, royalty-free, non-exclusive, perpetual (subject to the
+     termination below) patent license to make, have made, use, sell,
+     offer for sale, import, and otherwise run, modify, and propagate
+     the Program, to the extent necessary to exercise the rights
+     granted under this License. This patent license applies only to
+     patent claims licensable by the Licensor that would be infringed
+     by the Program alone. If any entity initiates a patent
+     infringement lawsuit or proceeding alleging that the Program (or a
+     Derivative Work of it) infringes a patent held by that entity, all
+     patent rights granted to that entity under this License terminate
+     as of the date such litigation is filed. This termination does not
+     extend to patent litigation unrelated to the Program.
 
 6.   GOVERNING LAW AND DISPUTE RESOLUTION
      6.1. This License shall be governed by the substantive laws of
@@ -160,6 +193,16 @@ Copyright (c) 2026 The UOPL Authors
           terms, provided that such distribution does not restrict the
           rights or impose additional obligations on recipients regarding
           the Program code contrary to this License.
+     9.3. Section 4's Qualifying Entity restrictions apply to an entity
+          that itself obtains, incorporates, modifies, or redistributes
+          the Program (directly or as part of a Derivative Work it
+          creates). They do not apply to an entity that merely uses or
+          purchases a third party's finished product or service in which
+          the Program happens to be embedded, where that entity has no
+          access to the Program as such and does not itself engage in
+          any of the acts above. The party that did incorporate the
+          Program into that product remains subject to Section 4 in its
+          own right.
 
 10.  NOTIFICATION OF VIOLATIONS
      10.1. Any person may report a suspected violation of this License
@@ -176,4 +219,4 @@ Copyright (c) 2026 The UOPL Authors
      do not agree to these terms, You may not use the Program.
 
 ─────────────────────────────────────────────────────────────────
-UOPL — version 1.6.2, 2026
+UOPL — version 1.6.3, 2026
