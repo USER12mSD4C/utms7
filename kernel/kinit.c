@@ -1,3 +1,4 @@
+// kernel/kinit.c
 #include "../drivers/drm.h"
 #include "../include/string.h"
 #include "../fs/ufs.h"
@@ -5,7 +6,7 @@
 #include "../include/io.h"
 #include "../include/module.h"
 
-// Внешние функции диска
+// Disk external functions
 extern int disk_read(u32 lba, u8* buffer);
 extern int disk_write(u32 lba, u8* buffer);
 extern int disk_set_disk(int n);
@@ -13,34 +14,34 @@ extern u64 disk_get_sectors(u8 drive);
 
 static loaded_module_t* module_list = NULL;
 
-// Таблица символов ядра (экспортируемые функции)
+// Kernel symbol table (exported functions)
 typedef struct {
     const char* name;
     void* addr;
 } kernel_sym_t;
 
-// Ядерные символы, доступные модулям
+// Kernel symbols available to modules
 static kernel_sym_t kernel_syms[] = {
-    // Память
+    // Memory
     {"kmalloc", kmalloc},
     {"kfree", kfree},
     {"memory_used", memory_used},
     {"memory_free", memory_free},
 
-    // Видео
+    // Video
     {"print", print},
     {"printnum", printnum},
     {"printhex", printhex},
     {"print_clear", print_clear},
     {"print_setcolor", print_setcolor},
 
-    // Диск
+    // Disk
     {"disk_read", disk_read},
     {"disk_write", disk_write},
     {"disk_set_disk", disk_set_disk},
     {"disk_get_sectors", disk_get_sectors},
 
-    // ФС
+    // FS
     {"ufs_read", ufs_read},
     {"ufs_write", ufs_write},
     {"ufs_mkdir", ufs_mkdir},
@@ -51,7 +52,7 @@ static kernel_sym_t kernel_syms[] = {
     {"ufs_rmdir", ufs_rmdir},
     {"ufs_rmdir_force", ufs_rmdir_force},
 
-    // Строки
+    // Strings
     {"strcpy", strcpy},
     {"strncpy", strncpy},
     {"strcmp", strcmp},
@@ -70,23 +71,23 @@ static kernel_sym_t kernel_syms[] = {
     {NULL, NULL}
 };
 
-// Поиск символа в ядре и загруженных модулях
+// Find symbol in kernel and loaded modules
 static void* resolve_symbol(const char* name) {
-    // Ищем в ядре
+    // Search in kernel
     for (kernel_sym_t* ks = kernel_syms; ks->name != NULL; ks++) {
         if (strcmp(ks->name, name) == 0) {
             return ks->addr;
         }
     }
 
-    // Ищем в загруженных модулях
+    // Search in loaded modules
     loaded_module_t* mod = module_list;
     while (mod) {
         if (mod->symtab && mod->strtab) {
             for (u32 i = 0; i < mod->symtab_count; i++) {
                 char* sym_name = mod->strtab + mod->symtab[i].name_offset;
                 if (strcmp(sym_name, name) == 0) {
-                    // Глобальные определенные символы
+                    // Global defined symbols
                     if (mod->symtab[i].type == 1) {
                         return mod->text_base + mod->symtab[i].value_offset;
                     }
@@ -99,7 +100,7 @@ static void* resolve_symbol(const char* name) {
     return NULL;
 }
 
-// Разрешение всех неопределенных символов в модуле
+// Resolve all undefined symbols in a module
 static int resolve_module_symbols(loaded_module_t* mod) {
     if (!mod->symtab || !mod->strtab) return 0;
 
@@ -107,18 +108,18 @@ static int resolve_module_symbols(loaded_module_t* mod) {
     int unresolved = 0;
 
     for (u32 i = 0; i < mod->symtab_count; i++) {
-        // UNDEF (type == 2) - символ должен быть определен где-то еще
+        // UNDEF (type == 2) - symbol must be defined elsewhere
         if (mod->symtab[i].type == 2) {
             char* sym_name = mod->strtab + mod->symtab[i].name_offset;
             void* addr = resolve_symbol(sym_name);
 
             if (addr) {
-                // Записываем адрес в нужное место
+                // Write address to the target location
                 u64* target = (u64*)(mod->text_base + mod->symtab[i].value_offset);
                 *target = (u64)addr;
                 resolved++;
             } else {
-                // Пропускаем специальные символы
+                // Skip special symbols
                 if (sym_name[0] != '_' && strcmp(sym_name, "_GLOBAL_OFFSET_TABLE_") != 0) {
                     print("  unresolved: ");
                     print(sym_name);
@@ -136,12 +137,17 @@ static int resolve_module_symbols(loaded_module_t* mod) {
     return 0;
 }
 
-// Загрузка модуля из файла
+// Load module from file
 int module_load(const char* path) {
     u8* data;
     u32 size;
 
     if (ufs_read(path, &data, &size) != 0) {
+        return -1;
+    }
+
+    if (size < sizeof(module_header_t)) {
+        kfree(data);
         return -1;
     }
 
@@ -151,13 +157,17 @@ int module_load(const char* path) {
         return -1;
     }
 
-    // Проверяем размер
-    if (size < sizeof(module_header_t)) {
+    // Validate segment bounds to prevent out-of-bounds reads
+    if (hdr->text_offset + hdr->text_size > size ||
+        hdr->data_offset + hdr->data_size > size ||
+        hdr->rodata_offset + hdr->rodata_size > size ||
+        hdr->symtab_offset + hdr->symtab_count * sizeof(module_sym_t) > size ||
+        hdr->strtab_offset + hdr->strtab_size > size) {
         kfree(data);
         return -1;
     }
 
-    // Проверяем, не загружен ли уже
+    // Check if already loaded
     loaded_module_t* existing = module_list;
     while (existing) {
         if (strcmp(existing->name, hdr->name) == 0) {
@@ -167,7 +177,7 @@ int module_load(const char* path) {
         existing = existing->next;
     }
 
-    // Выделяем память под сегменты модуля
+    // Allocate memory for module segments
     u32 total = hdr->text_size + hdr->data_size + hdr->rodata_size + hdr->bss_size;
     u8* base = kmalloc(total);
     if (!base) {
@@ -175,7 +185,7 @@ int module_load(const char* path) {
         return -1;
     }
 
-    // Копируем сегменты
+    // Copy segments
     if (hdr->text_size > 0) {
         memcpy(base, data + hdr->text_offset, hdr->text_size);
     }
@@ -189,7 +199,7 @@ int module_load(const char* path) {
         memset(base + hdr->text_size + hdr->data_size + hdr->rodata_size, 0, hdr->bss_size);
     }
 
-    // Загружаем таблицу символов
+    // Load symbol table
     module_sym_t* symtab = NULL;
     char* strtab = NULL;
 
@@ -205,7 +215,7 @@ int module_load(const char* path) {
         }
     }
 
-    // Создаём запись о модуле
+    // Create module record
     loaded_module_t* mod = kmalloc(sizeof(loaded_module_t));
     if (!mod) {
         kfree(base);
@@ -236,7 +246,7 @@ int module_load(const char* path) {
 
     kfree(data);
 
-    // Разрешаем внешние символы
+    // Resolve external symbols
     if (resolve_module_symbols(mod) != 0) {
         return -1;
     }
@@ -244,10 +254,10 @@ int module_load(const char* path) {
     return 0;
 }
 
-// Поиск символа по имени во всех модулях
+// Find symbol by name in all modules
 void* module_sym(const char* name, const char* module) {
     if (module) {
-        // Ищем в конкретном модуле
+        // Search in specific module
         loaded_module_t* mod = module_list;
         while (mod) {
             if (strcmp(mod->name, module) == 0) {
@@ -264,13 +274,13 @@ void* module_sym(const char* name, const char* module) {
             mod = mod->next;
         }
     } else {
-        // Ищем везде
+        // Search everywhere
         return resolve_symbol(name);
     }
     return NULL;
 }
 
-// Выгрузка модуля
+// Unload module
 int module_unload(const char* name) {
     loaded_module_t* prev = NULL;
     loaded_module_t* mod = module_list;
@@ -283,7 +293,7 @@ int module_unload(const char* name) {
                 module_list = mod->next;
             }
 
-            // Освобождаем память
+            // Free memory
             if (mod->text_base) kfree(mod->text_base);
             if (mod->symtab) kfree(mod->symtab);
             if (mod->strtab) kfree(mod->strtab);
@@ -305,9 +315,10 @@ int kinit_run_all(void) {
 
     if (ufs_readdir("/modules", &entries, &count) != 0) {
         print("  No /modules/ directory found\n");
+        return -1;
     }
 
-    // Сначала считаем сколько .ko файлов
+    // Count .ko files first
     int module_count = 0;
     for (u32 i = 0; i < count; i++) {
         if (entries[i].is_dir) continue;
@@ -321,6 +332,7 @@ int kinit_run_all(void) {
     if (module_count == 0) {
         print("  No .ko modules found\n");
         kfree(entries);
+        return 0;
     }
 
     print("  Found ");
@@ -329,7 +341,7 @@ int kinit_run_all(void) {
     print(buf);
     print(" modules\n\n");
 
-    // Загружаем все модули
+    // Load all modules
     int loaded = 0;
     int failed = 0;
 
@@ -370,7 +382,7 @@ int kinit_run_all(void) {
     print(buf);
     print(" failed\n");
 
-    // Вызываем entry() для всех успешно загруженных модулей
+    // Call entry() for all successfully loaded modules
     print("\nKinit: initializing modules\n");
 
     loaded_module_t* mod = module_list;

@@ -3,6 +3,8 @@
 #include "../include/io.h"
 #include "../kernel/idt.h"
 
+extern void sched_yield(void);
+
 #define KEYBOARD_DATA   0x60
 #define BUFFER_SIZE     128
 
@@ -22,11 +24,12 @@ static const u8 sc_ascii[] = {
 void keyboard_handler(void) {
     u8 sc = inb(KEYBOARD_DATA);
 
-    if (sc & 0x80) return;  // отпускание - игнорируем
+    if (sc & 0x80) return;
 
     if (sc < 58) {
         u8 c = sc_ascii[sc];
         if (c) {
+
             int next = (kbd_head + 1) % BUFFER_SIZE;
             if (next != kbd_tail) {
                 kbd_buffer[kbd_head] = c;
@@ -68,7 +71,7 @@ int keyboard_data_ready(void) {
 
 u8 keyboard_getc(void) {
     while (kbd_head == kbd_tail) {
-        __asm__ volatile ("sti; hlt; cli");
+        sched_yield();
     }
     u8 c = kbd_buffer[kbd_tail];
     kbd_tail = (kbd_tail + 1) % BUFFER_SIZE;

@@ -6,4 +6,4 @@
 *.log
 *.ko
 iso
-
+.umk_cache

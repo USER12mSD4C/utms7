@@ -152,3 +152,6 @@ temp_gdt:
 temp_gdt_ptr:
     dw $ - temp_gdt - 1
     dq temp_gdt
+
+section .note.GNU-stack noalloc noexec nowrite progbits
+default rel

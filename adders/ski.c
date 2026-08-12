@@ -18,7 +18,6 @@
 #include "../commands/builtin.h"
 #include "../commands/fs.h"
 #include "../drivers/keyboard.h"
-#include "../shell/shell.h"
 
 extern u64 __bss_end;
 
@@ -41,8 +40,8 @@ static void print_num(u32 n) {
     while (i-- > 0) print_char(buf[i]);
 }
 
-static void init_memory_from_multiboot(u32 mb_info_addr) {
-    multiboot2_info_header_t* header = (multiboot2_info_header_t*)(u64)mb_info_addr;
+static void init_memory_from_multiboot(u64 mb_info_addr) {
+    multiboot2_info_header_t* header = (multiboot2_info_header_t*)mb_info_addr;
     multiboot2_tag_t* tag = (multiboot2_tag_t*)(header + 1);
 
     int found = 0;
@@ -112,7 +111,7 @@ void ski(u64 mb_info_addr) {
 
     // === ЭТАП 1: Память ===
     print("[memory]... ");
-    init_memory_from_multiboot((u32)mb_info_addr);
+    init_memory_from_multiboot(mb_info_addr);
     print("OK\n\n");
 
     // === ЭТАП 2-7: Всё остальное из init_table.h ===
@@ -131,7 +130,7 @@ void ski(u64 mb_info_addr) {
             print_num(total); \
             print("] "); \
             print(name); \
-            for (int _i = 0; _i < 20 - sizeof(name); _i++) print_char(' '); \
+            for (int _i = 0; _i < 20 - (sizeof(name) - 1); _i++) print_char(' '); \
             int res = func(__VA_ARGS__); \
             if (res != 0) { \
                 print("FAIL (code="); \
@@ -152,5 +151,5 @@ void ski(u64 mb_info_addr) {
     printnum(disk_get_disk_count());
     print("\n");
 
-    print("shi done nga\n\n");
+    print("UTMS loaded\\\\\nUTMS Innovative Technologies [UIT], under UOPL_1.6.3\n\n");
 }

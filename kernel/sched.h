@@ -1,3 +1,4 @@
+// kernel/sched.h
 #ifndef SCHED_H
 #define SCHED_H
 
@@ -43,50 +44,41 @@ typedef struct process {
     u64 heap_end;
     fd_entry_t fds[32];
     u64 user_rip;
+    u64 user_rsp;
+    u8 fpu_context[512] __attribute__((aligned(16)));
 } process_t;
 
-/*
- * interrupt_frame — накладывается на стек после входа в прерывание.
- *
- * Стек растёт вниз. При входе в прерывание процессор кладёт:
- *   [ss] rsp rflags cs rip [error_code]
- * Затем isr.asm делает push vector, push 0, и SAVE_REGS:
- *   push rax, rbx, rcx, rdx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15
- *
- * После всех push'ей RSP указывает на r15 (последний push).
- * Поэтому ПЕРВОЕ поле структуры должно быть r15 (оно по адресу RSP).
- * ПОСЛЕДНЕЕ поле — ss (оно по наибольшему адресу).
- */
-
 struct interrupt_frame {
-    u64 rax;   // RSP + 0
-    u64 rbx;   // RSP + 8
-    u64 rcx;   // RSP + 16
-    u64 rdx;   // RSP + 24
-    u64 rsi;   // RSP + 32
-    u64 rdi;   // RSP + 40
-    u64 rbp;   // RSP + 48
-    u64 r8;    // RSP + 56
-    u64 r9;    // RSP + 64
-    u64 r10;   // RSP + 72
-    u64 r11;   // RSP + 80
-    u64 r12;   // RSP + 88
-    u64 r13;   // RSP + 96
-    u64 r14;   // RSP + 104
-    u64 r15;   // RSP + 112
+    u64 rax;
+    u64 rbx;
+    u64 rcx;
+    u64 rdx;
+    u64 rsi;
+    u64 rdi;
+    u64 rbp;
+    u64 r8;
+    u64 r9;
+    u64 r10;
+    u64 r11;
+    u64 r12;
+    u64 r13;
+    u64 r14;
+    u64 r15;
 
-    u64 error_code;  // RSP + 120 (наш push 0)
-    u64 vector;      // RSP + 128 (наш push vector)
+    u64 error_code;
+    u64 vector;
 
-    u64 rip;    // RSP + 136
-    u64 cs;     // RSP + 144
-    u64 rflags; // RSP + 152
-    u64 rsp;    // RSP + 160
-    u64 ss;     // RSP + 168
+    u64 rip;
+    u64 cs;
+    u64 rflags;
+    u64 rsp;
+    u64 ss;
 };
 
 int sched_init(void);
 int sched_create_kthread(const char* name, void (*entry)(void*), void* arg);
+int sched_create_process(const char* name, u8* elf_data, u32 elf_size);
+int spawn_userspace_init(void);
 int sched_start(void);
 void sched_yield(void);
 void sched_sleep(u32 ms);
@@ -101,6 +93,7 @@ void sched_tick(void);
 u32 get_ticks(void);
 u64 get_microseconds(void);
 u32 get_seconds(void);
+int sched_clone(u64 user_rip, u64 user_rsp);
 
 extern volatile int sched_need_resched;
 

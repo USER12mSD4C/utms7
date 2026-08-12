@@ -2,6 +2,7 @@
 #include "sched.h"
 #include "memory.h"
 #include "idt.h"
+#include "paging.h"
 #include "../include/string.h"
 #include "../include/io.h"
 #include "../drivers/drm.h"
@@ -17,7 +18,15 @@
 #define PIT_CHANNEL0_PORT   0x40
 #define PIT_IRQ             0
 
-static process_t processes[MAX_PROCESSES];
+extern int ufs_ismounted(void);
+extern int ufs_read(const char* path, u8** buf, u32* size);
+extern int shell_start_thread(void);
+extern u64* create_address_space(void);
+extern void free_address_space(u64* pml4);
+extern u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr);
+extern int paging_map_for_process(u64* pml4, u64 phys_addr, u64 virt_addr, u64 flags);
+
+static process_t processes[MAX_PROCESSES] __attribute__((aligned(16)));
 process_t *current = NULL;
 static process_t *ready_queue = NULL;
 static process_t *ready_queue_tail = NULL;
@@ -33,14 +42,22 @@ static volatile u64 tsc_offset = 0;
 static volatile u64 tsc_freq_hz = 0;
 static volatile int tsc_calibrated = 0;
 
-// === ВСПОМОГАТЕЛЬНЫЕ ===
+static u8 clean_fpu_state[512] __attribute__((aligned(16)));
+
+static inline void save_fpu(void* buffer) {
+    __asm__ volatile("fxsave %0" : "=m"(*(char*)buffer) : : "memory");
+}
+
+static inline void restore_fpu(void* buffer) {
+    __asm__ volatile("fxrstor %0" : : "m"(*(char*)buffer) : "memory");
+}
 
 u64 get_ticks_internal(void) {
     return pit_ticks;
 }
 
 u32 get_ticks(void) {
-    if (!tsc_calibrated) return pit_ticks;
+    if (!tsc_calibrated || tsc_freq_hz == 0) return pit_ticks;
     u64 tsc_now;
     u32 low, high;
     __asm__ volatile ("rdtsc" : "=a"(low), "=d"(high));
@@ -57,8 +74,6 @@ u64 get_microseconds(void) {
 u32 get_seconds(void) {
     return get_ticks() / PIT_TARGET_HZ;
 }
-
-// === ОЧЕРЕДЬ ГОТОВЫХ ===
 
 static void enqueue_ready(process_t *p) {
     if (!p || p->state != PROC_READY) return;
@@ -82,17 +97,12 @@ static process_t* dequeue_ready(void) {
     return p;
 }
 
-// === ОСНОВНАЯ ФУНКЦИЯ ПЕРЕКЛЮЧЕНИЯ КОНТЕКСТА ===
-// Вызывается ТОЛЬКО из контекста прерывания (из isr.asm)
-// Не вызывается напрямую из C кода!
-
 u64 sched_do_switch(struct interrupt_frame *frame) {
     if (!sched_initialized) return (u64)frame;
     if (!current) return (u64)frame;
 
     current->kstack_top = (u64)frame;
 
-    // Обработка спящих
     u32 now = get_ticks_internal();
     process_t *sp = sleep_queue;
     process_t *sp_prev = NULL;
@@ -122,8 +132,8 @@ u64 sched_do_switch(struct interrupt_frame *frame) {
         next = &processes[0];
     }
 
-    // Если следующий процесс — тот же самый, не переключаемся
     if (next == current) {
+        next->state = PROC_RUNNING;
         sched_need_resched = 0;
         return (u64)frame;
     }
@@ -132,11 +142,22 @@ u64 sched_do_switch(struct interrupt_frame *frame) {
     next->state = PROC_RUNNING;
     next->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
 
+    if (prev->state != PROC_UNUSED && prev->state != PROC_ZOMBIE) {
+        save_fpu(prev->fpu_context);
+    }
+    restore_fpu(next->fpu_context);
+
     tss_set_rsp0(next->kstack + KERNEL_STACK_SIZE);
 
     if (prev->cr3 != next->cr3) {
         __asm__ volatile ("mov %0, %%cr3" : : "r"(next->cr3) : "memory");
     }
+
+    print("Switch: ");
+    print(prev->name);
+    print(" -> ");
+    print(next->name);
+    print("\n");
 
     sched_need_resched = 0;
     current = next;
@@ -144,10 +165,6 @@ u64 sched_do_switch(struct interrupt_frame *frame) {
     return next->kstack_top;
 }
 
-// === ПЕРЕКЛЮЧЕНИЕ КОНТЕКСТА БЕЗ ПРЕРЫВАНИЯ (yield/sleep) ===
-// Генерирует программное прерывание для унифицированного переключения
-
-__attribute__((noinline))
 void sched_do_switch_yield(void) {
     if (!sched_initialized) return;
     if (sched_locked) return;
@@ -155,23 +172,17 @@ void sched_do_switch_yield(void) {
     __asm__ volatile ("int $0x80");
 }
 
-// === ТОЧКА ВХОДА ДЛЯ НОВЫХ ПОТОКОВ ===
-//
 void sched_thread_entry(void (*entry)(void*), void* arg) {
     __asm__ volatile ("sti");
     entry(arg);
     sched_exit(0);
 }
 
-// === УПРАВЛЕНИЕ PID ===
-
 static u32 alloc_pid(void) {
     u32 pid = next_pid++;
     if (next_pid >= 10000) next_pid = 1;
     return pid;
 }
-
-// === IDLE ===
 
 static void idle_loop(void) {
     while (1) {
@@ -182,8 +193,6 @@ static void idle_loop(void) {
         }
     }
 }
-
-// === ИНИЦИАЛИЗАЦИЯ PIT ===
 
 static void pit_handler(void) {
     pit_ticks++;
@@ -207,7 +216,6 @@ static void pit_init(void) {
     irq_unmask(PIT_IRQ);
 }
 
-// === КАЛИБРОВКА TSC ===
 static void calibrate_tsc(void) {
     u32 start_ticks = pit_ticks;
     outb(0x43, 0x00);
@@ -215,7 +223,6 @@ static void calibrate_tsc(void) {
     u8 hi = inb(0x40);
     u16 prev = lo | (hi << 8);
 
-    // Ждем первый тик
     while (pit_ticks == start_ticks) {
         outb(0x43, 0x00);
         lo = inb(0x40);
@@ -225,16 +232,14 @@ static void calibrate_tsc(void) {
         prev = cur;
     }
 
-    // Засекаем TSC
     u64 tsc_start;
     u32 tsc_low, tsc_high;
     __asm__ volatile ("rdtsc" : "=a"(tsc_low), "=d"(tsc_high));
     tsc_start = ((u64)tsc_high << 32) | tsc_low;
 
     u32 cal_start = pit_ticks;
-    u32 target = cal_start + 100;  // калибруем 100 мс
+    u32 target = cal_start + 100;
 
-    // Ждем 100 тиков
     while (pit_ticks < target) {
         outb(0x43, 0x00);
         lo = inb(0x40);
@@ -248,14 +253,14 @@ static void calibrate_tsc(void) {
     u64 tsc_end = ((u64)tsc_high << 32) | tsc_low;
     u32 delta = pit_ticks - cal_start;
 
-    if (delta > 0) {
+    if (delta > 0 && (tsc_end - tsc_start) > 0) {
         tsc_freq_hz = (tsc_end - tsc_start) * PIT_TARGET_HZ / delta;
-        tsc_offset = tsc_start;
-        tsc_calibrated = 1;
+        if (tsc_freq_hz > 0) {
+            tsc_offset = tsc_start;
+            tsc_calibrated = 1;
+        }
     }
 }
-
-// === ИНИЦИАЛИЗАЦИЯ ПЛАНИРОВЩИКА ===
 
 int sched_init(void) {
     __asm__ volatile ("cli");
@@ -271,7 +276,9 @@ int sched_init(void) {
     sched_locked = 0;
     sched_initialized = 0;
 
-    // Создаем idle процесс
+    __asm__ volatile("fninit");
+    __asm__ volatile("fxsave %0" : "=m"(*(char*)clean_fpu_state) : : "memory");
+
     process_t *idle = &processes[0];
     idle->pid = 1;
     strcpy(idle->name, "idle");
@@ -290,7 +297,6 @@ int sched_init(void) {
     struct interrupt_frame *frame = (struct interrupt_frame *)idle->kstack_top;
     memset(frame, 0, sizeof(*frame));
 
-    // Порядок как в isr.asm: сначала SAVE_REGS (r15..rax), потом error_code, vector, потом аппаратные
     frame->rax = 0;
     frame->rbx = 0;
     frame->rcx = 0;
@@ -307,12 +313,14 @@ int sched_init(void) {
     frame->r14 = 0;
     frame->r15 = 0;
     frame->error_code = 0;
-    frame->vector = 128;  // Маркер: переключение контекста
+    frame->vector = 128;
     frame->rip = (u64)idle_loop;
     frame->cs = 0x08;
     frame->rflags = 0x202;
-    frame->rsp = frame->rsp = stack_top;
+    frame->rsp = stack_top;
     frame->ss = 0x10;
+
+    memcpy(idle->fpu_context, clean_fpu_state, 512);
 
     tss_set_rsp0(stack_top);
 
@@ -365,10 +373,7 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
         return -1;
     }
 
-    // Вершина стека (старший адрес)
     u64 stack_top = p->kstack + KERNEL_STACK_SIZE;
-
-    // Фрейм размещается у вершины стека
     p->kstack_top = stack_top - sizeof(struct interrupt_frame);
 
     struct interrupt_frame *frame = (struct interrupt_frame *)p->kstack_top;
@@ -378,8 +383,8 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     frame->rbx = 0;
     frame->rcx = 0;
     frame->rdx = 0;
-    frame->rsi = (u64)arg;     // второй аргумент
-    frame->rdi = (u64)entry;   // первый аргумент
+    frame->rsi = (u64)arg;
+    frame->rdi = (u64)entry;
     frame->rbp = 0;
     frame->r8 = 0;
     frame->r9 = 0;
@@ -394,8 +399,10 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     frame->rip = (u64)sched_thread_entry;
     frame->cs = 0x08;
     frame->rflags = 0x202;
-    frame->rsp = stack_top;   // ← Свободное место ВЫШЕ фрейма
+    frame->rsp = stack_top - 8;
     frame->ss = 0x10;
+
+    memcpy(p->fpu_context, clean_fpu_state, 512);
 
     for (int i = 0; i < 32; i++) {
         p->fds[i].used = 0;
@@ -411,24 +418,11 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     return p->pid;
 }
 
-
-// === ДОБРОВОЛЬНАЯ ПЕРЕДАЧА УПРАВЛЕНИЯ ===
-
 void sched_yield(void) {
     if (!sched_initialized) return;
 
-    // Просто ставим флаг, переключение произойдёт при выходе из прерывания
-    // или при следующем вызове int 0x80 из sleep/exit
     sched_need_resched = 1;
-
-    // Если мы не в контексте прерывания, форсируем переключение
-    // Проверяем по флагу IF в RFLAGS
-    u64 rflags;
-    __asm__ volatile ("pushfq; pop %0" : "=r"(rflags));
-    if (rflags & 0x200) {  // IF = 1, прерывания разрешены
-        // Мы не в обработчике прерывания, можно сделать int 0x80
-        // Но ждём следующего тика таймера, чтобы не гонять
-    }
+    __asm__ volatile ("int $0x80");
 }
 
 void sched_sleep(u32 ms) {
@@ -440,7 +434,6 @@ void sched_sleep(u32 ms) {
     current->state = PROC_SLEEPING;
     current->sleep_until = get_ticks_internal() + ticks_to_sleep;
 
-    // Вставляем в очередь спящих
     __asm__ volatile ("cli");
     process_t **pp = &sleep_queue;
     while (*pp && (*pp)->sleep_until <= current->sleep_until) {
@@ -450,7 +443,6 @@ void sched_sleep(u32 ms) {
     *pp = current;
     __asm__ volatile ("sti");
 
-    // Переключаем контекст через int 0x80
     sched_do_switch_yield();
 }
 
@@ -463,10 +455,8 @@ void sched_exit(int code) {
     process_count--;
     __asm__ volatile ("sti");
 
-    // Переключаем контекст
     sched_do_switch_yield();
 
-    // Сюда не должны вернуться
     while (1) __asm__ volatile ("hlt");
 }
 
@@ -478,8 +468,6 @@ void sched_tick(void) {
         sched_need_resched = 1;
     }
 }
-
-// === ОЖИДАНИЕ ЗАВЕРШЕНИЯ ===
 
 int sched_waitpid(u32 pid, int *status) {
     if (!sched_initialized) return -1;
@@ -496,12 +484,9 @@ int sched_waitpid(u32 pid, int *status) {
         }
         __asm__ volatile ("sti");
 
-        // Уступаем
         sched_yield();
     }
 }
-
-// === ИНФОРМАЦИОННЫЕ ===
 
 u32 sched_get_pid(void) { return current ? current->pid : 0; }
 u32 sched_get_ppid(void) { return current ? current->ppid : 0; }
@@ -539,5 +524,236 @@ int sched_start(void) {
     }
     print("SCHED: running\n");
 
+    return 0;
+}
+
+int sched_clone(u64 user_rip, u64 user_rsp) {
+    if (!sched_initialized) return -1;
+
+    __asm__ volatile ("cli");
+
+    process_t *parent = current;
+    if (!parent) {
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    process_t *child = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROC_UNUSED) {
+            child = &processes[i];
+            memset(child, 0, sizeof(process_t));
+            break;
+        }
+    }
+
+    if (!child) {
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    child->pid = alloc_pid();
+    child->ppid = parent->pid;
+    strncpy(child->name, parent->name, 27);
+    strcat(child->name, "_th");
+    child->state = PROC_READY;
+    child->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
+    child->cr3 = parent->cr3;
+    child->heap_start = parent->heap_start;
+    child->heap_end = parent->heap_end;
+    child->user_rip = user_rip;
+
+    for (int i = 0; i < 32; i++) {
+        child->fds[i] = parent->fds[i];
+    }
+
+    memcpy(child->fpu_context, parent->fpu_context, 512);
+
+    child->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
+    if (!child->kstack) {
+        child->state = PROC_UNUSED;
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    u64 stack_top = child->kstack + KERNEL_STACK_SIZE;
+    child->kstack_top = stack_top - sizeof(struct interrupt_frame);
+
+    struct interrupt_frame *frame = (struct interrupt_frame *)child->kstack_top;
+    memset(frame, 0, sizeof(*frame));
+
+    frame->rax = 0;
+    frame->rbx = 0;
+    frame->rcx = 0;
+    frame->rdx = 0;
+    frame->rsi = 0;
+    frame->rdi = 0;
+    frame->rbp = 0;
+    frame->r8  = 0;
+    frame->r9  = 0;
+    frame->r10 = 0;
+    frame->r11 = 0;
+    frame->r12 = 0;
+    frame->r13 = 0;
+    frame->r14 = 0;
+    frame->r15 = 0;
+
+    frame->error_code = 0;
+    frame->vector = 128;
+    frame->rip = user_rip;
+    frame->cs = 0x2B;
+    frame->rflags = 0x202;
+    frame->rsp = user_rsp;
+    frame->ss = 0x23;
+
+    enqueue_ready(child);
+    process_count++;
+
+    __asm__ volatile ("sti");
+    return child->pid;
+}
+
+int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
+    if (!sched_initialized) return -1;
+
+    __asm__ volatile ("cli");
+
+    process_t *p = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROC_UNUSED) {
+            p = &processes[i];
+            memset(p, 0, sizeof(process_t));
+            break;
+        }
+    }
+
+    if (!p) {
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    p->pid = alloc_pid();
+    p->ppid = current ? current->pid : 0;
+    strncpy(p->name, name, 31);
+    p->name[31] = '\0';
+    p->state = PROC_READY;
+    p->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
+
+    u64* pml4 = create_address_space();
+    if (!pml4) {
+        p->state = PROC_UNUSED;
+        __asm__ volatile ("sti");
+        return -1;
+    }
+    p->cr3 = (u64)pml4;
+
+    u64 max_vaddr = 0;
+    u64 entry = elf_load(elf_data, elf_size, pml4, &max_vaddr);
+    if (entry == 0) {
+        free_address_space(pml4);
+        p->state = PROC_UNUSED;
+        __asm__ volatile ("sti");
+        return -1;
+    }
+    p->user_rip = entry;
+    p->heap_start = (max_vaddr + 4095) & ~4095;
+    p->heap_end = p->heap_start;
+
+    u64 user_stack_top = 0x7FFFFFFFF000;
+    u64 stack_pages = 8;
+    for (u64 i = 0; i < stack_pages; i++) {
+        u64 phys = (u64)kmalloc(4096);
+        if (!phys) {
+            free_address_space(pml4);
+            p->state = PROC_UNUSED;
+            __asm__ volatile ("sti");
+            return -1;
+        }
+        u64 virt = user_stack_top - (stack_pages - i) * 4096;
+        paging_map_for_process(pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+
+        u64 old_cr3;
+        __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+        if (old_cr3 != p->cr3) {
+            __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+        }
+        memset((void*)virt, 0, 4096);
+        if (old_cr3 != p->cr3) {
+            __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+        }
+    }
+
+    p->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
+    if (!p->kstack) {
+        free_address_space(pml4);
+        p->state = PROC_UNUSED;
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    u64 stack_top = p->kstack + KERNEL_STACK_SIZE;
+    p->kstack_top = stack_top - sizeof(struct interrupt_frame);
+
+    struct interrupt_frame *frame = (struct interrupt_frame *)p->kstack_top;
+    memset(frame, 0, sizeof(*frame));
+
+    frame->rax = 0;
+    frame->rbx = 0;
+    frame->rcx = 0;
+    frame->rdx = 0;
+    frame->rsi = 0;
+    frame->rdi = 0;
+    frame->rbp = 0;
+    frame->r8  = 0;
+    frame->r9  = 0;
+    frame->r10 = 0;
+    frame->r11 = 0;
+    frame->r12 = 0;
+    frame->r13 = 0;
+    frame->r14 = 0;
+    frame->r15 = 0;
+
+    frame->error_code = 0;
+    frame->vector = 128;
+    frame->rip = entry;
+    frame->cs = 0x2B;
+    frame->rflags = 0x202;
+    frame->rsp = user_stack_top - 8;
+    frame->ss = 0x23;
+
+    memcpy(p->fpu_context, clean_fpu_state, 512);
+
+    for (int i = 0; i < 32; i++) {
+        p->fds[i].used = 0;
+    }
+
+    enqueue_ready(p);
+    process_count++;
+
+    __asm__ volatile ("sti");
+    return p->pid;
+}
+
+int spawn_userspace_init(void) {
+    u8 *init_data = NULL;
+    u32 init_size = 0;
+
+    if (ufs_ismounted()) {
+        if (ufs_read("/init", &init_data, &init_size) == 0) {
+            int pid = sched_create_process("init", init_data, init_size);
+            kfree(init_data);
+            if (pid >= 0) return 0;
+        }
+    }
+
+    extern int get_module_data(const char* name, u8** buf, u32* size);
+    if (get_module_data("init", &init_data, &init_size) == 0) {
+        print("[init] UFS empty, loaded userspace /init from Multiboot2 RAM module\n");
+        int pid = sched_create_process("init", init_data, init_size);
+        kfree(init_data);
+        if (pid >= 0) return 0;
+    }
+
+    print("[init] /init not found on UFS and no Multiboot2 module found, system halted.\n");
     return 0;
 }

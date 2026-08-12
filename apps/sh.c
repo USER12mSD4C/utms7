@@ -1,20 +1,15 @@
-#include "../include/string.h"
-#include "../drivers/drm.h"
-#include "../drivers/keyboard.h"
-#include "../fs/ufs.h"
-#include "../kernel/memory.h"
-#include "../include/path.h"
-#include "../commands/fs.h"
-#include "../kernel/sched.h"
-#include "shell.h"
+// apps/sh.c
+#include "../lib/libc.h"
 
-// Прототипы функций libc, которые используем
-extern int open(const char *path, int flags, ...);
-extern int close(int fd);
-extern int dup(int oldfd);
-extern int dup2(int oldfd, int newfd);
-extern int unlink(const char *path);
-extern int lseek(int fd, int offset, int whence);
+#define MAX_COMMANDS 64
+#define MAX_LINE_LEN 512
+#define MAX_HISTORY 16
+
+typedef struct {
+    char name[32];
+    int (*func)(int argc, char** argv);
+    char desc[64];
+} shell_command_t;
 
 static shell_command_t commands[MAX_COMMANDS];
 static int cmd_count = 0;
@@ -22,7 +17,6 @@ static char history[MAX_HISTORY][MAX_LINE_LEN];
 static int history_count = 0;
 static int history_pos = -1;
 
-// Структура для команды с перенаправлениями
 typedef struct {
     char *args[16];
     int argc;
@@ -33,6 +27,10 @@ typedef struct {
     int background;
     int pipe_to_next;
 } shell_cmd_t;
+
+void print(const char *s) {
+    write(1, s, strlen(s));
+}
 
 int shell_init(void) {
     cmd_count = 0;
@@ -67,18 +65,6 @@ int shell_register_command(const char *name, int (*func)(int, char**), const cha
     return 0;
 }
 
-int shell_unregister_command(const char *name) {
-    for (int i = 0; i < cmd_count; i++) {
-        if (strcmp(commands[i].name, name) == 0) {
-            for (int j = i; j < cmd_count - 1; j++) commands[j] = commands[j + 1];
-            cmd_count--;
-            return 0;
-        }
-    }
-    return -1;
-}
-
-// Парсинг команды с поддержкой перенаправлений и пайпов
 static int parse_command(char *line, shell_cmd_t *cmd) {
     memset(cmd, 0, sizeof(shell_cmd_t));
 
@@ -209,62 +195,56 @@ static int parse_command(char *line, shell_cmd_t *cmd) {
     return 0;
 }
 
-// Выполнение команды с перенаправлениями
 static int execute_redirected(shell_cmd_t *cmd) {
     int saved_stdin = -1, saved_stdout = -1, saved_stderr = -1;
     int new_stdin = -1, new_stdout = -1, new_stderr = -1;
     int result = -1;
 
-    // Если команда "cat" без аргументов и есть output_file — это создание файла
     if (cmd->argc == 1 && strcmp(cmd->args[0], "cat") == 0 && cmd->output_file) {
-        int fd = open(cmd->output_file, 0x41, 0644); // O_WRONLY | O_CREAT
+        int fd = open(cmd->output_file, 0x41, 0644);
         if (fd >= 0) close(fd);
         return 0;
     }
 
-    // Перенаправление ввода
     if (cmd->input_file) {
         new_stdin = open(cmd->input_file, 0);
         if (new_stdin < 0) {
-            shell_print("Cannot open input file: ");
-            shell_print(cmd->input_file);
-            shell_print("\n");
+            print("Cannot open input file: ");
+            print(cmd->input_file);
+            print("\n");
             return -1;
         }
         saved_stdin = dup(0);
         dup2(new_stdin, 0);
     }
 
-    // Перенаправление вывода
     if (cmd->output_file) {
-        int flags = 0x41; // O_WRONLY | O_CREAT
-        if (cmd->append_mode) flags |= 0x400; // O_APPEND
+        int flags = 0x41;
+        if (cmd->append_mode) flags |= 0x400;
         new_stdout = open(cmd->output_file, flags, 0644);
         if (new_stdout < 0) {
-            shell_print("Cannot open output file: ");
-            shell_print(cmd->output_file);
-            shell_print("\n");
+            print("Cannot open output file: ");
+            print(cmd->output_file);
+            print("\n");
             goto cleanup;
         }
         saved_stdout = dup(1);
         dup2(new_stdout, 1);
     }
 
-    // Перенаправление ошибок
     if (cmd->error_file) {
         int flags = 0x41;
         new_stderr = open(cmd->error_file, flags, 0644);
         if (new_stderr < 0) {
-            shell_print("Cannot open error file: ");
-            shell_print(cmd->error_file);
-            shell_print("\n");
+            print("Cannot open error file: ");
+            print(cmd->error_file);
+            print("\n");
             goto cleanup;
         }
         saved_stderr = dup(2);
         dup2(new_stderr, 2);
     }
 
-    // Выполнение команды
     for (int i = 0; i < cmd_count; i++) {
         if (strcmp(cmd->args[0], commands[i].name) == 0) {
             result = commands[i].func(cmd->argc, cmd->args);
@@ -273,13 +253,12 @@ static int execute_redirected(shell_cmd_t *cmd) {
     }
 
     if (result == -1) {
-        shell_print("unknown command: ");
-        shell_print(cmd->args[0]);
-        shell_print("\n");
+        print("unknown command: ");
+        print(cmd->args[0]);
+        print("\n");
     }
 
 cleanup:
-    // Восстановление дескрипторов
     if (saved_stdin >= 0) {
         dup2(saved_stdin, 0);
         close(saved_stdin);
@@ -299,40 +278,31 @@ cleanup:
     return result;
 }
 
-// Выполнение пайпа (через временный файл)
 static int execute_pipe(shell_cmd_t *cmd1, shell_cmd_t *cmd2) {
     char pipe_file[] = "/tmp/pipeXXXXXX";
 
-    // Создаём временный файл
-    int pipe_fd = open(pipe_file, 0x42, 0644); // O_RDWR | O_CREAT | O_TRUNC
+    int pipe_fd = open(pipe_file, 0x42, 0644);
     if (pipe_fd < 0) {
-        shell_print("Cannot create pipe file\n");
+        print("Cannot create pipe file\n");
         return -1;
     }
 
-    // Сохраняем stdout
     int saved_stdout = dup(1);
 
-    // Перенаправляем stdout в pipe
     dup2(pipe_fd, 1);
 
-    // Выполняем первую команду
     int result1 = execute_redirected(cmd1);
 
-    // Восстанавливаем stdout
     dup2(saved_stdout, 1);
     close(saved_stdout);
 
     if (result1 == 0) {
-        // Перенаправляем stdin из pipe
         int saved_stdin = dup(0);
         lseek(pipe_fd, 0, 0);
         dup2(pipe_fd, 0);
 
-        // Выполняем вторую команду
         int result2 = execute_redirected(cmd2);
 
-        // Восстанавливаем stdin
         dup2(saved_stdin, 0);
         close(saved_stdin);
     }
@@ -343,37 +313,12 @@ static int execute_pipe(shell_cmd_t *cmd1, shell_cmd_t *cmd2) {
     return 0;
 }
 
-char **shell_split_args(char *str, int *argc) {
-    static char *argv[16];
-    *argc = 0;
-    int in_word = 0;
-    while (*str && *argc < 16) {
-        if (*str == ' ' || *str == '\t') {
-            *str = '\0';
-            in_word = 0;
-        } else {
-            if (!in_word) {
-                argv[*argc] = str;
-                (*argc)++;
-                in_word = 1;
-            }
-        }
-        str++;
-    }
-    return argv;
-}
-
-void shell_print(const char *str) { print(str); }
-void shell_print_num(u32 num) { printnum(num); }
-void shell_print_hex(u32 num) { printhex(num); }
-
 int shell_execute(const char *cmd_line) {
     if (!cmd_line || !cmd_line[0]) return 0;
 
     char buf[MAX_LINE_LEN];
     strcpy(buf, cmd_line);
 
-    // Убираем trailing newline
     int len = strlen(buf);
     if (len > 0 && buf[len-1] == '\n') buf[len-1] = '\0';
 
@@ -381,14 +326,12 @@ int shell_execute(const char *cmd_line) {
     int parse_result = parse_command(buf, &cmd1);
 
     if (parse_result == 1 && cmd1.pipe_to_next) {
-        // Есть пайп — парсим вторую команду
         char *pipe_pos = strchr(buf, '|');
         if (pipe_pos) {
             parse_command(pipe_pos + 1, &cmd2);
             return execute_pipe(&cmd1, &cmd2);
         }
     } else if (parse_result == 2) {
-        // && — выполнить если первая успешна
         int result = execute_redirected(&cmd1);
         if (result == 0) {
             char *and_pos = strstr(buf, "&&");
@@ -399,7 +342,6 @@ int shell_execute(const char *cmd_line) {
         }
         return result;
     } else if (parse_result == 3) {
-        // || — выполнить если первая не успешна
         int result = execute_redirected(&cmd1);
         if (result != 0) {
             char *or_pos = strstr(buf, "||");
@@ -415,126 +357,34 @@ int shell_execute(const char *cmd_line) {
 }
 
 static void print_prompt(void) {
-    const char *cwd = fs_get_current_dir();
-    if (cwd && cwd[0]) {
-        shell_print(cwd);
-    } else {
-        shell_print("/");
-    }
-    shell_print("> ");
+    print("/> ");
 }
 
-static void clear_line(u8 input_x, u8 input_y) {
-    print_setpos(input_x, input_y);
-    for (int i = 0; i < 80 - input_x; i++) {
-        print_char(' ');
-    }
-    print_setpos(input_x, input_y);
-}
-
-int shell_start_thread(void) {
-    int pid = sched_create_kthread("shell", (void(*)(void*))shell_run, NULL);
-    if (pid < 0) {
-        shell_print("SHELL: Failed to create shell thread\n");
-        return 0; // Возвращаем 0, чтобы не прерывать загрузку
-    }
-    return 0;
-}
-
-int shell_run(void) {
+int main(void) {
+    shell_init();
     char line[MAX_LINE_LEN];
     int pos = 0;
-    u8 cursor_x = 0, cursor_y = 0;
-    int key;
+    char c;
 
     while (1) {
         print_prompt();
-        print_getpos(&cursor_x, &cursor_y);
-        u8 input_x = cursor_x, input_y = cursor_y;
         pos = 0;
-        history_pos = -1;
         line[0] = '\0';
 
         while (1) {
-            // Ждем нажатия клавиши
-            while (!keyboard_data_ready()) {
-                __asm__ volatile ("hlt");  // Даем процессору отдохнуть
-            }
+            read(0, &c, 1);
 
-            key = keyboard_getc();
-
-            if (key == 0xE0) {
-                if (history_pos < history_count - 1) {
-                    history_pos++;
-                    strcpy(line, history[history_pos]);
-                    pos = strlen(line);
-                    clear_line(input_x, input_y);
-                    print_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) print_char(line[i]);
-                    cursor_x = input_x + pos;
-                    print_setpos(cursor_x, input_y);
-                }
-                continue;
-            }
-
-            if (key == 0xE1) {
-                if (history_pos > 0) {
-                    history_pos--;
-                    strcpy(line, history[history_pos]);
-                    pos = strlen(line);
-                    clear_line(input_x, input_y);
-                    print_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) print_char(line[i]);
-                    cursor_x = input_x + pos;
-                    print_setpos(cursor_x, input_y);
-                } else if (history_pos == 0) {
-                    history_pos = -1;
-                    line[0] = '\0';
-                    pos = 0;
-                    clear_line(input_x, input_y);
-                    cursor_x = input_x;
-                    print_setpos(cursor_x, input_y);
-                }
-                continue;
-            }
-
-            if (key == 0xE2) {
-                if (cursor_x > input_x) {
-                    cursor_x--;
-                    print_setpos(cursor_x, input_y);
-                }
-                continue;
-            }
-
-            if (key == 0xE3) {
-                if (cursor_x - input_x < pos) {
-                    cursor_x++;
-                    print_setpos(cursor_x, input_y);
-                }
-                continue;
-            }
-
-            if (key == '\t') {
-                continue;
-            }
-
-            if (key == '\b' || key == 0x7F) {
-                if (cursor_x > input_x) {
-                    int idx = cursor_x - input_x - 1;
-                    for (int i = idx; i < pos; i++) line[i] = line[i+1];
+            if (c == '\b' || c == 0x7F) {
+                if (pos > 0) {
                     pos--;
-                    cursor_x--;
-                    print_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) print_char(line[i]);
-                    print_char(' ');
-                    print_setpos(cursor_x, input_y);
+                    write(1, "\b \b", 3);
                 }
                 continue;
             }
 
-            if (key == '\n' || key == '\r') {
+            if (c == '\n' || c == '\r') {
                 line[pos] = '\0';
-                print_char('\n');
+                write(1, "\n", 1);
                 if (pos > 0) {
                     add_to_history(line);
                     shell_execute(line);
@@ -542,18 +392,11 @@ int shell_run(void) {
                 break;
             }
 
-            if (key >= 32 && key <= 126) {
+            if (c >= 32 && c <= 126) {
                 if (pos < MAX_LINE_LEN - 1) {
-                    int idx = cursor_x - input_x;
-                    for (int i = pos; i > idx; i--) line[i] = line[i-1];
-                    line[idx] = key;
-                    pos++;
-                    cursor_x++;
-                    print_setpos(input_x, input_y);
-                    for (int i = 0; i < pos; i++) print_char(line[i]);
-                    print_setpos(cursor_x, input_y);
+                    line[pos++] = c;
+                    write(1, &c, 1);
                 }
-                continue;
             }
         }
     }

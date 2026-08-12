@@ -4,10 +4,7 @@
 #include "../include/string.h"
 #include "../include/font.h"
 #include "../kernel/paging.h"
-
-// =====================================================================
-// Module singleton
-// =====================================================================
+#include "../kernel/memory.h"
 
 drm_device_t drm_dev;
 
@@ -18,9 +15,21 @@ static const u32 ansi_palette[16] = {
     0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF
 };
 
-// =====================================================================
-// Mode helpers
-// =====================================================================
+#define DRM_MAX_DUMB_BUFFERS 16
+
+typedef struct {
+    u32 handle;
+    u32 width;
+    u32 height;
+    u32 bpp;
+    u32 pitch;
+    u64 size;
+    u64 paddr;
+    void* vaddr;
+    int used;
+} drm_dumb_buffer_t;
+
+static drm_dumb_buffer_t dumb_buffers[DRM_MAX_DUMB_BUFFERS];
 
 static drm_display_mode_t make_mode(u32 w, u32 h) {
     drm_display_mode_t m;
@@ -32,15 +41,10 @@ static drm_display_mode_t make_mode(u32 w, u32 h) {
     m.vsync_start = h + (h / 16);
     m.vsync_end   = m.vsync_start + 3;
     m.vtotal      = m.vsync_end + (h / 16);
-    // 60 Hz with a 10% estimate of blanking overhead
     m.clock       = (w * h * 60) / 1000;
     m.flags       = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
     return m;
 }
-
-// =====================================================================
-// Framebuffer object lifetime
-// =====================================================================
 
 #define DRM_MAX_USER_FBS  4
 static drm_framebuffer_t user_fb_pool[DRM_MAX_USER_FBS];
@@ -61,7 +65,7 @@ drm_framebuffer_t* drm_framebuffer_create(u64 paddr, u32 width,
     fb->bpp     = bpp;
     fb->paddr   = paddr;
     fb->size    = (u64)pitch * height;
-    fb->vaddr   = (void*)paddr;     // identity-mapped region
+    fb->vaddr   = (void*)paddr;
     fb->refcount = 1;
 
     for (u64 off = 0; off < fb->size; off += 0x200000) {
@@ -84,10 +88,6 @@ void drm_framebuffer_destroy(drm_framebuffer_t* fb) {
     }
 }
 
-// =====================================================================
-// Boot-time setup
-// =====================================================================
-
 void drm_set_framebuffer(u64 addr, u32 width, u32 height, u32 pitch, u32 bpp) {
     drm_framebuffer_t* fb = &drm_dev.primary_fb;
     fb->paddr  = addr;
@@ -99,20 +99,11 @@ void drm_set_framebuffer(u64 addr, u32 width, u32 height, u32 pitch, u32 bpp) {
     fb->vaddr  = (void*)addr;
     fb->refcount = 1;
 
-    // Identity-map the framebuffer into kernel virtual memory using
-    // 2 MiB huge pages. This is the fix for the old vesa.c bug where
-    // it stored the physical address directly in a pointer and tried
-    // to dereference it from long-mode C, which faults because
-    // physical addresses are not directly accessible.
     for (u64 off = 0; off < fb->size; off += 0x200000) {
         paging_map(addr + off, addr + off,
                    PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE);
     }
 }
-
-// =====================================================================
-// Initialization
-// =====================================================================
 
 static void drm_connector_init(drm_connector_t* c) {
     c->id = 1;
@@ -121,7 +112,6 @@ static void drm_connector_init(drm_connector_t* c) {
     c->mode_count = 0;
     c->crtc = &drm_dev.crtc;
 
-    // Enumerate a few standard modes that fit within the primary FB.
     static const struct { u32 w, h; } presets[] = {
         { 640,  480  },
         { 800,  600  },
@@ -137,7 +127,6 @@ static void drm_connector_init(drm_connector_t* c) {
         c->modes[c->mode_count++] = make_mode(presets[i].w, presets[i].h);
     }
     if (c->mode_count == 0) {
-        // No preset fits; just advertise the actual FB size.
         c->modes[0] = make_mode(drm_dev.primary_fb.width,
                                 drm_dev.primary_fb.height);
         c->mode_count = 1;
@@ -152,17 +141,14 @@ int drm_init(void) {
         return -1;
     }
 
-    // CRTC
     drm_dev.crtc.id = 1;
     drm_dev.crtc.enabled = 0;
     drm_dev.crtc.fb = fb;
     drm_dev.crtc.x = 0;
     drm_dev.crtc.y = 0;
 
-    // Connector
     drm_connector_init(&drm_dev.connector);
 
-    // Pick the largest advertised mode by default.
     drm_display_mode_t best = drm_dev.connector.modes[0];
     for (u32 i = 1; i < drm_dev.connector.mode_count; i++) {
         drm_display_mode_t* m = &drm_dev.connector.modes[i];
@@ -173,7 +159,6 @@ int drm_init(void) {
     }
     drm_mode_set_crtc(drm_dev.crtc.id, fb, 0, 0, &best);
 
-    // Text console
     drm_dev.text_cols = fb->width / 8;
     drm_dev.text_rows = fb->height / 16;
     drm_dev.cursor_x = 0;
@@ -181,15 +166,15 @@ int drm_init(void) {
     drm_dev.text_fg  = ansi_palette[15];
     drm_dev.text_bg  = ansi_palette[0];
 
+    for (int i = 0; i < DRM_MAX_DUMB_BUFFERS; i++) {
+        dumb_buffers[i].used = 0;
+    }
+
     drm_dev.initialized = 1;
     return 0;
 }
 
 int drm_is_active(void) { return drm_dev.initialized; }
-
-// =====================================================================
-// Modeset
-// =====================================================================
 
 int drm_mode_set_crtc(u32 crtc_id,
                       drm_framebuffer_t* fb,
@@ -209,12 +194,6 @@ int drm_mode_set_crtc(u32 crtc_id,
     return 0;
 }
 
-// =====================================================================
-// Drawing primitives
-// =====================================================================
-
-// Bounds-checked raw write of a 32-bit pixel. We only support 32 bpp
-// in the boot path. Other bpp values are rejected.
 static inline void fb_write32(drm_framebuffer_t* fb, u32 x, u32 y, u32 v) {
     if (x >= fb->width || y >= fb->height) return;
     volatile u32* base = (volatile u32*)fb->vaddr;
@@ -270,10 +249,6 @@ void drm_draw_string(const char* s, u32 x, u32 y, u8 r, u8 g, u8 b) {
 
 u32 drm_get_width (void) { return drm_dev.primary_fb.width;  }
 u32 drm_get_height(void) { return drm_dev.primary_fb.height; }
-
-// =====================================================================
-// Text console
-// =====================================================================
 
 static void scroll_one(void) {
     drm_framebuffer_t* fb = drm_dev.crtc.fb;
@@ -347,10 +322,6 @@ static void console_putchar(char c) {
     drm_dev.cursor_x++;
 }
 
-// =====================================================================
-// Legacy vesa / print shims
-// =====================================================================
-
 int  vesa_init(void)                              { return drm_init(); }
 void vesa_set_framebuffer(u64 a, u32 w, u32 h, u32 p, u32 b)
                                                    { drm_set_framebuffer(a,w,h,p,b); }
@@ -405,27 +376,6 @@ u32  vesa_get_width (void)                          { return drm_get_width(); }
 u32  vesa_get_height(void)                          { return drm_get_height(); }
 int  vesa_is_active (void)                          { return drm_is_active(); }
 
-// =====================================================================
-// Linux DRM UAPI dispatcher (libdrm / Mesa)
-//
-// Implements the subset of ioctls that Mesa's KMS/DRM frontends call.
-// The dispatcher matches ioctl numbers against the DRM_IOC() macros
-// declared in drm.h. Each handler populates the caller-provided struct
-// in place; the future VFS layer for /dev/dri/card0 is responsible
-// for doing copy_to_user / copy_from_user on `arg`.
-//
-// At the moment the only "real" device is a single virtual CRTC and
-// one connector advertising the boot framebuffer. Most handlers are
-// just enough to make a libdrm + modeset program run without EINVAL;
-// they're stubs that report what the device actually has.
-// =====================================================================
-
-// ---- Helpers ---------------------------------------------------------
-
-// Convert an in-kernel drm_display_mode_t to the wire format that
-// libdrm expects. The two structs have the same field order; the only
-// thing to watch is that the wire struct has 16-bit fields where the
-// in-kernel one has 32-bit fields.
 static void mode_to_uapi(const drm_display_mode_t* in,
                          struct drm_mode_modeinfo* out) {
     out->clock        = in->clock;
@@ -442,27 +392,17 @@ static void mode_to_uapi(const drm_display_mode_t* in,
     out->vrefresh     = 60;
     out->flags        = in->flags;
     out->type         = DRM_MODE_TYPE_BUILTIN | DRM_MODE_TYPE_PREFERRED;
-    for (int i = 0; i < 32; i++) out->name[i] = in ? 0 : 0; // zero
-    // A short human-readable label helps debugging from userspace.
+    for (int i = 0; i < 32; i++) out->name[i] = 0;
     const char label[] = "UTMS7";
     for (int i = 0; i < 32 && label[i]; i++) out->name[i] = label[i];
 }
 
-// True if the driver is ready to service UAPI calls. Until then every
-// ioctl returns -ENODEV so userspace knows to fall back.
 static int drm_uapi_ready(void) {
     return drm_dev.initialized;
 }
 
-// ---- Individual ioctl handlers ---------------------------------------
-//
-// Each handler returns 0 on success, or a negative errno on failure.
-// They all assume `arg` is a kernel-accessible pointer. The future VFS
-// handler for /dev/dri/card0 will translate userspace pointers with
-// copy_from_user / copy_to_user.
-
 static int drm_uapi_version(struct drm_version* v) {
-    if (!v) return -22; // -EINVAL
+    if (!v) return -22;
     const char name[]  = "utms7-drm";
     const char date[]  = "20260616";
     const char desc[]  = "UTMS7 virtual KMS";
@@ -493,40 +433,37 @@ static int drm_uapi_get_cap(struct drm_get_cap* c) {
         case DRM_CAP_TIMESTAMP_MONOTONIC:
         case DRM_CAP_PRIME:
         case DRM_CAP_DUMB_PREFER_SHADOW:
-            c->value = 0;
+        case DRM_CAP_DUMB_BUFFER:
+            c->value = 1;
             break;
         case DRM_CAP_CURSOR_WIDTH:
         case DRM_CAP_CURSOR_HEIGHT:
             c->value = 64;
             break;
         default:
-            return -22; // -EINVAL
+            return -22;
     }
     return 0;
 }
 
 static int drm_uapi_get_resources(struct drm_mode_card_res* r) {
     if (!r) return -22;
-    // 1 CRTC, 1 connector, 0 encoders, 1 framebuffer (the primary).
     r->count_crtcs      = 1;
     r->count_connectors = 1;
-    r->count_encoders   = 0;
+    r->count_encoders   = 1;
     r->count_fbs        = 1;
     r->min_width        = 0;
     r->max_width        = drm_dev.primary_fb.width;
     r->min_height       = 0;
     r->max_height       = drm_dev.primary_fb.height;
     if (r->crtc_id_ptr) {
-        u32 id = drm_dev.crtc.id;
-        for (u32 i = 0; i < r->count_crtcs; i++) {
-            ((u32*)r->crtc_id_ptr)[i] = id;
-        }
+        ((u32*)r->crtc_id_ptr)[0] = drm_dev.crtc.id;
     }
     if (r->connector_id_ptr) {
-        u32 id = drm_dev.connector.id;
-        for (u32 i = 0; i < r->count_connectors; i++) {
-            ((u32*)r->connector_id_ptr)[i] = id;
-        }
+        ((u32*)r->connector_id_ptr)[0] = drm_dev.connector.id;
+    }
+    if (r->encoder_id_ptr) {
+        ((u32*)r->encoder_id_ptr)[0] = 1;
     }
     if (r->fb_id_ptr) {
         ((u32*)r->fb_id_ptr)[0] = 1;
@@ -536,7 +473,6 @@ static int drm_uapi_get_resources(struct drm_mode_card_res* r) {
 
 static int drm_uapi_get_connector(struct drm_mode_get_connector* c) {
     if (!c) return -22;
-    // Translate our internal connector id (1) into the UAPI fields.
     c->connector_type     = DRM_MODE_CONNECTOR_VIRTUAL;
     c->connector_type_id  = 0;
     c->connection         = drm_dev.connector.connected
@@ -547,8 +483,8 @@ static int drm_uapi_get_connector(struct drm_mode_get_connector* c) {
     c->subpixel           = 0;
     c->count_modes        = drm_dev.connector.mode_count;
     c->count_props        = 0;
-    c->count_encoders     = 0;
-    // Fill the modes array.
+    c->count_encoders     = 1;
+    c->encoder_id         = 1;
     if (c->modes_ptr && c->count_modes > 0) {
         u32 n = c->count_modes;
         if (n > drm_dev.connector.mode_count) n = drm_dev.connector.mode_count;
@@ -558,6 +494,19 @@ static int drm_uapi_get_connector(struct drm_mode_get_connector* c) {
         }
         c->count_modes = n;
     }
+    if (c->encoders_ptr) {
+        ((u32*)c->encoders_ptr)[0] = 1;
+    }
+    return 0;
+}
+
+static int drm_uapi_get_encoder(struct drm_mode_get_encoder* e) {
+    if (!e) return -22;
+    if (e->encoder_id != 1) return -2;
+    e->encoder_type = 1;
+    e->crtc_id = 1;
+    e->possible_crtcs = 1;
+    e->possible_clones = 0;
     return 0;
 }
 
@@ -570,37 +519,120 @@ static int drm_uapi_get_crtc(struct drm_mode_crtc* c) {
     c->gamma_size        = 0;
     c->count_connectors  = 1;
     c->mode_valid        = drm_dev.crtc.enabled ? 1 : 0;
+    if (drm_dev.crtc.enabled) {
+        mode_to_uapi(&drm_dev.crtc.mode, &c->mode);
+    }
+    return 0;
+}
+
+static int drm_uapi_set_crtc(struct drm_mode_crtc* c) {
+    if (!c) return -22;
+    if (c->crtc_id != 1) return -2;
+
+    drm_framebuffer_t* fb = NULL;
+    if (c->fb_id == 1) {
+        fb = &drm_dev.primary_fb;
+    } else {
+        int slot = c->fb_id - 2;
+        if (slot >= 0 && slot < DRM_MAX_USER_FBS && user_fb_used[slot]) {
+            fb = &user_fb_pool[slot];
+        }
+    }
+    if (!fb) return -2;
+
+    drm_display_mode_t mode;
+    mode.hdisplay = c->mode.hdisplay;
+    mode.vdisplay = c->mode.vdisplay;
+    mode.clock = c->mode.clock;
+    mode.flags = c->mode.flags;
+    mode.hsync_start = c->mode.hsync_start;
+    mode.hsync_end = c->mode.hsync_end;
+    mode.htotal = c->mode.htotal;
+    mode.vsync_start = c->mode.vsync_start;
+    mode.vsync_end = c->mode.vsync_end;
+    mode.vtotal = c->mode.vtotal;
+
+    int ret = drm_mode_set_crtc(c->crtc_id, fb, c->x, c->y, &mode);
+    if (ret != 0) return -22;
+
     return 0;
 }
 
 static int drm_uapi_get_fb(struct drm_mode_fb_cmd* f) {
     if (!f) return -22;
-    // Only the primary framebuffer (id 1) is exposed.
-    if (f->fb_id != 0 && f->fb_id != 1) return -2; // -ENOENT
-    f->fb_id  = 1;
-    f->width  = drm_dev.primary_fb.width;
-    f->height = drm_dev.primary_fb.height;
-    f->pitch  = drm_dev.primary_fb.pitch;
-    f->bpp    = drm_dev.primary_fb.bpp;
-    f->depth  = 24;
-    f->handle = 1;
-    return 0;
+    if (f->fb_id == 0 || f->fb_id == 1) {
+        f->fb_id  = 1;
+        f->width  = drm_dev.primary_fb.width;
+        f->height = drm_dev.primary_fb.height;
+        f->pitch  = drm_dev.primary_fb.pitch;
+        f->bpp    = drm_dev.primary_fb.bpp;
+        f->depth  = 24;
+        f->handle = 1;
+        return 0;
+    }
+
+    int slot = f->fb_id - 2;
+    if (slot >= 0 && slot < DRM_MAX_USER_FBS && user_fb_used[slot]) {
+        drm_framebuffer_t* fb = &user_fb_pool[slot];
+        f->width  = fb->width;
+        f->height = fb->height;
+        f->pitch  = fb->pitch;
+        f->bpp    = fb->bpp;
+        f->depth  = 24;
+        f->handle = slot + 2;
+        return 0;
+    }
+    return -2;
 }
 
 static int drm_uapi_add_fb(struct drm_mode_fb_cmd* f) {
     if (!f) return -22;
-    // We don't yet support creating new framebuffers from userspace.
-    // The primary one is id 1, with the boot parameters.
-    if (f->width != 0 && f->height != 0) return -38; // -ENOSYS
+    if (f->width != 0 && f->height != 0) return -38;
     return drm_uapi_get_fb(f);
 }
 
-static int drm_uapi_rm_fb(struct drm_mode_fb_cmd* f) {
+static int drm_uapi_add_fb2(struct drm_mode_fb_cmd2* f) {
     if (!f) return -22;
-    // The primary framebuffer is owned by the device and can't be
-    // removed via this ioctl. Anything else is unsupported.
-    if (f->fb_id == 0 || f->fb_id == 1) return -1; // -EPERM
-    return -38; // -ENOSYS
+
+    u32 gem_handle = f->handles[0];
+    drm_dumb_buffer_t* buf = NULL;
+    for (int i = 0; i < DRM_MAX_DUMB_BUFFERS; i++) {
+        if (dumb_buffers[i].used && dumb_buffers[i].handle == gem_handle) {
+            buf = &dumb_buffers[i];
+            break;
+        }
+    }
+    if (!buf) return -2;
+
+    drm_framebuffer_t* fb = drm_framebuffer_create(buf->paddr, f->width, f->height, f->pitches[0], buf->bpp);
+    if (!fb) return -12;
+
+    int slot = -1;
+    for (int i = 0; i < DRM_MAX_USER_FBS; i++) {
+        if (&user_fb_pool[i] == fb) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) return -12;
+
+    f->fb_id = slot + 2;
+    return 0;
+}
+
+static int drm_uapi_rm_fb(unsigned int* fb_id) {
+    if (!fb_id) return -22;
+    unsigned int id = *fb_id;
+    if (id == 1) return -1;
+
+    int slot = id - 2;
+    if (slot >= 0 && slot < DRM_MAX_USER_FBS) {
+        if (user_fb_used[slot]) {
+            drm_framebuffer_destroy(&user_fb_pool[slot]);
+            return 0;
+        }
+    }
+    return -2;
 }
 
 static int drm_uapi_get_planes(struct drm_mode_get_plane_res* p) {
@@ -609,7 +641,7 @@ static int drm_uapi_get_planes(struct drm_mode_get_plane_res* p) {
     return 0;
 }
 
-static u32 next_gem_handle = 2; // 0 and 1 are reserved (primary fb)
+static u32 next_gem_handle = 2;
 
 static int drm_uapi_gem_create(struct drm_gem_create* g) {
     if (!g) return -22;
@@ -620,22 +652,88 @@ static int drm_uapi_gem_create(struct drm_gem_create* g) {
 
 static int drm_uapi_gem_close(struct drm_gem_close* g) {
     if (!g) return -22;
-    // We don't actually track allocations, so this is a no-op.
     return 0;
 }
 
 static int drm_uapi_gem_mmap(struct drm_gem_mmap* m) {
     if (!m) return -22;
-    // Fake offset that user-space would mmap(). The VFS layer is
-    // responsible for resolving the offset to a real mapping.
     m->offset = (u64)m->handle * 0x1000000ULL;
     return 0;
 }
 
-// ---- Dispatcher ------------------------------------------------------
+static int drm_uapi_create_dumb(struct drm_mode_create_dumb* c) {
+    if (!c) return -22;
+
+    int slot = -1;
+    for (int i = 0; i < DRM_MAX_DUMB_BUFFERS; i++) {
+        if (!dumb_buffers[i].used) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) return -12;
+
+    u32 bpp = c->bpp;
+    if (bpp == 0) bpp = 32;
+
+    u32 pitch = (c->width * (bpp / 8) + 3) & ~3;
+    u64 size = (u64)pitch * c->height;
+    size = (size + 4095) & ~4095;
+
+    void* vaddr = kmalloc(size);
+    if (!vaddr) return -12;
+
+    memset(vaddr, 0, size);
+
+    drm_dumb_buffer_t* buf = &dumb_buffers[slot];
+    buf->handle = slot + 1;
+    buf->width = c->width;
+    buf->height = c->height;
+    buf->bpp = bpp;
+    buf->pitch = pitch;
+    buf->size = size;
+    buf->paddr = (u64)vaddr;
+    buf->vaddr = vaddr;
+    buf->used = 1;
+
+    c->handle = buf->handle;
+    c->pitch = buf->pitch;
+    c->size = buf->size;
+
+    return 0;
+}
+
+static int drm_uapi_map_dumb(struct drm_mode_map_dumb* m) {
+    if (!m) return -22;
+
+    drm_dumb_buffer_t* buf = NULL;
+    for (int i = 0; i < DRM_MAX_DUMB_BUFFERS; i++) {
+        if (dumb_buffers[i].used && dumb_buffers[i].handle == m->handle) {
+            buf = &dumb_buffers[i];
+            break;
+        }
+    }
+    if (!buf) return -2;
+
+    m->offset = (u64)buf->handle * 0x1000000ULL;
+    return 0;
+}
+
+static int drm_uapi_destroy_dumb(struct drm_mode_destroy_dumb* d) {
+    if (!d) return -22;
+
+    for (int i = 0; i < DRM_MAX_DUMB_BUFFERS; i++) {
+        if (dumb_buffers[i].used && dumb_buffers[i].handle == d->handle) {
+            kfree(dumb_buffers[i].vaddr);
+            dumb_buffers[i].used = 0;
+            return 0;
+        }
+    }
+    return -2;
+}
 
 int drm_ioctl(unsigned int cmd, unsigned long arg) {
-    if (!drm_uapi_ready()) return -19; // -ENODEV
+    if (!drm_uapi_ready()) return -19;
 
     void* a = (void*)arg;
     switch (cmd) {
@@ -643,15 +741,21 @@ int drm_ioctl(unsigned int cmd, unsigned long arg) {
         case DRM_IOCTL_GET_CAP:               return drm_uapi_get_cap((struct drm_get_cap*)a);
         case DRM_IOCTL_MODE_GETRESOURCES:     return drm_uapi_get_resources((struct drm_mode_card_res*)a);
         case DRM_IOCTL_MODE_GETCRTC:          return drm_uapi_get_crtc((struct drm_mode_crtc*)a);
+        case DRM_IOCTL_MODE_SETCRTC:          return drm_uapi_set_crtc((struct drm_mode_crtc*)a);
+        case DRM_IOCTL_MODE_GETENCODER:       return drm_uapi_get_encoder((struct drm_mode_get_encoder*)a);
         case DRM_IOCTL_MODE_GETCONNECTOR:     return drm_uapi_get_connector((struct drm_mode_get_connector*)a);
         case DRM_IOCTL_MODE_GETFB:            return drm_uapi_get_fb((struct drm_mode_fb_cmd*)a);
         case DRM_IOCTL_MODE_ADDFB:            return drm_uapi_add_fb((struct drm_mode_fb_cmd*)a);
-        case DRM_IOCTL_MODE_RMFB:             return drm_uapi_rm_fb((struct drm_mode_fb_cmd*)a);
+        case DRM_IOCTL_MODE_ADDFB2:           return drm_uapi_add_fb2((struct drm_mode_fb_cmd2*)a);
+        case DRM_IOCTL_MODE_RMFB:             return drm_uapi_rm_fb((unsigned int*)a);
         case DRM_IOCTL_MODE_GETPLANERESOURCES:return drm_uapi_get_planes((struct drm_mode_get_plane_res*)a);
         case DRM_IOCTL_GEM_CREATE:            return drm_uapi_gem_create((struct drm_gem_create*)a);
         case DRM_IOCTL_GEM_CLOSE:             return drm_uapi_gem_close((struct drm_gem_close*)a);
         case DRM_IOCTL_GEM_MMAP:              return drm_uapi_gem_mmap((struct drm_gem_mmap*)a);
-        default:                              return -25; // -ENOTTY
+        case DRM_IOCTL_MODE_CREATE_DUMB:      return drm_uapi_create_dumb((struct drm_mode_create_dumb*)a);
+        case DRM_IOCTL_MODE_MAP_DUMB:         return drm_uapi_map_dumb((struct drm_mode_map_dumb*)a);
+        case DRM_IOCTL_MODE_DESTROY_DUMB:     return drm_uapi_destroy_dumb((struct drm_mode_destroy_dumb*)a);
+        default:                              return -25;
     }
 }
 
@@ -660,12 +764,17 @@ u64 drm_mmap_fb(u64 offset, u64 size) {
     if (offset == 0) {
         return drm_dev.primary_fb.paddr;
     }
+
+    u32 handle = (u32)(offset / 0x1000000ULL);
+    if (handle > 0 && handle <= DRM_MAX_DUMB_BUFFERS) {
+        int idx = handle - 1;
+        if (dumb_buffers[idx].used) {
+            return dumb_buffers[idx].paddr;
+        }
+    }
     return 0;
 }
 
-// drivers/drm.c — добавить в конец перед module glue
-
-// UEFI GOP GUID
 #define EFI_GOP_GUID { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } }
 
 typedef struct {
@@ -705,11 +814,6 @@ typedef struct {
     efi_gop_mode_t *mode;
 } __attribute__((packed)) efi_gop_t;
 
-static int efi_guid_equals(efi_guid_t *a, efi_guid_t *b) {
-    u32 *pa = (u32*)a, *pb = (u32*)b;
-    return pa[0] == pb[0] && pa[1] == pb[1] && pa[2] == pb[2] && pa[3] == pb[3];
-}
-
 static inline void outb(u16 port, u8 val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
@@ -737,7 +841,6 @@ void drm_parse_multiboot(u64 mb_info) {
         if (type == 0 || size == 0) break;
 
         if (type == 8) {
-            // Multiboot2 framebuffer tag (BIOS/legacy)
             drm_set_framebuffer(*(u64*)(ptr + 8), *(u32*)(ptr + 20),
                                 *(u32*)(ptr + 24), *(u32*)(ptr + 16),
                                 *(u8*)(ptr + 28));
@@ -746,7 +849,6 @@ void drm_parse_multiboot(u64 mb_info) {
         }
 
         if (type == 12) {
-            // EFI boot services pointer
             bs = (efi_boot_services_t*)*(u64*)(ptr + 8);
         }
 
@@ -756,12 +858,7 @@ void drm_parse_multiboot(u64 mb_info) {
     if (found_fb) return;
 
     if (bs) {
-        // Try GOP via EFI
-        efi_gop_t *gop = NULL;
         u64 gop_ptr = 0;
-
-        // Call bs->locate_protocol(&gop_guid, NULL, &gop_ptr)
-        // EFI calling convention: rcx=arg1, rdx=arg2, r8=arg3
         u64 fn = bs->locate_protocol;
         if (fn) {
             __asm__ volatile (
@@ -776,16 +873,14 @@ void drm_parse_multiboot(u64 mb_info) {
         }
 
         if (gop_ptr) {
-            gop = *(efi_gop_t**)gop_ptr;
+            efi_gop_t *gop = *(efi_gop_t**)gop_ptr;
             if (gop && gop->mode && gop->mode->info) {
                 efi_gop_mode_info_t *info = (efi_gop_mode_info_t*)gop->mode->info;
-                // Get framebuffer base from mode info
                 u64 fb_addr = *(u64*)((u8*)info + sizeof(efi_gop_mode_info_t));
-                u32 fb_size = *(u32*)((u8*)info + sizeof(efi_gop_mode_info_t) + 8);
                 u32 width = info->width;
                 u32 height = info->height;
                 u32 pixels_per_scanline = info->pixels_per_scanline;
-                u32 pitch = pixels_per_scanline * 4;  // assume 32bpp
+                u32 pitch = pixels_per_scanline * 4;
 
                 drm_set_framebuffer(fb_addr, width, height, pitch, 32);
                 return;
@@ -793,13 +888,8 @@ void drm_parse_multiboot(u64 mb_info) {
         }
     }
 
-    // Fallback
     drm_set_framebuffer(0xFD000000, 1024, 768, 4096, 32);
 }
-
-// =====================================================================
-// Module glue (matches the convention in module.h / old vesa.c)
-// =====================================================================
 
 static const char __drm_name[] __attribute__((section(".module_name"))) = "drm";
 static int (*__drm_entry)(void) __attribute__((section(".module_entry"))) = drm_init;

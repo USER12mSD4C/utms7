@@ -37,5 +37,7 @@ int timer_init(void);
 u32 get_ticks(void);
 u32 get_seconds(void);
 void idt_get_info(u16 *limit, u64 *base);
+struct interrupt_frame;
+void exception_handler_c(int error_code, int num);
 
 #endif

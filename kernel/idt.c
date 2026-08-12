@@ -1,4 +1,4 @@
-// файл: kernel/idt.c
+//kernel/idt.c
 #include "idt.h"
 #include "../include/io.h"
 #include "../include/string.h"
@@ -6,6 +6,8 @@
 #include "gdt.h"
 #include "sched.h"
 #include "../drivers/drm.h"
+#include "memory.h"
+#include "paging.h"
 
 #define IDT_ENTRIES 256
 #define IDT_INTERRUPT_GATE 0x8E
@@ -101,7 +103,6 @@ void irq_mask(int irq) {
     outb(port, value);
 }
 
-// Упрощенный обработчик исключений - использует аргументы функции
 void exception_handler_c(int error_code, int num) {
     __asm__ volatile ("cli");
     print_setcolor(0x4F, 0);
@@ -111,55 +112,6 @@ void exception_handler_c(int error_code, int num) {
     print(" err=");
     printhex(error_code);
     print("\n\n");
-
-    // Получаем указатель на фрейм из текущего RSP
-    // После SAVE_REGS в isr_common: RSP указывает на начало структуры (rax)
-    u64 *frame = (u64 *)__builtin_frame_address(0);
-    // frame[0] = rbp сохраненный
-    // Но нам нужно получить значения из SAVE_REGS которые лежат на стеке
-
-    u64 saved_rax, saved_rbx, saved_rcx, saved_rdx, saved_rsi, saved_rdi, saved_rbp;
-    u64 saved_r8, saved_r9, saved_r10, saved_r11, saved_r12, saved_r13, saved_r14, saved_r15;
-    u64 saved_rip, saved_cs, saved_rflags, saved_rsp, saved_ss;
-
-    // Ищем сохраненные регистры относительно RSP
-    // После всех push в isr_common, RSP указывает на rax
-    __asm__ volatile("mov %%rsp, %0" : "=r"(frame));
-
-    saved_rax = frame[0];   // +0
-    saved_rbx = frame[1];   // +8
-    saved_rcx = frame[2];   // +16
-    saved_rdx = frame[3];   // +24
-    saved_rsi = frame[4];   // +32
-    saved_rdi = frame[5];   // +40
-    saved_rbp = frame[6];   // +48
-    saved_r8  = frame[7];   // +56
-    saved_r9  = frame[8];   // +64
-    saved_r10 = frame[9];   // +72
-    saved_r11 = frame[10];  // +80
-    saved_r12 = frame[11];  // +88
-    saved_r13 = frame[12];  // +96
-    saved_r14 = frame[13];  // +104
-    saved_r15 = frame[14];  // +112
-    // error_code = frame[15]  // +120
-    // vector     = frame[16]  // +128
-    saved_rip    = frame[17]; // +136
-    saved_cs     = frame[18]; // +144
-    saved_rflags = frame[19]; // +152
-    saved_rsp    = frame[20]; // +160
-    saved_ss     = frame[21]; // +168
-
-    print("RAX="); printhex(saved_rax); print("\n");
-    print("RBX="); printhex(saved_rbx); print("  RCX="); printhex(saved_rcx); print("\n");
-    print("RDX="); printhex(saved_rdx); print("  RSI="); printhex(saved_rsi); print("\n");
-    print("RDI="); printhex(saved_rdi); print("  RBP="); printhex(saved_rbp); print("\n");
-    print("R8 ="); printhex(saved_r8);  print("  R9 ="); printhex(saved_r9);  print("\n");
-    print("R10="); printhex(saved_r10); print("  R11="); printhex(saved_r11); print("\n");
-    print("R12="); printhex(saved_r12); print("  R13="); printhex(saved_r13); print("\n");
-    print("R14="); printhex(saved_r14); print("  R15="); printhex(saved_r15); print("\n\n");
-    print("RIP="); printhex(saved_rip); print("  CS="); printhex(saved_cs); print("\n");
-    print("RFL="); printhex(saved_rflags); print("  RSP="); printhex(saved_rsp); print("\n");
-    print("SS ="); printhex(saved_ss); print("\n");
 
     while(1) {
         __asm__ volatile("cli; hlt");
@@ -252,7 +204,7 @@ int idt_init(void) {
     for (int i = 0; i < 16; i++) irq_mask(i);
 
     idt_register_irq(0, irq0_handler_c);
-    //idt_register_irq(1, irq1_handler_c);
+    idt_register_irq(1, irq1_handler_c);
     idt_register_irq(2, irq2_handler_c);
     idt_register_irq(3, irq3_handler_c);
     idt_register_irq(4, irq4_handler_c);

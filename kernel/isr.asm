@@ -67,16 +67,13 @@ isr_wrapper%1:
 
 isr_common:
     SAVE_REGS
-    mov rdi, [rsp + 120]  ; error_code (первый аргумент)
-    mov rsi, [rsp + 128]  ; vector (второй аргумент)
+    mov rdi, [rsp + 128]  ; error_code (первый аргумент)
+    mov rsi, [rsp + 120]  ; vector (второй аргумент)
     call exception_handler_c
     RESTORE_REGS
     add rsp, 16
     iretq
 
-; === ОБРАБОТЧИКИ IRQ ===
-
-; Макрос для IRQ 0-7 (мастер PIC)
 %macro IRQ_MASTER 2
 global irq%1
 irq%1:
@@ -200,3 +197,6 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_ERRCODE   30
 ISR_NOERRCODE 31
+
+section .note.GNU-stack noalloc noexec nowrite progbits
+default rel

@@ -4,7 +4,6 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-// Номера syscall
 #define SYS_exit        0
 #define SYS_read        1
 #define SYS_write       2
@@ -40,13 +39,12 @@
 #define SYS_gettime     52
 #define SYS_fork        57
 #define SYS_gethostbyname 47
-#define SYS_ioctl 58
+#define SYS_ioctl       27
 
 int ioctl(int fd, unsigned long request, void *arg) {
     return syscall(SYS_ioctl, fd, (long)request, (long)arg, 0, 0, 0);
 }
 
-// Системные вызовы
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     register long rax __asm__("rax") = num;
     register long rdi __asm__("rdi") = a1;
@@ -64,7 +62,6 @@ long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     return rax;
 }
 
-// ==================== STDIO ====================
 int open(const char *path, int flags, ...) {
     int mode = 0;
     if (flags & 0x40) {
@@ -108,7 +105,6 @@ int dup2(int oldfd, int newfd) {
     return syscall(SYS_dup2, oldfd, newfd, 0, 0, 0, 0);
 }
 
-// ==================== ФАЙЛОВАЯ СИСТЕМА ====================
 int mkdir(const char *path, int mode) {
     return syscall(SYS_mkdir, (long)path, mode, 0, 0, 0, 0);
 }
@@ -138,33 +134,28 @@ int readdir(const char *path, struct dirent *entries, int *count) {
     return syscall(SYS_readdir, (long)path, (long)entries, (long)count, 0, 0, 0);
 }
 
-// ==================== ПАМЯТЬ ====================
 typedef struct block_header {
     size_t size;
     struct block_header *next;
     int free;
 } block_header_t;
 
-#define HEAP_START 0x60000000
 #define BLOCK_ALIGN 8
 
 static block_header_t *free_list = NULL;
-static void *heap_brk = (void*)HEAP_START;
+static void *heap_brk = NULL;
 
 static void *sbrk(size_t size) {
+    if (heap_brk == NULL) {
+        long current_brk = syscall(SYS_brk, 0, 0, 0, 0, 0, 0);
+        if (current_brk == -1) return (void*)-1;
+        heap_brk = (void*)current_brk;
+    }
     void *old = heap_brk;
     long res = syscall(SYS_brk, (long)heap_brk + size, 0, 0, 0, 0, 0);
     if (res == -1) return (void*)-1;
     heap_brk = (void*)((char*)heap_brk + size);
     return old;
-}
-
-static void *align_ptr(void *ptr) {
-    uintptr_t addr = (uintptr_t)ptr;
-    if (addr & (BLOCK_ALIGN - 1)) {
-        addr += BLOCK_ALIGN - (addr & (BLOCK_ALIGN - 1));
-    }
-    return (void*)addr;
 }
 
 void *malloc(size_t size) {
@@ -221,16 +212,18 @@ void *realloc(void *ptr, size_t size) {
         return NULL;
     }
 
+    size_t aligned_size = (size + BLOCK_ALIGN - 1) & ~(BLOCK_ALIGN - 1);
+    size_t total = aligned_size + sizeof(block_header_t);
+
     block_header_t *block = (block_header_t*)((char*)ptr - sizeof(block_header_t));
-    if (block->size >= size + sizeof(block_header_t)) {
-        if (block->size >= size + sizeof(block_header_t) + BLOCK_ALIGN) {
-            size_t new_total = size + sizeof(block_header_t);
-            block_header_t *new = (block_header_t*)((char*)block + new_total);
-            new->size = block->size - new_total;
+    if (block->size >= total) {
+        if (block->size >= total + sizeof(block_header_t) + BLOCK_ALIGN) {
+            block_header_t *new = (block_header_t*)((char*)block + total);
+            new->size = block->size - total;
             new->next = block->next;
             new->free = 1;
             block->next = new;
-            block->size = new_total;
+            block->size = total;
         }
         return ptr;
     }
@@ -259,7 +252,6 @@ void free(void *ptr) {
     }
 }
 
-// ==================== PRINTF ====================
 int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
     char *start = str;
     const char *p = fmt;
@@ -367,7 +359,6 @@ int printf(const char *fmt, ...) {
     return len;
 }
 
-// ==================== ПРОЦЕССЫ ====================
 int fork(void) {
     return syscall(SYS_fork, 0, 0, 0, 0, 0, 0);
 }
@@ -406,7 +397,6 @@ int kill(int pid, int sig) {
     return syscall(SYS_kill, pid, sig, 0, 0, 0, 0);
 }
 
-// ==================== ОКРУЖЕНИЕ ====================
 #define ENV_SIZE 64
 static char *environment[ENV_SIZE] = { NULL };
 static int env_count = 0;
@@ -473,7 +463,6 @@ void unsetenv(const char *name) {
     }
 }
 
-// ==================== ВРЕМЯ ====================
 unsigned int time(void) {
     return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0) / 1000;
 }
@@ -482,7 +471,6 @@ unsigned int get_ticks_libc(void) {
     return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0);
 }
 
-// ==================== СЕТЬ ====================
 int socket(int domain, int type, int protocol) {
     return syscall(SYS_socket, domain, type, protocol, 0, 0, 0);
 }

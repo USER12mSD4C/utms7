@@ -24,3 +24,5 @@ gdt_flush:
     mov gs, ax
     mov ss, ax
     ret
+
+section .note.GNU-stack noalloc noexec nowrite progbits
