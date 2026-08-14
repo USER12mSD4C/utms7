@@ -137,3 +137,59 @@ void kfree(void* ptr) {
 
 u64 memory_used(void) { return used_memory; }
 u64 memory_free(void) { return total_memory - used_memory; }
+
+#define PMM_PAGE_SIZE 4096
+
+static u8* pmm_bitmap = NULL;
+static u64 pmm_base = 0;
+static u64 pmm_total = 0;
+static u64 pmm_cursor = 0;
+
+void pmm_init_region(u64 base, u64 size) {
+    if (pmm_bitmap) return;
+
+    u64 b = (base + PMM_PAGE_SIZE - 1) & ~(u64)(PMM_PAGE_SIZE - 1);
+    u64 e = (base + size) & ~(u64)(PMM_PAGE_SIZE - 1);
+    if (e <= b) return;
+
+    u64 pages = (e - b) / PMM_PAGE_SIZE;
+    u64 bitmap_bytes = (pages + 7) / 8;
+    u64 bitmap_pages = (bitmap_bytes + PMM_PAGE_SIZE - 1) / PMM_PAGE_SIZE;
+    if (pages <= bitmap_pages + 1) return;
+
+    pmm_bitmap = (u8*)b;
+    memset(pmm_bitmap, 0, bitmap_pages * PMM_PAGE_SIZE);
+    pmm_base = b + bitmap_pages * PMM_PAGE_SIZE;
+    pmm_total = pages - bitmap_pages;
+    pmm_cursor = 0;
+}
+
+void* pmm_alloc_page(void) {
+    if (!pmm_bitmap) return NULL;
+    for (u64 i = 0; i < pmm_total; i++) {
+        u64 idx = (pmm_cursor + i) % pmm_total;
+        u64 byte = idx / 8;
+        u8 bit = (u8)(1 << (idx % 8));
+        if (!(pmm_bitmap[byte] & bit)) {
+            pmm_bitmap[byte] |= bit;
+            pmm_cursor = (idx + 1) % pmm_total;
+            void* p = (void*)(pmm_base + idx * PMM_PAGE_SIZE);
+            memset(p, 0, PMM_PAGE_SIZE);
+            return p;
+        }
+    }
+    return NULL;
+}
+
+void pmm_free_page(void* ptr) {
+    if (!pmm_bitmap || !ptr) return;
+    u64 addr = (u64)ptr;
+    if (addr < pmm_base) return;
+    u64 idx = (addr - pmm_base) / PMM_PAGE_SIZE;
+    if (idx >= pmm_total) return;
+    u64 byte = idx / 8;
+    u8 bit = (u8)(1 << (idx % 8));
+    if (pmm_bitmap[byte] & bit) {
+        pmm_bitmap[byte] &= (u8)~bit;
+    }
+}

@@ -7,27 +7,24 @@ extern __bss_end
 section .multiboot2
 align 8
 header_start:
-    dd 0xe85250d6          ; magic
-    dd 0                   ; architecture
+    dd 0xe85250d6
+    dd 0
     dd header_end - header_start
     dd 0x100000000 - (0xe85250d6 + 0 + (header_end - header_start))
 
-    ; Тег фреймбуфера (type=5) — ЗАПРОС ГРАФИЧЕСКОГО РЕЖИМА
     align 8
-    dw 5                   ; type = MULTIBOOT2_TAG_FRAMEBUFFER
-    dw 0                   ; flags
-    dd 20                  ; size
-    dd 1024                ; width
-    dd 768                 ; height
-    dd 32                  ; bpp
+    dw 5
+    dw 0
+    dd 20
+    dd 1024
+    dd 768
+    dd 32
 
-    ; Тег запроса карты памяти (type=6)
     align 8
-    dw 6                   ; type = MULTIBOOT2_TAG_MMAP
+    dw 6
     dw 0
     dd 8
 
-    ; Тег конца
     align 8
     dw 0
     dw 0
@@ -56,7 +53,7 @@ _start:
     xor eax, eax
     rep stosb
 
-    mov [REL multiboot_info], esi
+    mov [multiboot_info], esi
 
     ; Setup paging
     mov edi, 0x1000
@@ -84,6 +81,7 @@ _start:
     or eax, 3
     mov [edi], eax
 
+    ; Identity map first 1GB
     mov edi, 0x3000
     mov eax, 0x83
     mov ecx, 512
@@ -93,6 +91,7 @@ _start:
     add edi, 8
     loop .map_pd
 
+    ; Higher-half mapping (0xFFFF FF80 0000 0000)
     mov edi, 0x5000
     mov eax, 0x83
     mov ecx, 512
@@ -102,20 +101,18 @@ _start:
     add edi, 8
     loop .map_pd2
 
-    mov edi, 0x5000
-    mov eax, 0xFD000000
-    or eax, 0x83
-    mov [edi + 0x3F40], eax
-
+    ; Enable PAE
     mov eax, cr4
     or eax, 1 << 5
     mov cr4, eax
 
+    ; Enable Long Mode
     mov ecx, 0xC0000080
     rdmsr
     or eax, 1 << 8
     wrmsr
 
+    ; Enable Paging
     mov eax, cr0
     or eax, 0x80000001
     mov cr0, eax
@@ -123,7 +120,9 @@ _start:
     lgdt [temp_gdt_ptr]
     jmp 0x08:start64
 
-bits 64
+[bits 64]
+default rel
+
 start64:
     cli
     mov ax, 0x10
@@ -139,9 +138,10 @@ start64:
     mov rdi, [multiboot_info]
     call kernel_main
 
+.halt:
     cli
     hlt
-    jmp $
+    jmp .halt
 
 section .data
 align 16
@@ -151,7 +151,6 @@ temp_gdt:
     dq 0x00cf92000000ffff
 temp_gdt_ptr:
     dw $ - temp_gdt - 1
-    dq temp_gdt
+    dd temp_gdt
 
 section .note.GNU-stack noalloc noexec nowrite progbits
-default rel

@@ -70,7 +70,7 @@ tools/mkmod: tools/mkmod.c
 	gcc -o tools/mkmod tools/mkmod.c
 eoc
 
-CORE = kernel/kernel.o kernel/kinit.o kernel/elf.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o
+CORE = kernel/kernel.o kernel/kinit.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o
 ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/gdt_flush.o
 DRV = drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
@@ -86,11 +86,10 @@ kernel.bin: $(ALL)
 eoc
 
 init.bin: apps/init.o lib/libc.o lib/string.o
-	$(LD) -m elf_x86_64 -Ttext 0x400000 -e main -nostdlib -o init.bin apps/init.o lib/libc.o lib/string.o
+	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e main -nostdlib -o init.bin apps/init.o lib/libc.o lib/string.o
 eoc
-
 sh.bin: apps/sh.o lib/libc.o lib/string.o
-	$(LD) -m elf_x86_64 -Ttext 0x400000 -e main -nostdlib -o sh.bin apps/sh.o lib/libc.o lib/string.o
+	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e main -nostdlib -o sh.bin apps/sh.o lib/libc.o lib/string.o
 eoc
 
 kom: tools/mkmod
@@ -114,7 +113,7 @@ iso: kernel.bin init.bin sh.bin kom
 	sh -c 'echo "    module2 /modules/sh.bin sh" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "}" >> iso/boot/grub/grub.cfg'
-	grub-mkrescue -o utms.iso iso/
+	grub2-mkrescue -o utms.iso iso/
 eoc
 
 disk1g.img:
@@ -175,7 +174,7 @@ eoc
 
 clean:
 	echo " CLEANING "
-	rm -rf *.o */*.o *.bin *.iso iso/ modules/ tools/mkmod init.bin sh.bin
+	rm -rf kernel/*.o kernel/*.d drivers/*.o drivers/*.d adders/*.o adders/*.d apps/*.o apps/*.d commands/*.o commands/*.d *.bin *.iso iso/ modules/ tools/mkmod init.bin sh.bin
 	+flags:
 		-fg(all):
 			echo "[ALL] Full clean with disks..."

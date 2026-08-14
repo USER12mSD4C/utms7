@@ -748,6 +748,11 @@ static long sys_clone(trap_frame_t* frame, long rip, long rsp, long a3, long a4,
     return sched_clone((u64)rip, (u64)rsp);
 }
 
+static long sys_fork(trap_frame_t* frame, long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    return sched_clone(frame->rip, frame->rsp);
+}
+
 static long sys_dup(trap_frame_t* frame, long oldfd, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
@@ -814,6 +819,7 @@ int syscall_init(void) {
     syscall_table[26] = sys_dup2;
     syscall_table[27] = sys_ioctl;
     syscall_table[28] = sys_clone;
+    syscall_table[57] = sys_fork;
     syscall_table[30] = sys_disk_list;
     syscall_table[37] = sys_partition_mount;
     syscall_table[38] = sys_partition_umount;

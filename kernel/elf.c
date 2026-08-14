@@ -5,6 +5,8 @@
 #include "paging.h"
 #include "../include/string.h"
 
+#define USER_LOW_LIMIT 0x40000000
+
 #define PF_X        (1 << 0)
 #define PF_W        (1 << 1)
 #define PF_R        (1 << 2)
@@ -55,6 +57,7 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
         if (ph->type != PT_LOAD) continue;
 
         u64 vaddr = (hdr->type == ET_DYN) ? ph->vaddr + base : ph->vaddr;
+        if (vaddr < USER_LOW_LIMIT) return 0;
         u64 memsz = ph->memsz;
         u64 filesz = ph->filesz;
 
@@ -70,7 +73,7 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
 
         for (u64 j = 0; j < pages; j++) {
             u64 virt = start_page + j * 4096;
-            u64 phys = (u64)kmalloc(4096);
+            u64 phys = (u64)pmm_alloc_page();
 
             if (!phys) {
                 if (old_cr3 != (u64)pml4) {
@@ -83,7 +86,7 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
             if (ph->flags & PF_W) flags |= PAGE_WRITABLE;
 
             if (paging_map_for_process(pml4, phys, virt, flags) != 0) {
-                kfree((void*)phys);
+                pmm_free_page((void*)phys);
                 if (old_cr3 != (u64)pml4) {
                     __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
                 }
@@ -136,23 +139,20 @@ int elf_load_current(u8 *data, u32 size, process_t *p) {
     u64 user_stack_top = 0x7FFFFFFFF000;
     u64 stack_pages = 16;
     for (u64 i = 0; i < stack_pages; i++) {
-        u64 phys = (u64)kmalloc(4096);
+        u64 phys = (u64)pmm_alloc_page();
         if (!phys) {
             free_address_space(pml4);
             return -1;
         }
         u64 virt = user_stack_top - (stack_pages - i) * 4096;
         if (paging_map_for_process(pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
-            kfree((void*)phys);
+            pmm_free_page((void*)phys);
             free_address_space(pml4);
             return -1;
         }
     }
 
-    if (p->cr3 && p->cr3 != (u64)0x1000) {
-        free_address_space((u64*)p->cr3);
-    }
-
+    u64 old_as = p->cr3;
     p->cr3 = (u64)pml4;
     p->user_rip = entry;
 
@@ -187,6 +187,9 @@ int elf_load_current(u8 *data, u32 size, process_t *p) {
     rsp = push_to_user_stack(pml4, rsp, &argc, sizeof(u64));
 
     p->user_rsp = rsp;
-
+    if (old_as && old_as != (u64)0x1000) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(pml4) : "memory");
+        free_address_space((u64*)old_as);
+    }
     return 0;
 }

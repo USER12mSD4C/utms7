@@ -66,13 +66,17 @@ isr_wrapper%1:
 %endmacro
 
 isr_common:
-    SAVE_REGS
-    mov rdi, [rsp + 128]  ; error_code (первый аргумент)
-    mov rsi, [rsp + 120]  ; vector (второй аргумент)
-    call exception_handler_c
-    RESTORE_REGS
-    add rsp, 16
-    iretq
+SAVE_REGS
+mov rdi, [rsp + 128]
+mov rsi, [rsp + 120]
+mov rdx, cr2
+mov rcx, [rsp + 136]
+mov r8, [rsp + 144]
+mov r9, [rsp + 160]
+call exception_handler_c
+RESTORE_REGS
+add rsp, 16
+iretq
 
 %macro IRQ_MASTER 2
 global irq%1

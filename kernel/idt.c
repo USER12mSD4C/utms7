@@ -103,15 +103,47 @@ void irq_mask(int irq) {
     outb(port, value);
 }
 
-void exception_handler_c(int error_code, int num) {
+void exception_handler_c(int error_code, int num, u64 cr2, u64 rip, u64 cs, u64 rsp) {
     __asm__ volatile ("cli");
     print_setcolor(0x4F, 0);
-    print_clear();
+
     print("EXCEPTION: ");
     printnum(num);
     print(" err=");
     printhex(error_code);
-    print("\n\n");
+    print(" cr2=");
+    printhex(cr2);
+    print(" rip=");
+    printhex(rip);
+    print(" cs=");
+    printhex(cs);
+    print(" rsp=");
+    printhex(rsp);
+    print(" rdi=");
+    long long can = (long long)rsp >> 47;
+    if (can == 0 || can == -1) {
+        printhex(*(u64*)(rsp - 136));
+    } else {
+        printhex(0);
+    }
+    print("\n");
+
+    extern u64 __text_start;
+    extern u64 __text_end;
+    if (can == 0 || can == -1) {
+        u64* sp = (u64*)(rsp & ~7ULL);
+        print("trace:");
+        int printed = 0;
+        for (int i = 0; i < 256 && printed < 16; i++) {
+            u64 v = sp[i];
+            if (v > (u64)&__text_start && v < (u64)&__text_end) {
+                print(" ");
+                printhex(v);
+                printed++;
+            }
+        }
+        print("\n");
+    }
 
     while(1) {
         __asm__ volatile("cli; hlt");
@@ -119,7 +151,10 @@ void exception_handler_c(int error_code, int num) {
 }
 
 // Обработчики IRQ
-static void irq0_handler_c(void) { system_ticks++; }
+static void irq0_handler_c(void) {
+    outb(0xE9, 'I');
+    system_ticks++;
+}
 static void irq1_handler_c(void) { inb(0x60); }
 static void irq2_handler_c(void) {}
 static void irq3_handler_c(void) {}
@@ -152,6 +187,7 @@ int idt_init(void) {
     idt_set_gate(6,  (u64)isr_wrapper6,  __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(7,  (u64)isr_wrapper7,  __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(8,  (u64)isr_wrapper8,  __KERNEL_CS, IDT_INTERRUPT_GATE);
+    idt[8].ist = 1;
     idt_set_gate(9,  (u64)isr_wrapper9,  __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(10, (u64)isr_wrapper10, __KERNEL_CS, IDT_INTERRUPT_GATE);
     idt_set_gate(11, (u64)isr_wrapper11, __KERNEL_CS, IDT_INTERRUPT_GATE);

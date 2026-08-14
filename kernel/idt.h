@@ -38,6 +38,6 @@ u32 get_ticks(void);
 u32 get_seconds(void);
 void idt_get_info(u16 *limit, u64 *base);
 struct interrupt_frame;
-void exception_handler_c(int error_code, int num);
+void exception_handler_c(int error_code, int num, u64 cr2, u64 rip, u64 cs, u64 rsp);
 
 #endif

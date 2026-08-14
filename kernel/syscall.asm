@@ -12,7 +12,7 @@ syscall_entry:
     swapgs
     mov [rel user_stack_temp], rsp
     mov rsp, [rel kernel_stack_temp]
-
+    sti
     push qword [rel user_stack_temp]
     push r11
     push rcx

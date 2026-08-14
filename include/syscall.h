@@ -39,7 +39,7 @@
 #define SYS_send        45
 #define SYS_recv        46
 #define SYS_gethostbyname 47
-#define SYS_ioctl 58
+#define SYS_ioctl 27
 
 // Информационные
 #define SYS_meminfo     50

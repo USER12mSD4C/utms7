@@ -3,6 +3,7 @@
 #include "drm.h"
 #include "../include/string.h"
 #include "../include/font.h"
+#include "../include/io.h"
 #include "../kernel/paging.h"
 #include "../kernel/memory.h"
 
@@ -248,6 +249,8 @@ void drm_draw_string(const char* s, u32 x, u32 y, u8 r, u8 g, u8 b) {
 }
 
 u32 drm_get_width (void) { return drm_dev.primary_fb.width;  }
+u64 drm_fb_phys(void) { return drm_dev.primary_fb.paddr; }
+u64 drm_fb_size(void) { return drm_dev.primary_fb.size; }
 u32 drm_get_height(void) { return drm_dev.primary_fb.height; }
 
 static void scroll_one(void) {
@@ -269,7 +272,15 @@ static void scroll_one(void) {
     }
 }
 
+static inline void serial_putchar(char c) {
+    if (c == '\n') {
+        outb(0x3F8, '\r');
+    }
+    outb(0x3F8, (u8)c);
+}
+
 static void console_putchar(char c) {
+    serial_putchar(c);
     if (!drm_dev.initialized) return;
 
     if (c == '\n') {
@@ -813,10 +824,6 @@ typedef struct {
     u64 query_mode; u64 set_mode; u64 blt;
     efi_gop_mode_t *mode;
 } __attribute__((packed)) efi_gop_t;
-
-static inline void outb(u16 port, u8 val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
 
 void drm_parse_multiboot(u64 mb_info) {
     outb(0x3F8, 'D');

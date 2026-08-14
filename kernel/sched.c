@@ -22,8 +22,10 @@ extern int ufs_ismounted(void);
 extern int ufs_read(const char* path, u8** buf, u32* size);
 extern int shell_start_thread(void);
 extern u64* create_address_space(void);
+extern u64* copy_address_space(u64* src_pml4);
 extern void free_address_space(u64* pml4);
 extern u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr);
+extern u64 binfmt_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr);
 extern int paging_map_for_process(u64* pml4, u64 phys_addr, u64 virt_addr, u64 flags);
 
 static process_t processes[MAX_PROCESSES] __attribute__((aligned(16)));
@@ -98,6 +100,7 @@ static process_t* dequeue_ready(void) {
 }
 
 u64 sched_do_switch(struct interrupt_frame *frame) {
+    outb(0xE9, 'S');
     if (!sched_initialized) return (u64)frame;
     if (!current) return (u64)frame;
 
@@ -195,12 +198,11 @@ static void idle_loop(void) {
 }
 
 static void pit_handler(void) {
+    outb(0xE9, 'T'); // Маячок: pit_handler вызван
     pit_ticks++;
-
     if (!sched_initialized) {
         return;
     }
-
     sched_tick();
 }
 
@@ -558,7 +560,17 @@ int sched_clone(u64 user_rip, u64 user_rsp) {
     strcat(child->name, "_th");
     child->state = PROC_READY;
     child->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
-    child->cr3 = parent->cr3;
+    if (parent->cr3 == (u64)0x1000) {
+        child->cr3 = parent->cr3;
+    } else {
+        u64* cas = copy_address_space((u64*)parent->cr3);
+        if (!cas) {
+            child->state = PROC_UNUSED;
+            __asm__ volatile ("sti");
+            return -1;
+        }
+        child->cr3 = (u64)cas;
+    }
     child->heap_start = parent->heap_start;
     child->heap_end = parent->heap_end;
     child->user_rip = user_rip;
@@ -648,8 +660,20 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
     p->cr3 = (u64)pml4;
 
     u64 max_vaddr = 0;
-    u64 entry = elf_load(elf_data, elf_size, pml4, &max_vaddr);
+    u64 entry = binfmt_load(elf_data, elf_size, pml4, &max_vaddr);
     if (entry == 0) {
+        print("DBG pml4=");
+        printhex((u64)pml4);
+        print("\n");
+        for (int i = 0; i < 256; i++) {
+            if (pml4[i]) {
+                print(" [");
+                printhex(i);
+                print("]=");
+                printhex(pml4[i]);
+            }
+        }
+        print("\n");
         free_address_space(pml4);
         p->state = PROC_UNUSED;
         __asm__ volatile ("sti");
@@ -662,7 +686,7 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
     u64 user_stack_top = 0x7FFFFFFFF000;
     u64 stack_pages = 8;
     for (u64 i = 0; i < stack_pages; i++) {
-        u64 phys = (u64)kmalloc(4096);
+        u64 phys = (u64)pmm_alloc_page();
         if (!phys) {
             free_address_space(pml4);
             p->state = PROC_UNUSED;

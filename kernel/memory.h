@@ -16,5 +16,8 @@ void* kmalloc(u64 size);
 void kfree(void* ptr);
 u64 memory_used(void);
 u64 memory_free(void);
+void pmm_init_region(u64 base, u64 size);
+void* pmm_alloc_page(void);
+void pmm_free_page(void* ptr);
 
 #endif

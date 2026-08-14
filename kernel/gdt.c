@@ -18,6 +18,7 @@ struct tss {
 #define GDT_SIZE 8
 static u64 gdt[GDT_SIZE] __attribute__((aligned(16)));
 static struct tss kernel_tss;
+static u8 double_fault_stack[8192] __attribute__((aligned(16)));
 
 u64 kernel_stack_temp = 0;
 u64 user_stack_temp = 0;
@@ -33,6 +34,7 @@ int gdt_init(void) {
     memset(gdt, 0, sizeof(gdt));
     memset(&kernel_tss, 0, sizeof(kernel_tss));
     kernel_tss.iomap_base = sizeof(kernel_tss);
+    kernel_tss.ist[0] = (u64)double_fault_stack + sizeof(double_fault_stack);
 
     // 0: NULL
     gdt[0] = 0;

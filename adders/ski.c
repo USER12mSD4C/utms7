@@ -1,4 +1,3 @@
-// adders/ski.c
 #include "../drivers/drm.h"
 #include "../kernel/memory.h"
 #include "../fs/ufs.h"
@@ -10,7 +9,6 @@
 #include "../include/string.h"
 #include "../kernel/paging.h"
 #include "../kernel/sched.h"
-#include "../kernel/syscall.h"
 #include "../kernel/kinit.h"
 #include "../drivers/pci.h"
 #include "../net/net.h"
@@ -43,31 +41,71 @@ static void print_num(u32 n) {
 static void init_memory_from_multiboot(u64 mb_info_addr) {
     multiboot2_info_header_t* header = (multiboot2_info_header_t*)mb_info_addr;
     multiboot2_tag_t* tag = (multiboot2_tag_t*)(header + 1);
+    u64 kend = (u64)&__bss_end;
+    u64 mod_lo = 0;
+    u64 mod_hi = 0;
+    while (tag->type != MULTIBOOT2_TAG_END) {
+        if (tag->type == 3) {
+            u64 ms = *(u32*)((u8*)tag + 8);
+            u64 me = *(u32*)((u8*)tag + 12);
+            if (mod_lo == 0 || ms < mod_lo) mod_lo = ms;
+            if (me > mod_hi) mod_hi = me;
+        }
+        tag = (multiboot2_tag_t*)((u8*)tag + ((tag->size + 7) & ~7));
+    }
 
+    const u64 low_limit = 0x40000000;
     int found = 0;
-    u64 first_start = 0, first_size = 0;
+    int pmm_done = 0;
 
+    tag = (multiboot2_tag_t*)(header + 1);
     while (tag->type != MULTIBOOT2_TAG_END) {
         if (tag->type == MULTIBOOT2_TAG_MMAP) {
             multiboot2_tag_mmap_t* mmap_tag = (multiboot2_tag_mmap_t*)tag;
             multiboot2_mmap_entry_t* entry = (multiboot2_mmap_entry_t*)(mmap_tag + 1);
             u32 entry_count = (mmap_tag->size - sizeof(multiboot2_tag_mmap_t)) / mmap_tag->entry_size;
-
             for (u32 i = 0; i < entry_count; i++) {
                 if (entry->type == MULTIBOOT2_MEMORY_AVAILABLE) {
-                    if (!found) {
-                        first_start = entry->base_addr;
-                        first_size = entry->length;
-                        found = 1;
-                        if (first_start < (u64)&__bss_end) {
-                            u64 adjust = (u64)&__bss_end - first_start;
-                            first_start = (u64)&__bss_end;
-                            if (first_size > adjust) first_size -= adjust;
-                            else first_size = 0;
+                    u64 s = entry->base_addr;
+                    u64 e = entry->base_addr + entry->length;
+                    if (e > low_limit) e = low_limit;
+                    if (s < kend) s = kend;
+                    if (e > s && mod_hi > mod_lo) {
+                        u64 p1e = (e < mod_lo) ? e : mod_lo;
+                        if (p1e > s) {
+                            if (!pmm_done) {
+                                u64 psz = (p1e - s) / 4;
+                                if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
+                                if (psz >= 16 * 1024 * 1024) {
+                                    pmm_init_region(s, psz);
+                                    s += psz;
+                                    pmm_done = 1;
+                                }
+                            }
+                            if (e > s) {
+                                if (!found) { memory_init(s, p1e - s); found = 1; }
+                                else memory_add_region(s, p1e - s);
+                            }
                         }
-                        memory_init(first_start, first_size);
-                    } else {
-                        memory_add_region(entry->base_addr, entry->length);
+                        u64 p2s = (s > mod_hi) ? s : mod_hi;
+                        if (e > p2s) {
+                            if (!found) { memory_init(p2s, e - p2s); found = 1; }
+                            else memory_add_region(p2s, e - p2s);
+                        }
+                    } else if (e > s) {
+                        if (!pmm_done) {
+                            u64 psz = (e - s) / 4;
+                            if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
+                            if (psz >= 16 * 1024 * 1024) {
+                                pmm_init_region(s, psz);
+                                s += psz;
+                                pmm_done = 1;
+                            }
+                        }
+                        if (e > s) {
+                            if (!found) { memory_init(s, e - s); found = 1; }
+                            else memory_add_region(s, e - s);
+                        }
                     }
                 }
                 entry = (multiboot2_mmap_entry_t*)((u8*)entry + mmap_tag->entry_size);
@@ -75,7 +113,6 @@ static void init_memory_from_multiboot(u64 mb_info_addr) {
         }
         tag = (multiboot2_tag_t*)((u8*)tag + ((tag->size + 7) & ~7));
     }
-
     if (!found) {
         print("[memory:FAIL] no available memory\n");
         while(1) __asm__ volatile("hlt");
@@ -86,70 +123,92 @@ void ski(u64 mb_info_addr) {
     print("ski version ");
     print(version);
     print("\n\n");
-
-    // === ЭТАП 0: GDT, IDT, TSS ===
     __asm__ volatile ("cli");
-
+    print_setcolor(0x0E, 0x00);
     print("[GDT]... ");
+    print_setcolor(0x07, 0x00);
     if (gdt_init() != 0) {
+        print_setcolor(0x04, 0x00);
         print("FAIL\n");
+        print_setcolor(0x07, 0x00);
         while(1) __asm__ volatile("hlt");
     }
+    print_setcolor(0x0A, 0x00);
     print("OK\n");
+    print_setcolor(0x07, 0x00);
 
+    print_setcolor(0x0E, 0x00);
     print("[IDT]... ");
+    print_setcolor(0x07, 0x00);
     if (idt_init() != 0) {
+        print_setcolor(0x04, 0x00);
         print("FAIL\n");
+        print_setcolor(0x07, 0x00);
         while(1) __asm__ volatile("hlt");
     }
+    print_setcolor(0x0A, 0x00);
     print("OK\n");
+    print_setcolor(0x07, 0x00);
 
     tss_init();
-    print("[TSS]... OK\n");
+    print_setcolor(0x0E, 0x00);
+    print("[TSS]... ");
+    print_setcolor(0x0A, 0x00);
+    print("OK\n");
+    print_setcolor(0x07, 0x00);
 
     __asm__ volatile ("sti");
-
-    // === ЭТАП 1: Память ===
+    print_setcolor(0x0E, 0x00);
     print("[memory]... ");
+    print_setcolor(0x07, 0x00);
     init_memory_from_multiboot(mb_info_addr);
+    print_setcolor(0x0A, 0x00);
     print("OK\n\n");
-
-    // === ЭТАП 2-7: Всё остальное из init_table.h ===
+    print_setcolor(0x07, 0x00);
     int total = 0;
     #define X(name, func, crit, ...) total++;
     #include "../kernel/init_table.h"
     #undef X
-
     int current = 0;
     #define X(name, func, crit, ...) \
         do { \
             current++; \
+            print_setcolor(0x0B, 0x00); \
             print("["); \
             print_num(current); \
             print("/"); \
             print_num(total); \
             print("] "); \
+            print_setcolor(0x07, 0x00); \
             print(name); \
-            for (int _i = 0; _i < 20 - (sizeof(name) - 1); _i++) print_char(' '); \
+            int pad = 24 - (int)(sizeof(name) - 1); \
+            for (int _i = 0; _i < pad; _i++) print_char(' '); \
             int res = func(__VA_ARGS__); \
             if (res != 0) { \
-                print("FAIL (code="); \
+                if (crit) { \
+                    print_setcolor(0x0C, 0x00); \
+                    print("CRITICAL FAIL (code="); \
+                } else { \
+                    print_setcolor(0x04, 0x00); \
+                    print("FAIL (code="); \
+                } \
                 print_num(res); \
                 print(")\n"); \
                 if (crit) { \
+                    print_setcolor(0x0C, 0x00); \
                     print("CRITICAL FAILURE, HALTING\n"); \
                     while(1) __asm__ volatile("hlt"); \
                 } \
             } else { \
+                print_setcolor(0x0A, 0x00); \
                 print("OK\n"); \
             } \
+            print_setcolor(0x07, 0x00); \
         } while(0);
     #include "../kernel/init_table.h"
     #undef X
-
     print("\nDisks found: ");
     printnum(disk_get_disk_count());
     print("\n");
-
     print("UTMS loaded\\\\\nUTMS Innovative Technologies [UIT], under UOPL_1.6.3\n\n");
 }
