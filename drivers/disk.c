@@ -48,48 +48,43 @@ static int ata_wait(u16 base, u8 bit, u8 val) {
 static int ata_identify(u16 base, u8 drive, disk_t* d) {
     u16 data[256];
 
-    // Выбираем диск
     outb(base + ATA_REG_DRIVE, drive ? 0xB0 : 0xA0);
-
-    // Обнуляем LBA регистры
     outb(base + ATA_REG_SECCOUNT, 0);
     outb(base + ATA_REG_LBA_LO, 0);
     outb(base + ATA_REG_LBA_MID, 0);
     outb(base + ATA_REG_LBA_HI, 0);
-
-    // Посылаем команду IDENTIFY
     outb(base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
 
-    // Ждем пока не BSY
+    for (volatile int i = 0; i < 1000; i++) {
+        __asm__ volatile ("nop");
+    }
+
+    u8 status = inb(base + ATA_REG_STATUS);
+    if (status == 0x00 || status == 0xFF) return -1;
+
     if (ata_wait(base, ATA_STATUS_BSY, 0) != 0) return -1;
 
-    // Проверяем статус
-    u8 status = inb(base + ATA_REG_STATUS);
-    if (!status) return -1;  // устройство не существует
+    status = inb(base + ATA_REG_STATUS);
+    if (!status) return -1;
 
-    // Читаем данные
     for (int i = 0; i < 256; i++) {
         data[i] = inw(base + ATA_REG_DATA);
     }
 
-    // Конвертируем модель (странный порядок байт в ATA)
     for (int i = 0; i < 40; i+=2) {
         d->model[i] = data[27 + i/2] >> 8;
         d->model[i+1] = data[27 + i/2] & 0xFF;
     }
     d->model[40] = '\0';
 
-    // Очищаем возможные пробелы
     for (int i = 0; i < 40; i++) {
         if (d->model[i] < 32 || d->model[i] > 126) {
             d->model[i] = ' ';
         }
     }
 
-    // Получаем размер в секторах
     d->sectors = data[60] | (data[61] << 16);
     if (d->sectors == 0) {
-        // LBA48 размер
         d->sectors = ((u64)data[100] | ((u64)data[101] << 16) |
                      ((u64)data[102] << 32) | ((u64)data[103] << 48));
     }

@@ -38,6 +38,34 @@ static void print_num(u32 n) {
     while (i-- > 0) print_char(buf[i]);
 }
 
+static void print_int(int n) {
+    if (n < 0) {
+        print_char('-');
+        print_num((u32)(-n));
+    } else {
+        print_num((u32)n);
+    }
+}
+
+static int mem_found = 0;
+static int pmm_done = 0;
+
+static void add_avail_region(u64 s, u64 e) {
+    if (e <= s) return;
+    if (!pmm_done) {
+        u64 psz = (e - s) / 4;
+        if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
+        if (psz >= 16 * 1024 * 1024) {
+            pmm_init_region(s, psz);
+            s += psz;
+            pmm_done = 1;
+        }
+    }
+    if (e <= s) return;
+    if (!mem_found) { memory_init(s, e - s); mem_found = 1; }
+    else memory_add_region(s, e - s);
+}
+
 static void init_memory_from_multiboot(u64 mb_info_addr) {
     multiboot2_info_header_t* header = (multiboot2_info_header_t*)mb_info_addr;
     multiboot2_tag_t* tag = (multiboot2_tag_t*)(header + 1);
@@ -55,8 +83,8 @@ static void init_memory_from_multiboot(u64 mb_info_addr) {
     }
 
     const u64 low_limit = 0x40000000;
-    int found = 0;
-    int pmm_done = 0;
+    mem_found = 0;
+    pmm_done = 0;
 
     tag = (multiboot2_tag_t*)(header + 1);
     while (tag->type != MULTIBOOT2_TAG_END) {
@@ -72,40 +100,11 @@ static void init_memory_from_multiboot(u64 mb_info_addr) {
                     if (s < kend) s = kend;
                     if (e > s && mod_hi > mod_lo) {
                         u64 p1e = (e < mod_lo) ? e : mod_lo;
-                        if (p1e > s) {
-                            if (!pmm_done) {
-                                u64 psz = (p1e - s) / 4;
-                                if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
-                                if (psz >= 16 * 1024 * 1024) {
-                                    pmm_init_region(s, psz);
-                                    s += psz;
-                                    pmm_done = 1;
-                                }
-                            }
-                            if (e > s) {
-                                if (!found) { memory_init(s, p1e - s); found = 1; }
-                                else memory_add_region(s, p1e - s);
-                            }
-                        }
+                        if (p1e > s) add_avail_region(s, p1e);
                         u64 p2s = (s > mod_hi) ? s : mod_hi;
-                        if (e > p2s) {
-                            if (!found) { memory_init(p2s, e - p2s); found = 1; }
-                            else memory_add_region(p2s, e - p2s);
-                        }
+                        if (e > p2s) add_avail_region(p2s, e);
                     } else if (e > s) {
-                        if (!pmm_done) {
-                            u64 psz = (e - s) / 4;
-                            if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
-                            if (psz >= 16 * 1024 * 1024) {
-                                pmm_init_region(s, psz);
-                                s += psz;
-                                pmm_done = 1;
-                            }
-                        }
-                        if (e > s) {
-                            if (!found) { memory_init(s, e - s); found = 1; }
-                            else memory_add_region(s, e - s);
-                        }
+                        add_avail_region(s, e);
                     }
                 }
                 entry = (multiboot2_mmap_entry_t*)((u8*)entry + mmap_tag->entry_size);
@@ -113,7 +112,7 @@ static void init_memory_from_multiboot(u64 mb_info_addr) {
         }
         tag = (multiboot2_tag_t*)((u8*)tag + ((tag->size + 7) & ~7));
     }
-    if (!found) {
+    if (!mem_found) {
         print("[memory:FAIL] no available memory\n");
         while(1) __asm__ volatile("hlt");
     }
@@ -189,10 +188,10 @@ void ski(u64 mb_info_addr) {
                     print_setcolor(0x0C, 0x00); \
                     print("CRITICAL FAIL (code="); \
                 } else { \
-                    print_setcolor(0x04, 0x00); \
-                    print("FAIL (code="); \
+                    print_setcolor(0x0E, 0x00); \
+                    print("SKIP (code="); \
                 } \
-                print_num(res); \
+                print_int(res); \
                 print(")\n"); \
                 if (crit) { \
                     print_setcolor(0x0C, 0x00); \

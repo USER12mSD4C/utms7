@@ -4,6 +4,7 @@
 #include "memory.h"
 #include "paging.h"
 #include "../include/string.h"
+#include "../drivers/drm.h"
 
 #define USER_LOW_LIMIT 0x40000000
 
@@ -43,7 +44,18 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
     (void)size;
     elf64_hdr_t *hdr = (elf64_hdr_t*)data;
 
-    if (elf_check_header(hdr) != 0) return 0;
+    if (elf_check_header(hdr) != 0) {
+        print("[elf] bad header\n");
+        return 0;
+    }
+
+    print("[elf] type=");
+    printnum(hdr->type);
+    print(" phnum=");
+    printnum(hdr->phnum);
+    print(" entry=");
+    printhex(hdr->entry);
+    print("\n");
 
     u64 base = (hdr->type == ET_DYN) ? 0x40000000 : 0x400000;
     u64 max_vaddr = base;
@@ -57,7 +69,12 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
         if (ph->type != PT_LOAD) continue;
 
         u64 vaddr = (hdr->type == ET_DYN) ? ph->vaddr + base : ph->vaddr;
-        if (vaddr < USER_LOW_LIMIT) return 0;
+        if (vaddr < 0x100000) {
+            print("[elf] vaddr below limit: ");
+            printhex(vaddr);
+            print("\n");
+            return 0;
+        }
         u64 memsz = ph->memsz;
         u64 filesz = ph->filesz;
 
@@ -76,6 +93,7 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
             u64 phys = (u64)pmm_alloc_page();
 
             if (!phys) {
+                print("[elf] pmm alloc fail\n");
                 if (old_cr3 != (u64)pml4) {
                     __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
                 }
@@ -86,6 +104,9 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
             if (ph->flags & PF_W) flags |= PAGE_WRITABLE;
 
             if (paging_map_for_process(pml4, phys, virt, flags) != 0) {
+                print("[elf] map fail virt=");
+                printhex(virt);
+                print("\n");
                 pmm_free_page((void*)phys);
                 if (old_cr3 != (u64)pml4) {
                     __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
@@ -122,6 +143,7 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
         *out_max_vaddr = (max_vaddr + 4095) & ~4095;
     }
 
+    print("[elf] loaded ok\n");
     return (hdr->type == ET_DYN) ? hdr->entry + base : hdr->entry;
 }
 
