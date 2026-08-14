@@ -41,6 +41,19 @@ static int is_user_pointer(void* ptr) {
     return (addr >= 0x400000 && addr < 0x800000000000);
 }
 
+static char fs_current_dir[256] = "/";
+
+void fs_set_current_dir(const char* path) {
+    if (path && path[0]) {
+        strncpy(fs_current_dir, path, 255);
+        fs_current_dir[255] = '\0';
+    }
+}
+
+const char* fs_get_current_dir(void) {
+    return fs_current_dir;
+}
+
 static int copy_from_user(void* dest, const void* src, u64 size) {
     process_t *p = sched_current();
     if (!p || !is_user_pointer((void*)src)) return -1;
@@ -77,6 +90,47 @@ static int copy_to_user(void* dest, const void* src, u64 size) {
     }
 
     return 0;
+}
+
+static long sys_partition_format(trap_frame_t* frame, long dev, long fstype, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+    char dev_buf[32], fs_buf[16];
+    if (!is_user_pointer((void*)dev) || !is_user_pointer((void*)fstype)) return -1;
+    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
+    dev_buf[31] = '\0';
+    if (copy_from_user(fs_buf, (void*)fstype, 15) != 0) return -1;
+    fs_buf[15] = '\0';
+    return udisk_format_partition(dev_buf, fs_buf);
+}
+
+static long sys_disk_table(trap_frame_t* frame, long dev, long kind, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+    char dev_buf[32];
+    if (!is_user_pointer((void*)dev)) return -1;
+    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
+    dev_buf[31] = '\0';
+    int disk, part;
+    if (parse_devname(dev_buf, &disk, &part) != 0 || part != 0) return -1;
+    if (kind == 1) return udisk_create_gpt(disk);
+    return udisk_create_mbr(disk);
+}
+
+static long sys_partition_create(trap_frame_t* frame, long dev, long size_mb, long type, long a4, long a5, long a6) {
+    (void)frame; (void)a4; (void)a5; (void)a6;
+    char dev_buf[32];
+    if (!is_user_pointer((void*)dev)) return -1;
+    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
+    dev_buf[31] = '\0';
+    return udisk_create_partition(dev_buf, (u64)size_mb, (partition_type_t)type);
+}
+
+static long sys_partition_delete(trap_frame_t* frame, long dev, long a2, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    char dev_buf[32];
+    if (!is_user_pointer((void*)dev)) return -1;
+    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
+    dev_buf[31] = '\0';
+    return udisk_delete_partition(dev_buf);
 }
 
 static long sys_exit(trap_frame_t* frame, long code, long a2, long a3, long a4, long a5, long a6) {
@@ -345,8 +399,8 @@ static long sys_exec(trap_frame_t* frame, long path, long argv, long envp, long 
     if (ufs_read(path_buf, &elf_data, &elf_size) != 0) {
         extern int get_module_data(const char* name, u8** buf, u32* size);
         const char* mod_name = path_buf;
-        if (strcmp(path_buf, "/bin/sh") == 0 || strcmp(path_buf, "sh") == 0) {
-            mod_name = "sh";
+        if (strcmp(path_buf, "/bin/sfsh") == 0 || strcmp(path_buf, "sfsh") == 0) {
+            mod_name = "sfsh";
         }
         if (get_module_data(mod_name, &elf_data, &elf_size) != 0) {
             return -1;
@@ -499,7 +553,7 @@ static long sys_chdir(trap_frame_t* frame, long path, long a2, long a3, long a4,
 
     if (!ufs_isdir(path_buf)) return -1;
 
-    extern void fs_set_current_dir(const char*);
+    void fs_set_current_dir(const char*);
     fs_set_current_dir(path_buf);
     return 0;
 }
@@ -508,7 +562,7 @@ static long sys_getcwd(trap_frame_t* frame, long buf, long size, long a3, long a
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)buf)) return -1;
 
-    extern const char* fs_get_current_dir(void);
+    const char* fs_get_current_dir(void);
     const char* cwd = fs_get_current_dir();
     if (!cwd) cwd = "/";
 
@@ -553,23 +607,32 @@ static long sys_readdir(trap_frame_t* frame, long path, long entries, long count
     return to_copy;
 }
 
-static long sys_disk_list(trap_frame_t* frame, long disks, long max, long a3, long a4, long a5, long a6) {
+static long sys_disk_list(trap_frame_t* frame, long disks_ptr, long max, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
-    if (!is_user_pointer((void*)disks)) return -1;
+
+    print("SYS_DISK_LIST: ptr="); printhex((u64)disks_ptr); print(" max="); printnum((u32)max); print("\n");
+
+    if (!is_user_pointer((void*)disks_ptr)) {
+        print("SYS_DISK_LIST: BAD PTR\n");
+        return -1;
+    }
 
     udisk_scan();
 
     int count = 0;
     for (int i = 0; i < 4 && count < max; i++) {
         disk_info_t* d = udisk_get_info(i);
+        print("DISK "); printnum(i); print(" present="); printnum(d ? d->present : 9); print("\n");
+
         if (d && d->present) {
-            if (copy_to_user((void*)((char*)disks + count * sizeof(disk_info_t)), d, sizeof(disk_info_t)) != 0) {
+            if (copy_to_user((void*)((char*)disks_ptr + count * sizeof(disk_info_t)), d, sizeof(disk_info_t)) != 0) {
+                print("COPY FAIL\n");
                 return -1;
             }
             count++;
         }
     }
-
+    print("RETURN "); printnum(count); print("\n");
     return count;
 }
 
@@ -591,7 +654,7 @@ static long sys_partition_mount(trap_frame_t* frame, long dev, long point, long 
 
     if (ufs_mount_with_point(p->start_lba, p->disk_num, point_buf) != 0) return -1;
 
-    extern void fs_set_current_dir(const char*);
+    void fs_set_current_dir(const char*);
     fs_set_current_dir(point_buf);
     return 0;
 }
@@ -784,6 +847,18 @@ static long sys_dup2(trap_frame_t* frame, long oldfd, long newfd, long a3, long 
     return newfd;
 }
 
+static long sys_clear(trap_frame_t* frame, long a1, long a2, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    print_clear();
+    return 0;
+}
+
+static long sys_setcolor(trap_frame_t* frame, long fg, long bg, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+    print_setcolor((u8)fg, (u8)bg);
+    return 0;
+}
+
 typedef long (*syscall_t)(trap_frame_t*, long, long, long, long, long, long);
 static syscall_t syscall_table[64];
 
@@ -823,8 +898,12 @@ int syscall_init(void) {
     syscall_table[30] = sys_disk_list;
     syscall_table[37] = sys_partition_mount;
     syscall_table[38] = sys_partition_umount;
+    syscall_table[39] = sys_partition_format;
     syscall_table[40] = sys_socket;
     syscall_table[41] = sys_connect;
+    syscall_table[42] = sys_disk_table;
+    syscall_table[43] = sys_partition_create;
+    syscall_table[44] = sys_partition_delete;
     syscall_table[45] = sys_send;
     syscall_table[46] = sys_recv;
     syscall_table[47] = sys_gethostbyname;
@@ -832,6 +911,8 @@ int syscall_init(void) {
     syscall_table[50] = sys_meminfo;
     syscall_table[51] = sys_ps;
     syscall_table[52] = sys_gettime;
+    syscall_table[53] = sys_clear;
+    syscall_table[54] = sys_setcolor;
 
     wrmsr(MSR_LSTAR, (u64)syscall_entry);
 

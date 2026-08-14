@@ -125,7 +125,7 @@ u64 sched_do_switch(struct interrupt_frame *frame) {
         }
     }
 
-    if (current->state == PROC_RUNNING && current->pid != 1) {
+    if (current->state == PROC_RUNNING && current->pid != 0) {
         current->state = PROC_READY;
         enqueue_ready(current);
     }
@@ -155,12 +155,6 @@ u64 sched_do_switch(struct interrupt_frame *frame) {
     if (prev->cr3 != next->cr3) {
         __asm__ volatile ("mov %0, %%cr3" : : "r"(next->cr3) : "memory");
     }
-
-    print("Switch: ");
-    print(prev->name);
-    print(" -> ");
-    print(next->name);
-    print("\n");
 
     sched_need_resched = 0;
     current = next;
@@ -282,7 +276,7 @@ int sched_init(void) {
     __asm__ volatile("fxsave %0" : "=m"(*(char*)clean_fpu_state) : : "memory");
 
     process_t *idle = &processes[0];
-    idle->pid = 1;
+    idle->pid = 0;
     strcpy(idle->name, "idle");
     idle->state = PROC_READY;
     idle->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ) + 1000;

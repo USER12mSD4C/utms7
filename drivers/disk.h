@@ -1,3 +1,4 @@
+// File: drivers/disk.h
 #ifndef DISK_H
 #define DISK_H
 
@@ -13,8 +14,7 @@ void disk_list_disks(void);
 u64 disk_get_sectors(u8 drive);
 int disk_get_boot_device(void);
 int disk_init_drive(u8 drive);
-int disk_create_mbr(u8 drive);
-int disk_install_grub(u8 drive);
-int disk_update_boot_config(u8 drive, u32 partition_start);
+void disk_get_model(u8 drive, char* model);
+void ahci_register_disk(int port, u64 sectors, const char* model);
 
 #endif

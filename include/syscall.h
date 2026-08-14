@@ -46,6 +46,19 @@
 #define SYS_gettime     52
 #define SYS_fork        57
 
+#define SYS_ps          51
+#define SYS_clear       53
+#define SYS_setcolor    54
+
+//fs
+#define SYS_disk_list           30
+#define SYS_partition_mount     37
+#define SYS_partition_umount    38
+#define SYS_partition_format    39
+#define SYS_disk_table          42
+#define SYS_partition_create    43
+#define SYS_partition_delete    44
+
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6);
 
 #endif

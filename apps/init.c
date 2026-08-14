@@ -8,10 +8,10 @@ int main(void) {
         printf("INIT: Spawning userspace shell...\n");
         int pid = fork();
         if (pid == 0) {
-            char *argv[] = { "/bin/sh", NULL };
-            execve("/bin/sh", argv, NULL);
+            char *argv[] = { "/bin/sfsh", NULL };
+            execve("/bin/sfsh", argv, NULL);
 
-            printf("INIT: Failed to execute /bin/sh\n");
+            printf("INIT: Failed to execute /bin/sfsh\n");
             _exit(-1);
         } else if (pid > 0) {
             int status;

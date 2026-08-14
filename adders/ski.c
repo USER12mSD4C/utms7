@@ -13,15 +13,11 @@
 #include "../drivers/pci.h"
 #include "../net/net.h"
 #include "../include/shell_api.h"
-#include "../commands/builtin.h"
-#include "../commands/fs.h"
 #include "../drivers/keyboard.h"
+#include "../include/udisk.h"
 
 extern u64 __bss_end;
 
-extern int disk_commands_init(void);
-extern int commands_init(void);
-extern int fs_commands_init(void);
 extern int shell_init(void);
 extern int shell_run(void);
 extern int kinit_run_all(void);
@@ -118,6 +114,40 @@ static void init_memory_from_multiboot(u64 mb_info_addr) {
     }
 }
 
+static void automount_first_ufs(void) {
+    extern int udisk_scan(void);
+    extern disk_info_t* udisk_get_info(int disk_num);
+    extern int ufs_mount_with_point(u32 start_lba, int disk, const char* point);
+    extern void fs_set_current_dir(const char*);
+
+    udisk_scan();
+
+    for (int i = 0; i < 4; i++) {
+        disk_info_t* d = udisk_get_info(i);
+        if (!d || !d->present) continue;
+
+        for (int j = 0; j < d->partition_count; j++) {
+            partition_t* p = &d->partitions[j];
+            if (!p->present || p->type != PARTITION_UFS) continue;
+
+            if (ufs_mount_with_point(p->start_lba, p->disk_num, "/") == 0) {
+                print_setcolor(0x0A, 0);
+                print("[UFS] mounted /dev/sd");
+                print_char('a' + i);
+                if (p->partition_num > 0) printnum(p->partition_num);
+                print(" on /\n");
+                print_setcolor(0x07, 0);
+                fs_set_current_dir("/");
+                return;
+            }
+        }
+    }
+
+    print_setcolor(0x0E, 0);
+    print("[UFS] no UFS partition found, using RAM only\n");
+    print_setcolor(0x07, 0);
+}
+
 void ski(u64 mb_info_addr) {
     print("ski version ");
     print(version);
@@ -162,7 +192,9 @@ void ski(u64 mb_info_addr) {
     print_setcolor(0x07, 0x00);
     init_memory_from_multiboot(mb_info_addr);
     print_setcolor(0x0A, 0x00);
-    print("OK\n\n");
+    print("OK\n");
+    automount_first_ufs();
+    print("\n");
     print_setcolor(0x07, 0x00);
     int total = 0;
     #define X(name, func, crit, ...) total++;

@@ -1,34 +1,12 @@
+// File: drivers/disk.c
 #include "disk.h"
+#include "../include/ahci.h"
 #include "../include/io.h"
 #include "../include/string.h"
 #include "../drivers/drm.h"
 
-#define ATA_PRIMARY_IO     0x1F0
-#define ATA_PRIMARY_DCR     0x3F6
-#define ATA_SECONDARY_IO    0x170
-
-#define ATA_REG_DATA        0
-#define ATA_REG_ERROR       1
-#define ATA_REG_SECCOUNT    2
-#define ATA_REG_LBA_LO      3
-#define ATA_REG_LBA_MID     4
-#define ATA_REG_LBA_HI      5
-#define ATA_REG_DRIVE       6
-#define ATA_REG_STATUS      7
-#define ATA_REG_COMMAND     7
-
-#define ATA_CMD_READ_PIO    0x20
-#define ATA_CMD_WRITE_PIO   0x30
-#define ATA_CMD_IDENTIFY    0xEC
-#define ATA_CMD_FLUSH       0xE7
-
-#define ATA_STATUS_BSY      0x80
-#define ATA_STATUS_DRQ      0x08
-#define ATA_STATUS_ERR      0x01
-
 typedef struct {
-    u16 base;
-    u8 drive;
+    int port;
     u64 sectors;
     char model[41];
     int present;
@@ -37,73 +15,21 @@ typedef struct {
 static disk_t disks[4];
 static int current_disk = 0;
 
-static int ata_wait(u16 base, u8 bit, u8 val) {
-    for (int i = 0; i < 10000000; i++) {
-        u8 status = inb(base + ATA_REG_STATUS);
-        if ((status & bit) == val) return 0;
-    }
-    return -1;
-}
+// Статический выровненный буфер для DMA
+__attribute__((aligned(16))) static u8 disk_dma_buf[512];
 
-static int ata_identify(u16 base, u8 drive, disk_t* d) {
-    u16 data[256];
-
-    outb(base + ATA_REG_DRIVE, drive ? 0xB0 : 0xA0);
-    outb(base + ATA_REG_SECCOUNT, 0);
-    outb(base + ATA_REG_LBA_LO, 0);
-    outb(base + ATA_REG_LBA_MID, 0);
-    outb(base + ATA_REG_LBA_HI, 0);
-    outb(base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
-
-    for (volatile int i = 0; i < 1000; i++) {
-        __asm__ volatile ("nop");
-    }
-
-    u8 status = inb(base + ATA_REG_STATUS);
-    if (status == 0x00 || status == 0xFF) return -1;
-
-    if (ata_wait(base, ATA_STATUS_BSY, 0) != 0) return -1;
-
-    status = inb(base + ATA_REG_STATUS);
-    if (!status) return -1;
-
-    for (int i = 0; i < 256; i++) {
-        data[i] = inw(base + ATA_REG_DATA);
-    }
-
-    for (int i = 0; i < 40; i+=2) {
-        d->model[i] = data[27 + i/2] >> 8;
-        d->model[i+1] = data[27 + i/2] & 0xFF;
-    }
-    d->model[40] = '\0';
-
-    for (int i = 0; i < 40; i++) {
-        if (d->model[i] < 32 || d->model[i] > 126) {
-            d->model[i] = ' ';
-        }
-    }
-
-    d->sectors = data[60] | (data[61] << 16);
-    if (d->sectors == 0) {
-        d->sectors = ((u64)data[100] | ((u64)data[101] << 16) |
-                     ((u64)data[102] << 32) | ((u64)data[103] << 48));
-    }
-
-    d->base = base;
-    d->drive = drive;
-    d->present = 1;
-    return 0;
+void ahci_register_disk(int port, u64 sectors, const char* model) {
+    if (port < 0 || port >= 4) return;
+    disks[port].port = port;
+    disks[port].sectors = sectors;
+    strncpy(disks[port].model, model, 40);
+    disks[port].model[40] = '\0';
+    disks[port].present = 1;
 }
 
 int disk_init(void) {
     memset(disks, 0, sizeof(disks));
-
-    // Пробуем инициализировать все диски
-    ata_identify(ATA_PRIMARY_IO, 0, &disks[0]);
-    ata_identify(ATA_PRIMARY_IO, 1, &disks[1]);
-    ata_identify(ATA_SECONDARY_IO, 0, &disks[2]);
-    ata_identify(ATA_SECONDARY_IO, 1, &disks[3]);
-
+    ahci_init();
     return 0;
 }
 
@@ -114,103 +40,48 @@ int disk_set_disk(int n) {
     return 0;
 }
 
-int disk_set_drive(u8 drive) {
-    int index = drive - 0x80;
-    return disk_set_disk(index);
-}
+int disk_set_drive(u8 drive) { return disk_set_disk(drive - 0x80); }
 
 int disk_read(u32 lba, u8* buffer) {
     disk_t* d = &disks[current_disk];
     if (!d->present) return -1;
-
-    if (ata_wait(d->base, ATA_STATUS_BSY, 0) != 0) return -1;
-
-    outb(d->base + ATA_REG_DRIVE, 0xE0 | (d->drive << 4) | ((lba >> 24) & 0x0F));
-    outb(d->base + ATA_REG_SECCOUNT, 1);
-    outb(d->base + ATA_REG_LBA_LO, lba & 0xFF);
-    outb(d->base + ATA_REG_LBA_MID, (lba >> 8) & 0xFF);
-    outb(d->base + ATA_REG_LBA_HI, (lba >> 16) & 0xFF);
-    outb(d->base + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
-
-    if (ata_wait(d->base, ATA_STATUS_BSY, 0) != 0) return -1;
-    if (ata_wait(d->base, ATA_STATUS_DRQ, ATA_STATUS_DRQ) != 0) return -1;
-
-    for (int i = 0; i < 256; i++) {
-        u16 data = inw(d->base + ATA_REG_DATA);
-        buffer[i*2] = data & 0xFF;
-        buffer[i*2+1] = (data >> 8) & 0xFF;
-    }
-    return 0;
+    int res = ahci_read(d->port, lba, 1, disk_dma_buf);
+    if (res == 0) memcpy(buffer, disk_dma_buf, 512);
+    return res;
 }
 
 int disk_write(u32 lba, u8* buffer) {
     disk_t* d = &disks[current_disk];
     if (!d->present) return -1;
-
-    if (ata_wait(d->base, ATA_STATUS_BSY, 0) != 0) return -1;
-
-    outb(d->base + ATA_REG_DRIVE, 0xE0 | (d->drive << 4) | ((lba >> 24) & 0x0F));
-    outb(d->base + ATA_REG_SECCOUNT, 1);
-    outb(d->base + ATA_REG_LBA_LO, lba & 0xFF);
-    outb(d->base + ATA_REG_LBA_MID, (lba >> 8) & 0xFF);
-    outb(d->base + ATA_REG_LBA_HI, (lba >> 16) & 0xFF);
-    outb(d->base + ATA_REG_COMMAND, ATA_CMD_WRITE_PIO);
-
-    if (ata_wait(d->base, ATA_STATUS_BSY, 0) != 0) return -1;
-    if (ata_wait(d->base, ATA_STATUS_DRQ, ATA_STATUS_DRQ) != 0) return -1;
-
-    for (int i = 0; i < 256; i++) {
-        u16 data = buffer[i*2] | (buffer[i*2+1] << 8);
-        outw(d->base + ATA_REG_DATA, data);
-    }
-
-    outb(d->base + ATA_REG_COMMAND, ATA_CMD_FLUSH);
-    ata_wait(d->base, ATA_STATUS_BSY, 0);
-    return 0;
+    memcpy(disk_dma_buf, buffer, 512);
+    return ahci_write(d->port, lba, 1, disk_dma_buf);
 }
 
 int disk_get_disk_count(void) {
-    int c = 0;
-    for (int i = 0; i < 4; i++) {
-        if (disks[i].present) c++;
-    }
-    return c;
+    int c = 0; for (int i = 0; i < 4; i++) if (disks[i].present) c++; return c;
 }
 
 int disk_get_boot_device(void) {
-    // Просто возвращаем первый найденный диск
-    for (int i = 0; i < 4; i++) {
-        if (disks[i].present) return i;
-    }
-    return -1;
-}
-
-int disk_init_drive(u8 drive) {
-    int index = drive - 0x80;
-    if (index < 0 || index >= 4) return -1;
-
-    u16 base = (index < 2) ? ATA_PRIMARY_IO : ATA_SECONDARY_IO;
-    u8 dev = (index % 2);
-
-    return ata_identify(base, dev, &disks[index]);
+    for (int i = 0; i < 4; i++) if (disks[i].present) return i; return -1;
 }
 
 u64 disk_get_sectors(u8 drive) {
-    int index = drive - 0x80;
-    if (index < 0 || index >= 4) return 0;
-    return disks[index].sectors;
+    int i = drive - 0x80;
+    return (i < 0 || i >= 4) ? 0 : disks[i].sectors;
+}
+
+void disk_get_model(u8 drive, char* model) {
+    int i = drive - 0x80;
+    if (i < 0 || i >= 4) { strcpy(model, "Unknown"); return; }
+    strcpy(model, disks[i].model);
 }
 
 void disk_list_disks(void) {
     for (int i = 0; i < 4; i++) {
         if (disks[i].present) {
-            print("  sd");
-            print_char('a' + i);
-            print(": ");
-            print(disks[i].model);
-            print(" (");
-            printnum((u32)(disks[i].sectors / 2048)); // в МБ примерно
-            print(" MB)\n");
+            print("  sd"); print_char('a' + i); print(": ");
+            print(disks[i].model); print(" (");
+            printnum((u32)(disks[i].sectors / 2048)); print(" MB)\n");
         }
     }
 }

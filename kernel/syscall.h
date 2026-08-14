@@ -40,6 +40,9 @@
 #define SYS_recv        46
 #define SYS_gethostbyname 47
 
+#define SYS_clear       53
+#define SYS_setcolor    54
+
 #define SYS_meminfo     50
 #define SYS_gettime     52
 #define SYS_fork        57

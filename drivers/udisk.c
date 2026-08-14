@@ -12,6 +12,8 @@ static int scanned = 0;
 static u64 last_scan_tick = 0;
 extern u32 system_ticks;
 
+int udisk_init(void);
+
 int parse_devname(const char* devname, int* disk, int* part) {
     if (!devname) return -1;
 
@@ -124,23 +126,7 @@ static void scan_disk(int disk_num) {
     d->total_sectors = sectors;
     d->sector_size = 512;
 
-    u8 identify[512];
-    disk_set_disk(disk_num);
-    if (disk_read(0, identify) == 0) {
-        for (int i = 0; i < 40; i+=2) {
-            d->model[i] = identify[54 + i/2*2 + 1];
-            d->model[i+1] = identify[54 + i/2*2];
-        }
-        d->model[40] = '\0';
-
-        for (int i = 0; i < 40; i++) {
-            if (d->model[i] < 32 || d->model[i] > 126) {
-                d->model[i] = ' ';
-            }
-        }
-    } else {
-        strcpy(d->model, "Unknown");
-    }
+    disk_get_model(drive, d->model);
 
     read_gpt_partitions(disk_num, d);
     if (d->partition_count == 0) {
@@ -291,7 +277,7 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
 
     udisk_scan();
 
-    disk_info_t* d = &disks[disk];  // ← ЭТО ОДНО ОПРЕДЕЛЕНИЕ
+    disk_info_t* d = &disks[disk];
     if (!d || !d->present) return -1;
 
     u64 size_sectors = (size_mb * 1024 * 1024) / 512;
@@ -304,6 +290,8 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
             }
         }
     }
+
+    start_lba = (start_lba + 2047) & ~2047ULL;
 
     if (start_lba + size_sectors > d->total_sectors) return -1;
 
@@ -323,9 +311,6 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
 
     scanned = 0;
     udisk_scan();
-
-    // d уже определен выше, не надо переопределять!
-
     return 0;
 }
 

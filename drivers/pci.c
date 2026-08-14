@@ -31,8 +31,8 @@ int pci_init(void) {
             u32 class_reg = pci_read_config(bus, slot, 0, 8);
             u8 class = (class_reg >> 24) & 0xFF;
             u8 subclass = (class_reg >> 16) & 0xFF;
+            u8 progif = (class_reg >> 8) & 0xFF;
 
-            // Выводим найденные устройства
             print("  ");
             printnum(bus);
             print(":");
@@ -46,8 +46,11 @@ int pci_init(void) {
             print(".");
             printnum(subclass);
 
-            if (class == 0x02) { // Network controller
+            if (class == 0x02) {
                 print(" NET");
+            }
+            if (class == 0x01 && subclass == 0x06 && progif == 0x01) {
+                print(" AHCI");
             }
             print("\n");
         }

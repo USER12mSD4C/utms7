@@ -1,4 +1,5 @@
 // lib/libc.c
+
 #include "libc.h"
 #include <stddef.h>
 #include <stdarg.h>
@@ -37,12 +38,50 @@
 #define SYS_recv        46
 #define SYS_meminfo     50
 #define SYS_gettime     52
+#define SYS_ps          51
+#define SYS_clear       53
+#define SYS_setcolor    54
 #define SYS_fork        57
 #define SYS_gethostbyname 47
 #define SYS_ioctl       27
+#define SYS_disk_list           30
+#define SYS_partition_mount     37
+#define SYS_partition_umount    38
+#define SYS_partition_format    39
+#define SYS_disk_table          42
+#define SYS_partition_create    43
+#define SYS_partition_delete    44
+
+int disk_list(void* disks, int max) {
+    return syscall(SYS_disk_list, (long)disks, max, 0, 0, 0, 0);
+}
+
+int partition_mount(const char* dev, const char* point) {
+    return syscall(SYS_partition_mount, (long)dev, (long)point, 0, 0, 0, 0);
+}
+
+int partition_umount(void) {
+    return syscall(SYS_partition_umount, 0, 0, 0, 0, 0, 0);
+}
+
+int partition_format(const char* dev, const char* fstype) {
+    return syscall(SYS_partition_format, (long)dev, (long)fstype, 0, 0, 0, 0);
+}
 
 int ioctl(int fd, unsigned long request, void *arg) {
     return syscall(SYS_ioctl, fd, (long)request, (long)arg, 0, 0, 0);
+}
+
+int disk_create_table(const char *dev, int gpt) {
+    return syscall(SYS_disk_table, (long)dev, gpt, 0, 0, 0, 0);
+}
+
+int partition_create(const char *dev, unsigned long size_mb, int type) {
+    return syscall(SYS_partition_create, (long)dev, (long)size_mb, type, 0, 0, 0);
+}
+
+int partition_delete(const char *dev) {
+    return syscall(SYS_partition_delete, (long)dev, 0, 0, 0, 0, 0);
 }
 
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
@@ -495,4 +534,12 @@ unsigned int gethostbyname(const char *name) {
     unsigned int ip;
     long res = syscall(SYS_gethostbyname, (long)name, (long)&ip, 0, 0, 0, 0);
     return res == 0 ? ip : 0;
+}
+
+void clear_screen(void) {
+    syscall(SYS_clear, 0, 0, 0, 0, 0, 0);
+}
+
+void set_color(int fg, int bg) {
+    syscall(SYS_setcolor, fg, bg, 0, 0, 0, 0);
 }

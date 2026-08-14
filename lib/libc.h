@@ -90,6 +90,15 @@ void unsetenv(const char *name);
 unsigned int time(void);
 unsigned int get_ticks(void);
 
+int disk_list(void* disks, int max);
+int partition_mount(const char* dev, const char* point);
+int partition_umount(void);
+int partition_format(const char* dev, const char* fstype);
+int disk_create_table(const char *dev, int gpt);
+int partition_create(const char *dev, unsigned long size_mb, int type);
+int partition_delete(const char *dev);
+int partition_format(const char *dev, const char *fstype);
+
 int socket(int domain, int type, int protocol);
 int connect(int sockfd, unsigned int ip, unsigned short port);
 ssize_t send(int sockfd, const void *buf, size_t len, int flags);
@@ -98,4 +107,8 @@ int close_socket(int sockfd);
 unsigned int gethostbyname(const char *name);
 
 int clone(int (*fn)(void*), void *child_stack, void *arg);
+
+void clear_screen(void);
+void set_color(int fg, int bg);
+
 #endif

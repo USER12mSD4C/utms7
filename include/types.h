@@ -11,6 +11,8 @@ typedef signed short i16;
 typedef signed int i32;
 typedef signed long long i64;
 
+#ifndef NULL
 #define NULL ((void*)0)
+#endif
 
 #endif
