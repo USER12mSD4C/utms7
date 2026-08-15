@@ -55,6 +55,7 @@ int gpt_detect(u8 drive) {
     disk_set_disk(disk_num);
 
     if (disk_read(0, sector) != 0) return 0;
+
     if (sector[510] != 0x55 || sector[511] != 0xAA) return 0;
 
     int gpt_protective = 0;
@@ -66,7 +67,11 @@ int gpt_detect(u8 drive) {
     }
     if (!gpt_protective) return 0;
 
-    if (disk_read(1, (u8*)&gpt_header) != 0) return 0;
+    u8 header_buf[512];
+    if (disk_read(1, header_buf) != 0) return 0;
+
+    memcpy(&gpt_header, header_buf, sizeof(gpt_header_t));
+
     if (gpt_header.signature != 0x5452415020494645ULL) return 0;
 
     u32 saved_crc = gpt_header.header_crc32;
@@ -200,13 +205,23 @@ int gpt_create_table(u8 drive) {
         if (disk_write(lba, sector) != 0) return -1;
     }
 
+    memcpy(&gpt_header, &header, sizeof(gpt_header_t));
     gpt_entry_count = 0;
     gpt_valid = 1;
     return 0;
 }
 
 int gpt_add_partition(u8 drive, u64 start, u64 size, const u8* guid) {
-    if (!gpt_valid && !gpt_detect(drive)) return -1;
+    print("GPT_ADD: drive=0x"); printhex(drive); print(" start="); printnum((u32)start); print(" size="); printnum((u32)size); print("\n");
+
+    if (!gpt_valid) {
+        print("GPT_ADD: gpt_valid=0, calling gpt_detect\n");
+        if (!gpt_detect(drive)) {
+            print("GPT_ADD: gpt_detect failed\n");
+            return -1;
+        }
+        print("GPT_ADD: gpt_detect succeeded\n");
+    }
 
     int free_entry = -1;
     for (int i = 0; i < gpt_header.num_partition_entries; i++) {
@@ -221,7 +236,12 @@ int gpt_add_partition(u8 drive, u64 start, u64 size, const u8* guid) {
         }
     }
 
-    if (free_entry == -1) return -1;
+    print("GPT_ADD: free_entry="); printnum(free_entry); print("\n");
+
+    if (free_entry == -1) {
+        print("GPT_ADD: no free entry\n");
+        return -1;
+    }
 
     gpt_entry_t new_entry;
     memset(&new_entry, 0, sizeof(gpt_entry_t));

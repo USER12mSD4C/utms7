@@ -6,6 +6,8 @@
 #include "../kernel/memory.h"
 #include "../drivers/drm.h"
 #include "../include/shell_api.h"
+#include "../include/mbr.h"
+#include "../include/gpt.h"
 
 static disk_info_t disks[4];
 static int scanned = 0;
@@ -39,77 +41,113 @@ int parse_devname(const char* devname, int* disk, int* part) {
 }
 
 static void read_mbr_partitions(int disk_num, disk_info_t* d) {
-    u8 sector[512];
-
-    disk_set_disk(disk_num);
-    if (disk_read(0, sector) != 0) return;
-    if (sector[510] != 0x55 || sector[511] != 0xAA) return;
+    u8 drive = 0x80 + disk_num;
+    int count = mbr_read_partitions(drive);
+    if (count <= 0) return;
 
     d->is_gpt = 0;
-    d->partition_count = 0;
+    d->partition_count = (count > UDISK_MAX_PARTITIONS) ? UDISK_MAX_PARTITIONS : (u8)count;
 
-    for (int i = 0; i < 4; i++) {
-        u8* entry = sector + 446 + i * 16;
-        u8 type = entry[4];
-        if (type == 0) continue;
-
-        partition_t* p = &d->partitions[d->partition_count];
+    for (int i = 0; i < d->partition_count; i++) {
+        mbr_entry_t e;
+        if (mbr_get_entry(i, &e) != 0) {
+            d->partitions[i].present = 0;
+            continue;
+        }
+        partition_t* p = &d->partitions[i];
         p->present = 1;
         p->disk_num = disk_num;
         p->partition_num = i + 1;
-        p->start_lba = *(u32*)(entry + 8);
-        p->end_lba = p->start_lba + *(u32*)(entry + 12) - 1;
-        p->size = *(u32*)(entry + 12) * 512;
+        p->start_lba = e.lba_start;
+        p->end_lba = e.lba_start + e.lba_count - 1;
+        p->size = (u64)e.lba_count * 512;
 
-        if (type == 0x83) p->type = PARTITION_UFS;
-        else if (type == 0x0B || type == 0x0C) p->type = PARTITION_FAT32;
+        if (e.type == 0x83) p->type = PARTITION_UFS;
+        else if (e.type == 0x0B || e.type == 0x0C || e.type == 0xEF) p->type = PARTITION_FAT32;
         else p->type = PARTITION_UNKNOWN;
 
-        snprintf(p->name, UDISK_NAME_LEN, "Partition %d", i+1);
-        d->partition_count++;
+        snprintf(p->name, UDISK_NAME_LEN, "Partition %d", i + 1);
     }
 }
 
 static void read_gpt_partitions(int disk_num, disk_info_t* d) {
     u8 drive = 0x80 + disk_num;
+    u8 header_buf[512];
 
-    if (!gpt_detect(drive)) return;
+    if (disk_read(0, header_buf) != 0) return;
+    if (header_buf[510] != 0x55 || header_buf[511] != 0xAA) return;
 
-    int count = gpt_read_partitions(drive);
-    if (count <= 0) return;
+    int gpt_protective = 0;
+    for (int i = 0; i < 4; i++) {
+        if (header_buf[446 + i*16 + 4] == 0xEE) {
+            gpt_protective = 1;
+            break;
+        }
+    }
+    if (!gpt_protective) return;
+
+    u8 gpt_buf[512];
+    if (disk_read(1, gpt_buf) != 0) return;
+
+    typedef struct {
+        u64 signature;
+        u32 revision;
+        u32 header_size;
+        u32 header_crc32;
+        u32 reserved;
+        u64 my_lba;
+        u64 alternate_lba;
+        u64 first_usable_lba;
+        u64 last_usable_lba;
+        u8 disk_guid[16];
+        u64 partition_entry_lba;
+        u32 num_partition_entries;
+        u32 partition_entry_size;
+        u32 partition_entries_crc32;
+    } __attribute__((packed)) gpt_hdr;
+
+    gpt_hdr h;
+    memcpy(&h, gpt_buf, sizeof(h));
+    if (h.signature != 0x5452415020494645ULL) return;
 
     d->is_gpt = 1;
-    d->partition_count = (count < UDISK_MAX_PARTITIONS) ? count : UDISK_MAX_PARTITIONS;
+    d->partition_count = 0;
 
-    for (int i = 0; i < d->partition_count; i++) {
-        partition_t* p = &d->partitions[i];
-        gpt_entry_t entry;
+    u32 entries_per_sector = 512 / h.partition_entry_size;
+    u32 sectors_needed = (h.num_partition_entries + entries_per_sector - 1) / entries_per_sector;
 
-        if (gpt_get_entry(i, &entry) != 0) {
-            p->present = 0;
-            continue;
+    for (u32 s = 0; s < sectors_needed && d->partition_count < UDISK_MAX_PARTITIONS; s++) {
+        u8 sec[512];
+        if (disk_read(h.partition_entry_lba + s, sec) != 0) return;
+
+        for (u32 j = 0; j < entries_per_sector && d->partition_count < UDISK_MAX_PARTITIONS; j++) {
+            u8* entry = sec + j * h.partition_entry_size;
+            u8 all_zero = 1;
+            for (int k = 0; k < 16; k++) if (entry[k]) { all_zero = 0; break; }
+            if (all_zero) continue;
+
+            partition_t* p = &d->partitions[d->partition_count];
+            p->present = 1;
+            p->disk_num = disk_num;
+            p->partition_num = d->partition_count + 1;
+            p->start_lba = *(u64*)(entry + 32);
+            p->end_lba = *(u64*)(entry + 40);
+            p->size = (p->end_lba - p->start_lba + 1) * 512;
+
+            u8* guid = entry;
+            if (memcmp(guid, gpt_get_ufs_guid(), 16) == 0) p->type = PARTITION_UFS;
+            else if (memcmp(guid, gpt_get_efi_guid(), 16) == 0) p->type = PARTITION_FAT32;
+            else if (memcmp(guid, gpt_get_linux_guid(), 16) == 0) p->type = PARTITION_EXT4;
+            else p->type = PARTITION_UNKNOWN;
+
+            u16* name_utf16 = (u16*)(entry + 56);
+            for (int k = 0; k < 36 && k < UDISK_NAME_LEN-1; k++) {
+                p->name[k] = name_utf16[k] & 0xFF;
+                if (p->name[k] == 0) break;
+            }
+            p->name[UDISK_NAME_LEN-1] = '\0';
+            d->partition_count++;
         }
-
-        p->present = 1;
-        p->disk_num = disk_num;
-        p->partition_num = i + 1;
-        p->start_lba = entry.first_lba;
-        p->end_lba = entry.last_lba;
-        p->size = (entry.last_lba - entry.first_lba + 1) * 512;
-
-        if (memcmp(entry.partition_guid, gpt_get_ufs_guid(), 16) == 0) {
-            p->type = PARTITION_UFS;
-        } else if (memcmp(entry.partition_guid, gpt_get_empty_guid(), 16) == 0) {
-            p->present = 0;
-        } else {
-            p->type = PARTITION_UNKNOWN;
-        }
-
-        for (int j = 0; j < 36 && j < UDISK_NAME_LEN-1; j++) {
-            p->name[j] = entry.name[j] & 0xFF;
-            if (p->name[j] == 0) break;
-        }
-        p->name[UDISK_NAME_LEN-1] = '\0';
     }
 }
 
@@ -132,77 +170,6 @@ static void scan_disk(int disk_num) {
     if (d->partition_count == 0) {
         read_mbr_partitions(disk_num, d);
     }
-}
-
-static int mbr_add_partition(int disk, u64 start, u64 size, partition_type_t type) {
-    u8 sector[512];
-    u8 verify[512];
-
-    disk_set_disk(disk);
-
-    // Читаем текущий MBR
-    if (disk_read(0, sector) != 0) {
-        shell_print("disk_read failed\n");
-        return -1;
-    }
-
-    // Ищем свободную запись
-    int free_entry = -1;
-    for (int i = 0; i < 4; i++) {
-        u8* entry = sector + 446 + i * 16;
-        if (entry[4] == 0) {  // тип раздела = 0 значит свободно
-            free_entry = i;
-            break;
-        }
-    }
-
-    if (free_entry == -1) {
-        shell_print("no free entry\n");
-        return -1;
-    }
-
-    shell_print("Writing to entry ");
-    shell_print_num(free_entry);
-    shell_print("\n");
-
-    u8* entry = sector + 446 + free_entry * 16;
-    memset(entry, 0, 16);
-
-    entry[0] = 0x00;        // не загрузочный
-    entry[1] = 0xFF;        // CHS начало
-    entry[2] = 0xFF;
-    entry[3] = 0xFF;
-    entry[4] = 0x83;        // тип Linux (UFS)
-    entry[5] = 0xFF;        // CHS конец
-    entry[6] = 0xFF;
-    entry[7] = 0xFF;
-
-    *(u32*)(entry + 8) = (u32)start;   // LBA начало
-    *(u32*)(entry + 12) = (u32)size;    // размер
-
-    shell_print("Writing MBR at LBA 0\n");
-
-    // Записываем
-    if (disk_write(0, sector) != 0) {
-        shell_print("disk_write failed\n");
-        return -1;
-    }
-
-    // ПРОВЕРЯЕМ ЧТО ЗАПИСАЛОСЬ
-    if (disk_read(0, verify) != 0) {
-        shell_print("verify read failed\n");
-        return -1;
-    }
-
-    // Сравниваем
-    if (memcmp(sector, verify, 512) != 0) {
-        shell_print("VERIFY FAILED - data mismatch\n");
-        return -1;
-    }
-
-    shell_print("Write verified OK\n");
-
-    return 0;
 }
 
 int udisk_init(void) {
@@ -304,7 +271,12 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
 
         res = gpt_add_partition(0x80 + disk, start_lba, size_sectors, guid);
     } else {
-        res = mbr_add_partition(disk, start_lba, size_sectors, type);
+        u8 mbr_type;
+        if (type == PARTITION_UFS) mbr_type = 0x83;
+        else if (type == PARTITION_FAT32) mbr_type = 0x0C;
+        else mbr_type = 0x83;
+
+        res = mbr_add_partition(0x80 + disk, start_lba, size_sectors, mbr_type);
     }
 
     if (res != 0) return -1;

@@ -41,11 +41,21 @@
 #define SYS_gethostbyname 47
 #define SYS_ioctl 27
 
-// Информационные
+//fs
+#define O_RDONLY   0x000
+#define O_WRONLY   0x001
+#define O_RDWR     0x002
+#define O_CREAT    0x040
+#define O_TRUNC    0x200
+#define O_APPEND   0x400
+
+// inform
 #define SYS_meminfo     50
 #define SYS_gettime     52
+
 #define SYS_fork        57
 
+//graphics
 #define SYS_ps          51
 #define SYS_clear       53
 #define SYS_setcolor    54

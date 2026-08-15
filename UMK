@@ -6,39 +6,41 @@ LD = ld
 MKMOD = tools/mkmod
 
 ASFLAGS = -f elf64
-CFLAGS = -m64 -ffreestanding -nostdlib -Iinclude -fno-stack-protector -mno-red-zone -mno-sse -O2 -g
+CFLAGS = -m64 -ffreestanding -nostdlib -Iinclude -fno-stack-protector -mno-red-zone -O2 -g
+KCFLAGS = $(CFLAGS) -mno-sse
+UCFLAGS = $(CFLAGS) -msse2
 LDFLAGS = -m elf_x86_64 -T linker.ld -nostdlib
 
 kernel/%.o: kernel/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
 drivers/%.o: drivers/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
 adders/%.o: adders/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
 net/%.o: net/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
 lib/%.o: lib/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(UCFLAGS) -c -o $@ $<
 eoc
 
 fs/%.o: fs/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
 shell/%.o: shell/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
 apps/%.o: apps/%.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(UCFLAGS) -c -o $@ $<
 eoc
 
 kernel/entry.o: kernel/entry.asm
@@ -66,11 +68,16 @@ tools/mkmod: tools/mkmod.c
 	gcc -o tools/mkmod tools/mkmod.c
 eoc
 
+drivers/mbr.o: drivers/mbr.c
+	$(CC) $(KCFLAGS) -c -o $@ $<
+eoc
+
 CORE = kernel/kernel.o kernel/kinit.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o
 ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/gdt_flush.o
-DRV = drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o
+DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
-LIB = lib/string.o lib/font.o lib/zlib.o lib/libc.o
+LIBC = lib/string.o lib/ctype.o lib/stdlib.o lib/stdio.o lib/errno.o lib/libc.o
+LIB = lib/font.o lib/zlib.o $(LIBC)
 FS = fs/ufs.o fs/fat.o
 ADDERS = adders/ski.o
 
@@ -80,11 +87,12 @@ kernel.bin: $(ALL)
 	$(LD) $(LDFLAGS) -o kernel.bin $(ALL)
 eoc
 
-init.bin: apps/init.o lib/libc.o lib/string.o
-	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e main -nostdlib -o init.bin apps/init.o lib/libc.o lib/string.o
+init.bin: apps/init.o $(LIBC)
+	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e main -nostdlib -o init.bin apps/init.o $(LIBC)
 eoc
-sfsh.bin: apps/sfsh.o lib/libc.o lib/string.o
-	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e main -nostdlib -o sfsh.bin apps/sfsh.o lib/libc.o lib/string.o
+
+sfsh.bin: apps/sfsh.o $(LIBC)
+	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e main -nostdlib -o sfsh.bin apps/sfsh.o $(LIBC)
 eoc
 
 kom: tools/mkmod

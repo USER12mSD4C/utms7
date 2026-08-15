@@ -22,6 +22,15 @@
 #define MSR_LSTAR      0xC0000082
 #define MSR_SFMASK     0xC0000084
 
+#ifndef O_RDONLY
+#define O_RDONLY   0x000
+#define O_WRONLY   0x001
+#define O_RDWR     0x002
+#define O_CREAT    0x040
+#define O_TRUNC    0x200
+#define O_APPEND   0x400
+#endif
+
 extern void syscall_entry(void);
 
 static inline void wrmsr(u32 msr, u64 val) {
@@ -146,42 +155,44 @@ static long sys_write(trap_frame_t* frame, long fd, long buf, long count, long a
     if (!is_user_pointer((void*)buf)) return -1;
 
     if (fd == 1 || fd == 2) {
-        char* temp = kmalloc(count + 1);
-        if (!temp) return -1;
-        if (copy_from_user(temp, (void*)buf, count) != 0) {
-            kfree(temp);
-            return -1;
+        char temp[256];
+        long left = count;
+        long offset = 0;
+        while (left > 0) {
+            long chunk = left < 255 ? left : 255;
+            if (copy_from_user(temp, (void*)((char*)buf + offset), chunk) != 0) return -1;
+            for (long i = 0; i < chunk; i++) print_char(temp[i]);
+            offset += chunk;
+            left -= chunk;
         }
-        temp[count] = '\0';
-
-        for (long i = 0; i < count; i++) {
-            print_char(temp[i]);
-        }
-        kfree(temp);
         return count;
     }
 
-    if (!p->fds[fd].used) return -1;
+    if (!p->fds[fd].used || p->fds[fd].type != 0) return -1;
+    file_data_t* f = &p->fds[fd].data.file;
 
-    if (p->fds[fd].type == 0) {
-        char* data = kmalloc(count + 1);
-        if (!data) return -1;
-        if (copy_from_user(data, (void*)buf, count) != 0) {
-            kfree(data);
-            return -1;
+    if (f->flags & O_APPEND) f->pos = f->buf_size;
+
+    u32 new_size = f->pos + count;
+    if (new_size > f->buf_capacity) {
+        u32 new_cap = f->buf_capacity;
+        while (new_cap < new_size) {
+            new_cap *= 2;
+            if (new_cap == 0) new_cap = 4096;
         }
-        data[count] = '\0';
-
-        int res = ufs_write(p->fds[fd].data.file.path, (u8*)data, count);
-        kfree(data);
-
-        if (res == 0) {
-            p->fds[fd].data.file.pos += count;
-            return count;
-        }
+        u8* new_buf = kmalloc(new_cap);
+        if (!new_buf) return -1;
+        if (f->buf && f->buf_size > 0) memcpy(new_buf, f->buf, f->buf_size);
+        if (f->buf) kfree(f->buf);
+        f->buf = new_buf;
+        f->buf_capacity = new_cap;
     }
 
-    return -1;
+    if (copy_from_user(f->buf + f->pos, (void*)buf, count) != 0) return -1;
+    f->pos += count;
+    if (f->pos > f->buf_size) f->buf_size = f->pos;
+    f->dirty = 1;
+    return count;
 }
 
 static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4, long a5, long a6) {
@@ -191,48 +202,36 @@ static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4
     if (!is_user_pointer((void*)buf)) return -1;
 
     if (fd == 0) {
-        char* buffer = kmalloc(count);
-        if (!buffer) return -1;
+        long read_count = 0;
+        u8 *user_buf = (u8*)buf;
 
-        for (long i = 0; i < count; i++) {
+        while (read_count < count && keyboard_data_ready()) {
+            char c = keyboard_getc();
+            u8 tmp = (u8)c;
+            if (copy_to_user(user_buf + read_count, &tmp, 1) != 0) return -1;
+            read_count++;
+        }
+
+        if (read_count == 0 && count > 0) {
             while (!keyboard_data_ready());
-            buffer[i] = keyboard_getc();
+            char c = keyboard_getc();
+            u8 tmp = (u8)c;
+            if (copy_to_user(user_buf, &tmp, 1) != 0) return -1;
+            read_count = 1;
         }
-
-        if (copy_to_user((void*)buf, buffer, count) != 0) {
-            kfree(buffer);
-            return -1;
-        }
-        kfree(buffer);
-        return count;
+        return read_count;
     }
 
-    if (!p->fds[fd].used) return -1;
+    if (!p->fds[fd].used || p->fds[fd].type != 0) return -1;
+    file_data_t* f = &p->fds[fd].data.file;
+    if (f->pos >= f->buf_size) return 0;
 
-    if (p->fds[fd].type == 0) {
-        u8 *data;
-        u32 size;
-        if (ufs_read(p->fds[fd].data.file.path, &data, &size) != 0) return -1;
+    long to_copy = count;
+    if (f->pos + to_copy > f->buf_size) to_copy = f->buf_size - f->pos;
 
-        long pos = p->fds[fd].data.file.pos;
-        long to_copy = count;
-        if (pos + to_copy > size) to_copy = size - pos;
-        if (to_copy <= 0) {
-            kfree(data);
-            return 0;
-        }
-
-        if (copy_to_user((void*)buf, data + pos, to_copy) != 0) {
-            kfree(data);
-            return -1;
-        }
-        p->fds[fd].data.file.pos += to_copy;
-
-        kfree(data);
-        return to_copy;
-    }
-
-    return -1;
+    if (copy_to_user((void*)buf, f->buf + f->pos, to_copy) != 0) return -1;
+    f->pos += to_copy;
+    return to_copy;
 }
 
 static long sys_open(trap_frame_t* frame, long path, long flags, long mode, long a4, long a5, long a6) {
@@ -249,19 +248,8 @@ static long sys_open(trap_frame_t* frame, long path, long flags, long mode, long
         path_buf[255] = '\0';
     }
 
-    if (strncmp(path_buf, "/dev/dri/card0", 14) == 0) {
-        int fd = -1;
-        for (int i = 0; i < MAX_FDS; i++) {
-            if (!p->fds[i].used) { fd = i; break; }
-        }
-        if (fd == -1) return -1;
-        p->fds[fd].used = 1;
-        p->fds[fd].type = 1;
-        return fd;
-    }
-
     int fd = -1;
-    for (int i = 0; i < MAX_FDS; i++) {
+    for (int i = 3; i < MAX_FDS; i++) {
         if (!p->fds[i].used) {
             fd = i;
             break;
@@ -269,9 +257,32 @@ static long sys_open(trap_frame_t* frame, long path, long flags, long mode, long
     }
     if (fd == -1) return -1;
 
-    if (!ufs_exists(path_buf)) {
-        if (flags & 0x40) {
-            if (ufs_write(path_buf, NULL, 0) != 0) return -1;
+    if (strncmp(path_buf, "/dev/dri/card0", 14) == 0) {
+        p->fds[fd].used = 1;
+        p->fds[fd].type = 1;
+        return fd;
+    }
+
+    u8* file_buf = NULL;
+    u32 file_size = 0;
+
+    if (ufs_exists(path_buf)) {
+        if (flags & O_TRUNC) {
+            file_buf = kmalloc(4096);
+            if (!file_buf) return -1;
+            file_size = 0;
+        } else {
+            if (ufs_read(path_buf, &file_buf, &file_size) != 0) {
+                file_buf = kmalloc(4096);
+                if (!file_buf) return -1;
+                file_size = 0;
+            }
+        }
+    } else {
+        if (flags & O_CREAT) {
+            file_buf = kmalloc(4096);
+            if (!file_buf) return -1;
+            file_size = 0;
         } else {
             return -1;
         }
@@ -280,7 +291,12 @@ static long sys_open(trap_frame_t* frame, long path, long flags, long mode, long
     p->fds[fd].used = 1;
     p->fds[fd].type = 0;
     strcpy(p->fds[fd].data.file.path, path_buf);
-    p->fds[fd].data.file.pos = 0;
+    p->fds[fd].data.file.buf = file_buf;
+    p->fds[fd].data.file.buf_size = file_size;
+    p->fds[fd].data.file.buf_capacity = (file_buf == NULL) ? 0 : 4096;
+    p->fds[fd].data.file.pos = (flags & O_APPEND) ? file_size : 0;
+    p->fds[fd].data.file.dirty = 0;
+    p->fds[fd].data.file.flags = flags & 0xFFF;
 
     return fd;
 }
@@ -289,7 +305,22 @@ static long sys_close(trap_frame_t* frame, long fd, long a2, long a3, long a4, l
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS) return -1;
+
+    if (p->fds[fd].used && p->fds[fd].type == 0) {
+        file_data_t* f = &p->fds[fd].data.file;
+
+        if (f->dirty && f->buf) {
+            ufs_write(f->path, f->buf, f->buf_size);
+        }
+
+        if (f->buf) {
+            kfree(f->buf);
+            f->buf = NULL;
+        }
+    }
+
     p->fds[fd].used = 0;
+    memset(&p->fds[fd], 0, sizeof(fd_entry_t));
     return 0;
 }
 
@@ -446,20 +477,19 @@ static long sys_lseek(trap_frame_t* frame, long fd, long offset, long whence, lo
     (void)frame; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+    if (p->fds[fd].type != 0) return -1;
+
+    file_data_t* f = &p->fds[fd].data.file;
 
     switch (whence) {
-        case 0: p->fds[fd].data.file.pos = offset; break;
-        case 1: p->fds[fd].data.file.pos += offset; break;
-        case 2: {
-            u32 size = ufs_file_size(p->fds[fd].data.file.path);
-            p->fds[fd].data.file.pos = size + offset;
-            break;
-        }
+        case 0: f->pos = offset; break;
+        case 1: f->pos += offset; break;
+        case 2: f->pos = f->buf_size + offset; break;
         default: return -1;
     }
 
-    if (p->fds[fd].data.file.pos < 0) p->fds[fd].data.file.pos = 0;
-    return p->fds[fd].data.file.pos;
+    if ((long)f->pos < 0) f->pos = 0;
+    return f->pos;
 }
 
 static long sys_stat(trap_frame_t* frame, long path, long statbuf, long a3, long a4, long a5, long a6) {
@@ -488,9 +518,17 @@ static long sys_fstat(trap_frame_t* frame, long fd, long statbuf, long a3, long 
     if (!is_user_pointer((void*)statbuf)) return -1;
 
     sys_stat_t st;
-    st.size = ufs_file_size(p->fds[fd].data.file.path);
-    st.is_dir = ufs_isdir(p->fds[fd].data.file.path) ? 1 : 0;
-    st.blocks = (st.size + 511) / 512;
+
+    if (p->fds[fd].type == 0) {
+        file_data_t* f = &p->fds[fd].data.file;
+        st.size = f->buf_size;
+        st.is_dir = ufs_isdir(f->path) ? 1 : 0;
+        st.blocks = (st.size + 511) / 512;
+    } else {
+        st.size = 0;
+        st.is_dir = 0;
+        st.blocks = 0;
+    }
 
     if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;
     return 0;
@@ -591,11 +629,12 @@ static long sys_readdir(trap_frame_t* frame, long path, long entries, long count
 
     for (u32 i = 0; i < to_copy; i++) {
         FSNode user_entry;
+        memset(&user_entry, 0, sizeof(FSNode));
         strcpy(user_entry.name, kernel_entries[i].name);
         user_entry.size = kernel_entries[i].size;
         user_entry.is_dir = kernel_entries[i].is_dir;
-        user_entry.first_block = 0;
-        user_entry.next_block = 0;
+        user_entry.mode = kernel_entries[i].mode;
+        user_entry.mtime = kernel_entries[i].mtime;
 
         if (copy_to_user((void*)((char*)entries + i * sizeof(FSNode)), &user_entry, sizeof(FSNode)) != 0) {
             kfree(kernel_entries);
@@ -609,30 +648,20 @@ static long sys_readdir(trap_frame_t* frame, long path, long entries, long count
 
 static long sys_disk_list(trap_frame_t* frame, long disks_ptr, long max, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
-
-    print("SYS_DISK_LIST: ptr="); printhex((u64)disks_ptr); print(" max="); printnum((u32)max); print("\n");
-
-    if (!is_user_pointer((void*)disks_ptr)) {
-        print("SYS_DISK_LIST: BAD PTR\n");
-        return -1;
-    }
+    if (!is_user_pointer((void*)disks_ptr)) return -1;
 
     udisk_scan();
 
     int count = 0;
     for (int i = 0; i < 4 && count < max; i++) {
         disk_info_t* d = udisk_get_info(i);
-        print("DISK "); printnum(i); print(" present="); printnum(d ? d->present : 9); print("\n");
-
         if (d && d->present) {
             if (copy_to_user((void*)((char*)disks_ptr + count * sizeof(disk_info_t)), d, sizeof(disk_info_t)) != 0) {
-                print("COPY FAIL\n");
                 return -1;
             }
             count++;
         }
     }
-    print("RETURN "); printnum(count); print("\n");
     return count;
 }
 

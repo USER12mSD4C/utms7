@@ -1,485 +1,137 @@
-#include "../include/string.h"
-#include "../include/stdarg.h"
+#include "libc.h"
+#include <stdint.h>
 
-void* memcpy(void* dest, const void* src, u64 n) {
-    u8* d = (u8*)dest;
-    const u8* s = (const u8*)src;
-    
-    // Копируем по байтам, без SSE оптимизаций
-    for (u64 i = 0; i < n; i++) {
-        d[i] = s[i];
+void *memcpy(void *dest, const void *src, size_t n) {
+    void *ret = dest;
+    __asm__ volatile(
+        "rep movsb"
+        : "+D"(dest), "+S"(src), "+c"(n)
+        : : "memory"
+    );
+    return ret;
+}
+
+void *memset(void *s, int c, size_t n) {
+    void *ret = s;
+    __asm__ volatile(
+        "rep stosb"
+        : "+D"(s), "+c"(n)
+        : "a"((unsigned char)c)
+        : "memory"
+    );
+    return ret;
+}
+
+void *memmove(void *dest, const void *src, size_t n) {
+    if (dest < src) return memcpy(dest, src, n);
+    if (dest > src) {
+        uint8_t *d = (uint8_t*)dest + n;
+        const uint8_t *s = (const uint8_t*)src + n;
+        __asm__ volatile(
+            "std\n\t"
+            "rep movsb\n\t"
+            "cld"
+            : "+D"(d), "+S"(s), "+c"(n)
+            : : "memory"
+        );
     }
     return dest;
 }
 
-void* memset(void* s, int c, u64 n) {
-    u8* p = (u8*)s;
-    u8 val = (u8)c;
-    
-    // Заполняем по байтам, без SSE оптимизаций
-    for (u64 i = 0; i < n; i++) {
-        p[i] = val;
-    }
-    return s;
-}
-
-int memcmp(const void* s1, const void* s2, u64 n) {
-    const u8* p1 = (const u8*)s1;
-    const u8* p2 = (const u8*)s2;
-    for (u64 i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) return p1[i] - p2[i];
-    }
+int memcmp(const void *s1, const void *s2, size_t n) {
+    const uint8_t *p1 = (const uint8_t*)s1, *p2 = (const uint8_t*)s2;
+    while (n--) { if (*p1 != *p2) return *p1 - *p2; p1++; p2++; }
     return 0;
 }
 
-char* strcpy(char* dest, const char* src) {
-    char* d = dest;
-    while (*src) {
-        *d++ = *src++;
-    }
-    *d = '\0';
-    return dest;
+void *memchr(const void *s, int c, size_t n) {
+    const uint8_t *p = (const uint8_t*)s;
+    while (n--) { if (*p == (uint8_t)c) return (void*)p; p++; }
+    return NULL;
 }
 
-char* strncpy(char* dest, const char* src, u64 n) {
-    char* d = dest;
-    u64 i;
-    for (i = 0; i < n && src[i]; i++) {
-        d[i] = src[i];
-    }
-    for (; i < n; i++) {
-        d[i] = '\0';
-    }
-    return dest;
-}
-
-int strcmp(const char* s1, const char* s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-    }
-    return *(const u8*)s1 - *(const u8*)s2;
-}
-
-int strncmp(const char* s1, const char* s2, u64 n) {
-    for (u64 i = 0; i < n; i++) {
-        if (s1[i] != s2[i]) return s1[i] - s2[i];
-        if (s1[i] == '\0') break;
-    }
-    return 0;
-}
-
-u64 strlen(const char* s) {
-    u64 len = 0;
+size_t strlen(const char *s) {
+    size_t len = 0;
     while (s[len]) len++;
     return len;
 }
 
-char* strchr(const char* s, int c) {
-    while (*s) {
-        if (*s == (char)c) return (char*)s;
-        s++;
-    }
-    return (c == '\0') ? (char*)s : NULL;
+char *strcpy(char *dest, const char *src) {
+    char *ret = dest;
+    while ((*dest++ = *src++));
+    return ret;
 }
 
-char* strrchr(const char* s, int c) {
-    const char* last = NULL;
-    while (*s) {
-        if (*s == (char)c) last = s;
-        s++;
-    }
-    if (c == '\0') return (char*)s;
-    return (char*)last;
-}
-
-char* strstr(const char* haystack, const char* needle) {
-    if (!*needle) return (char*)haystack;
-    
-    while (*haystack) {
-        const char* h = haystack;
-        const char* n = needle;
-        
-        while (*h && *n && (*h == *n)) {
-            h++;
-            n++;
-        }
-        
-        if (!*n) return (char*)haystack;
-        haystack++;
-    }
-    
-    return NULL;
-}
-
-char* strcat(char* dest, const char* src) {
-    char* d = dest;
-    while (*d) d++;
-    while (*src) {
-        *d++ = *src++;
-    }
-    *d = '\0';
+char *strncpy(char *dest, const char *src, size_t n) {
+    size_t i;
+    for (i = 0; i < n && src[i]; i++) dest[i] = src[i];
+    for (; i < n; i++) dest[i] = '\0';
     return dest;
 }
 
-static char* strtok_pos = NULL;
-
-char* strtok(char* str, const char* delim) {
-    if (str) {
-        strtok_pos = str;
-    }
-    
-    if (!strtok_pos || *strtok_pos == '\0') {
-        return NULL;
-    }
-    
-    // Пропускаем ведущие разделители
-    while (*strtok_pos) {
-        const char* d = delim;
-        int is_delim = 0;
-        while (*d) {
-            if (*strtok_pos == *d) {
-                is_delim = 1;
-                break;
-            }
-            d++;
-        }
-        if (!is_delim) break;
-        strtok_pos++;
-    }
-    
-    char* start = strtok_pos;
-    
-    if (*strtok_pos == '\0') {
-        strtok_pos = NULL;
-        return start;
-    }
-    
-    // Ищем следующий разделитель
-    while (*strtok_pos) {
-        const char* d = delim;
-        int is_delim = 0;
-        while (*d) {
-            if (*strtok_pos == *d) {
-                is_delim = 1;
-                break;
-            }
-            d++;
-        }
-        if (is_delim) {
-            *strtok_pos = '\0';
-            strtok_pos++;
-            return start;
-        }
-        strtok_pos++;
-    }
-    
-    strtok_pos = NULL;
-    return start;
+char *strcat(char *dest, const char *src) {
+    char *ret = dest;
+    while (*dest) dest++;
+    while ((*dest++ = *src++));
+    return ret;
 }
 
-static void reverse(char* str, int len) {
-    int i = 0, j = len - 1;
-    while (i < j) {
-        char tmp = str[i];
-        str[i] = str[j];
-        str[j] = tmp;
-        i++;
-        j--;
-    }
+char *strncat(char *dest, const char *src, size_t n) {
+    char *ret = dest;
+    while (*dest) dest++;
+    while (n-- && *src) *dest++ = *src++;
+    *dest = '\0';
+    return ret;
 }
 
-static int utoa(u32 num, char* str, int base) {
-    int i = 0;
-    
-    if (num == 0) {
-        str[i++] = '0';
-        str[i] = '\0';
-        return i;
-    }
-    
-    while (num != 0) {
-        u32 rem = num % base;
-        str[i++] = (rem > 9) ? (rem - 10) + 'a' : rem + '0';
-        num = num / base;
-    }
-    
-    str[i] = '\0';
-    reverse(str, i);
-    return i;
+int strcmp(const char *s1, const char *s2) {
+    while (*s1 && *s1 == *s2) { s1++; s2++; }
+    return *(unsigned char*)s1 - *(unsigned char*)s2;
 }
 
-static int itoa(i32 num, char* str, int base) {
-    if (base == 10 && num < 0) {
-        str[0] = '-';
-        int len = utoa(-num, str + 1, base);
-        return len + 1;
-    }
-    return utoa(num, str, base);
+int strncmp(const char *s1, const char *s2, size_t n) {
+    while (n && *s1 && *s1 == *s2) { s1++; s2++; n--; }
+    if (n == 0) return 0;
+    return *(unsigned char*)s1 - *(unsigned char*)s2;
 }
 
-int sprintf(char* str, const char* format, ...) {
-    char* buf = str;
-    const char* f = format;
-    u64* arg = (u64*)(&format + 1);
-    
-    while (*f) {
-        if (*f == '%') {
-            f++;
-            switch (*f) {
-                case 'd': {
-                    char num[32];
-                    int len = itoa((i32)(*arg++), num, 10);
-                    for (int i = 0; i < len; i++) *buf++ = num[i];
-                    break;
-                }
-                case 'u': {
-                    char num[32];
-                    int len = utoa((u32)(*arg++), num, 10);
-                    for (int i = 0; i < len; i++) *buf++ = num[i];
-                    break;
-                }
-                case 'x': {
-                    char num[32];
-                    int len = utoa((u32)(*arg++), num, 16);
-                    for (int i = 0; i < len; i++) *buf++ = num[i];
-                    break;
-                }
-                case 's': {
-                    char* s = (char*)(*arg++);
-                    while (*s) *buf++ = *s++;
-                    break;
-                }
-                case 'c': {
-                    *buf++ = (char)(*arg++);
-                    break;
-                }
-                default:
-                    *buf++ = '%';
-                    *buf++ = *f;
-                    break;
-            }
-            f++;
-        } else {
-            *buf++ = *f++;
-        }
-    }
-    *buf = '\0';
-    return buf - str;
+char *strchr(const char *s, int c) {
+    while (*s) { if (*s == (char)c) return (char*)s; s++; }
+    return (c == '\0') ? (char*)s : NULL;
 }
-int sscanf(const char *str, const char *format, ...) {
-    va_list args;
-    int count = 0;
-    const char *f = format;
-    const char *s = str;
-    
-    va_start(args, format);
-    
-    while (*f && *s) {
-        if (*f == '%') {
-            f++;
-            switch (*f) {
-                case 'd': {
-                    int *out = va_arg(args, int*);
-                    int sign = 1;
-                    int val = 0;
-                    
-                    while (*s == ' ') s++;
-                    
-                    if (*s == '-') {
-                        sign = -1;
-                        s++;
-                    } else if (*s == '+') {
-                        s++;
-                    }
-                    
-                    while (*s >= '0' && *s <= '9') {
-                        val = val * 10 + (*s - '0');
-                        s++;
-                    }
-                    
-                    *out = val * sign;
-                    count++;
-                    break;
-                }
-                
-                case 'u': {
-                    unsigned int *out = va_arg(args, unsigned int*);
-                    unsigned int val = 0;
-                    
-                    while (*s == ' ') s++;
-                    
-                    while (*s >= '0' && *s <= '9') {
-                        val = val * 10 + (*s - '0');
-                        s++;
-                    }
-                    
-                    *out = val;
-                    count++;
-                    break;
-                }
-                
-                case 'x':
-                case 'X': {
-                    unsigned int *out = va_arg(args, unsigned int*);
-                    unsigned int val = 0;
-                    
-                    while (*s == ' ') s++;
-                    
-                    if (*s == '0' && (*(s+1) == 'x' || *(s+1) == 'X')) {
-                        s += 2;
-                    }
-                    
-                    while ((*s >= '0' && *s <= '9') || 
-                           (*s >= 'a' && *s <= 'f') || 
-                           (*s >= 'A' && *s <= 'F')) {
-                        val <<= 4;
-                        if (*s >= '0' && *s <= '9') {
-                            val |= (*s - '0');
-                        } else if (*s >= 'a' && *s <= 'f') {
-                            val |= (*s - 'a' + 10);
-                        } else {
-                            val |= (*s - 'A' + 10);
-                        }
-                        s++;
-                    }
-                    
-                    *out = val;
-                    count++;
-                    break;
-                }
-                
-                case 's': {
-                    char *out = va_arg(args, char*);
-                    
-                    while (*s == ' ') s++;
-                    
-                    while (*s && *s != ' ' && *s != '\t' && *s != '\n') {
-                        *out++ = *s++;
-                    }
-                    *out = '\0';
-                    count++;
-                    break;
-                }
-                
-                case 'c': {
-                    char *out = va_arg(args, char*);
-                    
-                    while (*s == ' ') s++;
-                    
-                    *out = *s++;
-                    count++;
-                    break;
-                }
-                
-                default:
-                    if (*f == *s) {
-                        s++;
-                    }
-                    break;
-            }
-            f++;
-        } else if (*f == ' ') {
-            while (*s == ' ') s++;
-            f++;
-        } else {
-            if (*f != *s) break;
-            f++;
-            s++;
-        }
-    }
-    
-    va_end(args);
-    return count;
+
+char *strrchr(const char *s, int c) {
+    const char *found = NULL;
+    while (*s) { if (*s == (char)c) found = s; s++; }
+    if (c == '\0') return (char*)s;
+    return (char*)found;
 }
-int snprintf(char* str, u64 size, const char* format, ...) {
-    va_list args;
-    int i = 0;
-    char c;
-    
-    if (size == 0) return 0;
-    
-    va_start(args, format);
-    
-    while ((c = *format++) && i < size - 1) {
-        if (c != '%') {
-            str[i++] = c;
-            continue;
-        }
-        
-        c = *format++;
-        if (c == 's') {
-            const char *s = va_arg(args, const char*);
-            if (s) {
-                while (*s && i < size - 1) {
-                    str[i++] = *s++;
-                }
-            } else {
-                const char *nullstr = "(null)";
-                while (*nullstr && i < size - 1) {
-                    str[i++] = *nullstr++;
-                }
-            }
-        }
-        else if (c == 'd' || c == 'u') {
-            int num = va_arg(args, int);
-            char numbuf[32];
-            int len = 0;
-            
-            if (num == 0) {
-                numbuf[len++] = '0';
-            } else {
-                int n = (num < 0 && c == 'd') ? -num : num;
-                while (n > 0) {
-                    numbuf[len++] = '0' + (n % 10);
-                    n /= 10;
-                }
-                if (num < 0 && c == 'd') {
-                    numbuf[len++] = '-';
-                }
-            }
-            
-            for (int j = len - 1; j >= 0 && i < size - 1; j--) {
-                str[i++] = numbuf[j];
-            }
-        }
-        else if (c == 'x' || c == 'X') {
-            unsigned int num = va_arg(args, unsigned int);
-            char hexbuf[32];
-            int len = 0;
-            
-            if (num == 0) {
-                hexbuf[len++] = '0';
-            } else {
-                while (num > 0) {
-                    int digit = num % 16;
-                    if (digit < 10) {
-                        hexbuf[len++] = '0' + digit;
-                    } else {
-                        hexbuf[len++] = (c == 'x') ? 'a' + digit - 10 : 'A' + digit - 10;
-                    }
-                    num /= 16;
-                }
-            }
-            
-            for (int j = len - 1; j >= 0 && i < size - 1; j--) {
-                str[i++] = hexbuf[j];
-            }
-        }
-        else if (c == 'c') {
-            char ch = (char)va_arg(args, int);
-            if (i < size - 1) {
-                str[i++] = ch;
-            }
-        }
-        else if (c == '%') {
-            if (i < size - 1) {
-                str[i++] = '%';
-            }
-        }
+
+char *strstr(const char *haystack, const char *needle) {
+    if (!*needle) return (char*)haystack;
+    for (; *haystack; haystack++) {
+        const char *h = haystack, *n = needle;
+        while (*h && *n && *h == *n) { h++; n++; }
+        if (!*n) return (char*)haystack;
     }
-    
-    va_end(args);
-    str[i] = '\0';
-    return i;
+    return NULL;
+}
+
+char *strdup(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *new = malloc(len);
+    if (new) memcpy(new, s, len);
+    return new;
+}
+
+char *strtok(char *str, const char *delim) {
+    static char *saved;
+    if (str) saved = str;
+    if (!saved) return NULL;
+    while (*saved && strchr(delim, *saved)) saved++;
+    if (!*saved) return NULL;
+    char *token = saved;
+    while (*saved && !strchr(delim, *saved)) saved++;
+    if (*saved) { *saved = '\0'; saved++; } else { saved = NULL; }
+    return token;
 }

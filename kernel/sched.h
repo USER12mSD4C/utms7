@@ -17,6 +17,11 @@
 typedef struct {
     char path[256];
     u32 pos;
+    u8* buf;
+    u32 buf_size;
+    u32 buf_capacity;
+    u8 dirty;
+    u8 flags;
 } file_data_t;
 
 typedef struct {

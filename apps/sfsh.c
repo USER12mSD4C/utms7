@@ -284,25 +284,28 @@ typedef struct {
 
 static int cmd_disks(int argc, char **argv) {
     (void)argc; (void)argv;
-    typedef struct {
-        u8 present;
-        u8 disk_num;
-        char model[41];
-        u64 total_sectors;
-        u32 sector_size;
-        u8 partition_count;
-        struct {
+    // File: apps/sfsh.c
+    // Найди typedef struct { ... } disk_info_user_t; и замени на:
+
+        typedef struct {
             u8 present;
             u8 disk_num;
-            u8 partition_num;
-            u64 start_lba;
-            u64 end_lba;
-            u64 size;
-            int type;
-            char name[32];
-        } partitions[16];
-        u8 is_gpt;
-    } disk_info_user_t;
+            char model[41];
+            u64 total_sectors;
+            u32 sector_size;
+            u8 partition_count;
+            struct {
+                u8 present;
+                u8 disk_num;
+                u8 partition_num;
+                u64 start_lba;
+                u64 end_lba;
+                u64 size;
+                int type;
+                char name[32];
+            } __attribute__((packed)) partitions[16];
+            u8 is_gpt;
+        } __attribute__((packed)) disk_info_user_t;
 
     disk_info_user_t disks[4];
     int n = disk_list(disks, 4);

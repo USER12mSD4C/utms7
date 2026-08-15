@@ -193,7 +193,6 @@ void ski(u64 mb_info_addr) {
     init_memory_from_multiboot(mb_info_addr);
     print_setcolor(0x0A, 0x00);
     print("OK\n");
-    automount_first_ufs();
     print("\n");
     print_setcolor(0x07, 0x00);
     int total = 0;
@@ -238,8 +237,11 @@ void ski(u64 mb_info_addr) {
         } while(0);
     #include "../kernel/init_table.h"
     #undef X
+
     print("\nDisks found: ");
     printnum(disk_get_disk_count());
+    print("\n");
+    automount_first_ufs();
     print("\n");
     print("UTMS loaded\\\\\nUTMS Innovative Technologies [UIT], under UOPL_1.6.3\n\n");
 }

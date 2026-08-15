@@ -15,7 +15,6 @@ typedef struct {
 static disk_t disks[4];
 static int current_disk = 0;
 
-// Статический выровненный буфер для DMA
 __attribute__((aligned(16))) static u8 disk_dma_buf[512];
 
 void ahci_register_disk(int port, u64 sectors, const char* model) {
@@ -25,6 +24,11 @@ void ahci_register_disk(int port, u64 sectors, const char* model) {
     strncpy(disks[port].model, model, 40);
     disks[port].model[40] = '\0';
     disks[port].present = 1;
+}
+
+u64 disk_get_sectors(u8 drive) {
+    int i = drive - 0x80;
+    return (i < 0 || i >= 4) ? 0 : disks[i].sectors;
 }
 
 int disk_init(void) {
@@ -63,11 +67,6 @@ int disk_get_disk_count(void) {
 
 int disk_get_boot_device(void) {
     for (int i = 0; i < 4; i++) if (disks[i].present) return i; return -1;
-}
-
-u64 disk_get_sectors(u8 drive) {
-    int i = drive - 0x80;
-    return (i < 0 || i >= 4) ? 0 : disks[i].sectors;
 }
 
 void disk_get_model(u8 drive, char* model) {
