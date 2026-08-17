@@ -68,6 +68,11 @@
 #define SYS_disk_table          42
 #define SYS_partition_create    43
 #define SYS_partition_delete    44
+//unix
+#define SYS_bind        48
+#define SYS_listen      49
+#define SYS_accept      50
+#define SYS_poll        51
 
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6);
 

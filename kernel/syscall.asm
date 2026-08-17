@@ -1,4 +1,3 @@
-; kernel/syscall.asm
 global syscall_entry
 
 extern syscall_handler_c
@@ -12,16 +11,18 @@ syscall_entry:
     swapgs
     mov [rel user_stack_temp], rsp
     mov rsp, [rel kernel_stack_temp]
-    sti
+
     push qword [rel user_stack_temp]
     push r11
     push rcx
+
     push rbp
     push rbx
     push r12
     push r13
     push r14
     push r15
+
     push r9
     push r8
     push r10
@@ -34,9 +35,7 @@ syscall_entry:
     mov rsi, rax
     call syscall_handler_c
 
-    mov rax, [rsp]
-
-    add rsp, 8
+    pop rax
     pop rdi
     pop rsi
     pop rdx

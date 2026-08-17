@@ -448,9 +448,13 @@ static const sh_cmd_t cmds[] = {
 };
 
 int main(void) {
+    write(1, "DEBUG: main started\n", 20);
     set_color(COL_RESET, 0);
+    write(1, "DEBUG: after set_color\n", 23);
     refresh_cwd();
+    write(1, "DEBUG: after refresh_cwd\n", 25);
     out("UTMS7 shell ready. Type 'help'.\n");
+    write(1, "DEBUG: after first out\n", 23);
 
     char line[MAX_LINE];
     int pos;
@@ -491,13 +495,19 @@ int main(void) {
         char *argv[16];
         int argc = 0;
         char *p = line;
+
         while (*p && argc < 15) {
             while (*p == ' ' || *p == '\t') p++;
             if (!*p) break;
+
             argv[argc++] = p;
+
             while (*p && *p != ' ' && *p != '\t') p++;
             if (*p) *p++ = '\0';
         }
+
+        argv[argc] = NULL;
+
         if (argc == 0) continue;
 
         int found = 0;
@@ -509,11 +519,23 @@ int main(void) {
             }
         }
         if (!found) {
-            set_color(COL_ERR, 0);
-            out("sh: unknown command: ");
-            out(argv[0]);
-            out("\n");
-            set_color(COL_RESET, 0);
+            int pid = fork();
+            if (pid == 0) {
+                execve(argv[0], argv, NULL);
+                set_color(COL_ERR, 0);
+                out("sh: command not found: ");
+                out(argv[0]);
+                out("\n");
+                set_color(COL_RESET, 0);
+                _exit(1);
+            } else if (pid > 0) {
+                int status;
+                waitpid(pid, &status, 0);
+            } else {
+                set_color(COL_ERR, 0);
+                out("sh: fork failed\n");
+                set_color(COL_RESET, 0);
+            }
         }
         set_color(COL_RESET, 0);
     }

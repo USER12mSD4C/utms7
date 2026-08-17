@@ -1,25 +1,70 @@
-// kernel/kernel.c
 #include "../drivers/drm.h"
 #include "../adders/ski.h"
 #include "../kernel/memory.h"
 #include "../include/string.h"
+#include "../include/multiboot2.h"
 
+static u8 multiboot_info_copy[8192] __attribute__((aligned(16)));
 static u64 multiboot_info_ptr = 0;
 
 void kernel_main(void *mb_info) {
-    multiboot_info_ptr = (u64)mb_info;
+    multiboot2_info_header_t* hdr = (multiboot2_info_header_t*)mb_info;
+    u32 sz = hdr->total_size;
+    if (sz > sizeof(multiboot_info_copy)) sz = sizeof(multiboot_info_copy);
+    memcpy(multiboot_info_copy, mb_info, sz);
+    multiboot_info_ptr = (u64)multiboot_info_copy;
 
-    drm_parse_multiboot((u64)mb_info);
+    drm_parse_multiboot((u64)multiboot_info_copy);
     drm_init();
 
     print_clear();
     print("hello world, UTMS7 is booting...\n");
 
-    ski((u64)mb_info);
+    ski((u64)multiboot_info_copy);
 
     while (1) {
         __asm__ volatile ("hlt");
     }
+}
+
+static int module_name_match(const char* cmdline, const char* name) {
+    if (!cmdline || !name) return 0;
+
+    if (strcmp(cmdline, name) == 0) return 1;
+
+    u64 name_len = strlen(name);
+    const char* p = cmdline;
+
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+
+        const char* start = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+
+        u64 token_len = (u64)(p - start);
+
+        if (token_len == name_len && strncmp(start, name, name_len) == 0) {
+            return 1;
+        }
+
+        const char* base = start;
+        for (const char* q = start; q < start + token_len; q++) {
+            if (*q == '/') base = q + 1;
+        }
+
+        u64 base_len = (u64)(start + token_len - base);
+
+        if (base_len == name_len && strncmp(base, name, name_len) == 0) {
+            return 1;
+        }
+
+        if (base_len > name_len && strncmp(base, name, name_len) == 0 && base[name_len] == '.') {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 int multiboot_get_module(const char* name, u8** start, u32* size) {
@@ -29,42 +74,28 @@ int multiboot_get_module(const char* name, u8** start, u32* size) {
     }
 
     u8* ptr = (u8*)(multiboot_info_ptr + 8);
-    int mod_index = 0;
+
     while (1) {
         u32 type = *(u32*)ptr;
         u32 tag_size = *(u32*)(ptr + 4);
+
         if (type == 0 || tag_size == 0) break;
 
-        if (type == 3) {
+        if (type == 3 && tag_size > 16) {
             u64 mod_start = *(u32*)(ptr + 8);
             u64 mod_end = *(u32*)(ptr + 12);
             const char* cmdline = (const char*)(ptr + 16);
 
-            print("[mb] module ");
-            printnum(mod_index++);
-            print(": start=");
-            printhex(mod_start);
-            print(" end=");
-            printhex(mod_end);
-            print(" cmdline='");
-            print(cmdline);
-            print("'\n");
-
-            int match = 0;
-            int i = 0;
-            for (; cmdline[i] != '\0' && name[i] != '\0'; i++) {
-                if (cmdline[i] != name[i]) break;
-            }
-            if (cmdline[i] == '\0' && name[i] == '\0') match = 1;
-
-            if (match) {
+            if (module_name_match(cmdline, name)) {
                 *start = (u8*)mod_start;
                 *size = (u32)(mod_end - mod_start);
                 return 0;
             }
         }
+
         ptr += (tag_size + 7) & ~7;
     }
+
     print("[mb] module '");
     print(name);
     print("' not found\n");

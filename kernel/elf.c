@@ -41,109 +41,70 @@ static u64 push_string_to_user_stack(u64* pml4, u64 rsp, const char* str) {
 }
 
 u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
-    (void)size;
     elf64_hdr_t *hdr = (elf64_hdr_t*)data;
-
     if (elf_check_header(hdr) != 0) {
         print("[elf] bad header\n");
         return 0;
     }
-
-    print("[elf] type=");
-    printnum(hdr->type);
-    print(" phnum=");
-    printnum(hdr->phnum);
-    print(" entry=");
-    printhex(hdr->entry);
-    print("\n");
-
-    u64 base = (hdr->type == ET_DYN) ? 0x40000000 : 0x400000;
-    u64 max_vaddr = base;
-
-    u64 old_cr3;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    u64 base = 0;
+    if (hdr->type == ET_DYN) {
+        base = 0x40000000;
+    }
+    u64 max_vaddr = 0;
 
     for (int i = 0; i < hdr->phnum; i++) {
         elf64_phdr_t *ph = (elf64_phdr_t*)(data + hdr->phoff + i * hdr->phentsize);
-
         if (ph->type != PT_LOAD) continue;
-
-        u64 vaddr = (hdr->type == ET_DYN) ? ph->vaddr + base : ph->vaddr;
-        if (vaddr < 0x100000) {
-            print("[elf] vaddr below limit: ");
-            printhex(vaddr);
-            print("\n");
-            return 0;
-        }
+        if (ph->memsz == 0) continue;
+        u64 vaddr = ph->vaddr + base;
         u64 memsz = ph->memsz;
         u64 filesz = ph->filesz;
-
-        if (memsz == 0) continue;
-
-        if (vaddr + memsz > max_vaddr) {
-            max_vaddr = vaddr + memsz;
+        if (vaddr < 0x10000) {
+            print("[elf] vaddr too low\n");
+            return 0;
         }
-
-        u64 pages = (memsz + (vaddr & 4095) + 4095) / 4096;
-        u64 offset_in_page = vaddr & 0xFFF;
-        u64 start_page = vaddr & ~0xFFF;
-
-        for (u64 j = 0; j < pages; j++) {
+        u64 end_vaddr = vaddr + memsz;
+        if (end_vaddr > max_vaddr) {
+            max_vaddr = end_vaddr;
+        }
+        u64 start_page = vaddr & ~0xFFFULL;
+        u64 end_page = (vaddr + memsz + 4095) & ~0xFFFULL;
+        u64 num_pages = (end_page - start_page) / 4096;
+        for (u64 j = 0; j < num_pages; j++) {
             u64 virt = start_page + j * 4096;
             u64 phys = (u64)pmm_alloc_page();
-
             if (!phys) {
                 print("[elf] pmm alloc fail\n");
-                if (old_cr3 != (u64)pml4) {
-                    __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
-                }
                 return 0;
             }
-
-            u64 flags = PAGE_PRESENT | PAGE_USER;
-            if (ph->flags & PF_W) flags |= PAGE_WRITABLE;
-
+            u64 flags = PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE;
             if (paging_map_for_process(pml4, phys, virt, flags) != 0) {
-                print("[elf] map fail virt=");
-                printhex(virt);
-                print("\n");
                 pmm_free_page((void*)phys);
-                if (old_cr3 != (u64)pml4) {
-                    __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
-                }
+                print("[elf] map fail\n");
                 return 0;
             }
 
-            __asm__ volatile("mov %0, %%cr3" : : "r"(pml4) : "memory");
+            // Записываем данные напрямую в физическую страницу (1:1 mapping)
+            memset((void*)phys, 0, 4096);
 
-            memset((void*)virt, 0, 4096);
-
-            u64 file_offset = ph->offset + j * 4096 - offset_in_page;
-            u64 copy_start = (j == 0) ? offset_in_page : 0;
-            u64 copy_size = 4096 - copy_start;
-
-            if (file_offset < ph->offset + filesz) {
-                u64 remaining = (ph->offset + filesz) - file_offset;
-                if (copy_size > remaining) copy_size = remaining;
-
-                if (copy_size > 0 && copy_size <= 4096) {
-                    memcpy((void*)(virt + copy_start), data + file_offset, copy_size);
-                }
+            u64 seg_start = vaddr;
+            u64 seg_end = vaddr + filesz;
+            u64 pg_start = virt;
+            u64 pg_end = virt + 4096;
+            if (pg_start < seg_start) pg_start = seg_start;
+            if (pg_end > seg_end) pg_end = seg_end;
+            if (pg_start < pg_end) {
+                u64 copy_size = pg_end - pg_start;
+                u64 file_off = ph->offset + (pg_start - vaddr);
+                u64 dest_off = pg_start - virt;
+                memcpy((void*)(phys + dest_off), data + file_off, copy_size);
             }
-
-            __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
         }
-    }
-
-    if (old_cr3 != (u64)pml4) {
-        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
     }
 
     if (out_max_vaddr) {
-        *out_max_vaddr = (max_vaddr + 4095) & ~4095;
+        *out_max_vaddr = (max_vaddr + 4095) & ~4095ULL;
     }
-
-    print("[elf] loaded ok\n");
     return (hdr->type == ET_DYN) ? hdr->entry + base : hdr->entry;
 }
 
@@ -158,8 +119,9 @@ int elf_load_current(u8 *data, u32 size, process_t *p) {
         return -1;
     }
 
-    u64 user_stack_top = 0x7FFFFFFFF000;
-    u64 stack_pages = 16;
+    u64 user_stack_top = 0x0000004000000000;
+    u64 stack_pages = 64;
+
     for (u64 i = 0; i < stack_pages; i++) {
         u64 phys = (u64)pmm_alloc_page();
         if (!phys) {
@@ -177,41 +139,13 @@ int elf_load_current(u8 *data, u32 size, process_t *p) {
     u64 old_as = p->cr3;
     p->cr3 = (u64)pml4;
     p->user_rip = entry;
-
     p->heap_start = max_vaddr;
     p->heap_end = p->heap_start;
+    p->user_rsp = user_stack_top;
 
-    u64 rsp = user_stack_top;
-
-    u8 random_bytes[16] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
-                           0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
-    u64 at_random_ptr = push_to_user_stack(pml4, rsp, random_bytes, 16);
-
-    u64 prog_name_ptr = push_string_to_user_stack(pml4, rsp, p->name[0] ? p->name : "app");
-
-    u64 envp_null = 0;
-    rsp = push_to_user_stack(pml4, rsp, &envp_null, sizeof(u64));
-
-    u64 argv_null = 0;
-    rsp = push_to_user_stack(pml4, rsp, &argv_null, sizeof(u64));
-
-    rsp = push_to_user_stack(pml4, rsp, &prog_name_ptr, sizeof(u64));
-
-    u64 auxv[] = {
-        6, 4096,
-        25, at_random_ptr,
-        9, entry,
-        0, 0
-    };
-    rsp = push_to_user_stack(pml4, rsp, auxv, sizeof(auxv));
-
-    u64 argc = 1;
-    rsp = push_to_user_stack(pml4, rsp, &argc, sizeof(u64));
-
-    p->user_rsp = rsp;
-    if (old_as && old_as != (u64)0x1000) {
-        __asm__ volatile("mov %0, %%cr3" : : "r"(pml4) : "memory");
+    if (old_as && old_as != 0x1000) {
         free_address_space((u64*)old_as);
     }
+
     return 0;
 }

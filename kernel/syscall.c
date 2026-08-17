@@ -15,6 +15,7 @@
 #include "paging.h"
 #include "elf.h"
 #include "../include/string.h"
+#include "unix.h"
 
 #define MAX_FDS 32
 
@@ -47,7 +48,7 @@ typedef struct {
 
 static int is_user_pointer(void* ptr) {
     u64 addr = (u64)ptr;
-    return (addr >= 0x400000 && addr < 0x800000000000);
+    return (addr >= 0x40000000 && addr < 0x0000004000000000ULL);
 }
 
 static char fs_current_dir[256] = "/";
@@ -205,6 +206,11 @@ static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4
         long read_count = 0;
         u8 *user_buf = (u8*)buf;
 
+        while (!keyboard_data_ready()) {
+            __asm__ volatile("sti");
+            sched_sleep(1);
+        }
+
         while (read_count < count && keyboard_data_ready()) {
             char c = keyboard_getc();
             u8 tmp = (u8)c;
@@ -212,13 +218,6 @@ static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4
             read_count++;
         }
 
-        if (read_count == 0 && count > 0) {
-            while (!keyboard_data_ready());
-            char c = keyboard_getc();
-            u8 tmp = (u8)c;
-            if (copy_to_user(user_buf, &tmp, 1) != 0) return -1;
-            read_count = 1;
-        }
         return read_count;
     }
 
@@ -306,16 +305,13 @@ static long sys_close(trap_frame_t* frame, long fd, long a2, long a3, long a4, l
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS) return -1;
 
-    if (p->fds[fd].used && p->fds[fd].type == 0) {
-        file_data_t* f = &p->fds[fd].data.file;
-
-        if (f->dirty && f->buf) {
-            ufs_write(f->path, f->buf, f->buf_size);
-        }
-
-        if (f->buf) {
-            kfree(f->buf);
-            f->buf = NULL;
+    if (p->fds[fd].used) {
+        if (p->fds[fd].type == FD_TYPE_FILE) {
+            file_data_t* f = &p->fds[fd].data.file;
+            if (f->dirty && f->buf) ufs_write(f->path, f->buf, f->buf_size);
+            if (f->buf) kfree(f->buf);
+        } else if (p->fds[fd].type == FD_TYPE_UNIX) {
+            unix_close(fd);
         }
     }
 
@@ -330,6 +326,34 @@ static long sys_brk(trap_frame_t* frame, long addr, long a2, long a3, long a4, l
     if (!p) return -1;
 
     if (addr == 0) return p->heap_end;
+
+    if ((u64)addr > p->heap_end) {
+        u64 old_page = (p->heap_end + 4095) & ~4095ULL;
+        u64 new_page = ((u64)addr + 4095) & ~4095ULL;
+        u64* pml4 = (u64*)p->cr3;
+
+        u64 old_cr3;
+        __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+        if (old_cr3 != p->cr3) {
+            __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+        }
+
+        for (u64 virt = old_page; virt < new_page; virt += 4096) {
+            u64 phys = (u64)pmm_alloc_page();
+            if (!phys) {
+                if (old_cr3 != p->cr3) {
+                    __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+                }
+                return -1;
+            }
+            paging_map_for_process(pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
+            memset((void*)virt, 0, 4096);
+        }
+
+        if (old_cr3 != p->cr3) {
+            __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+        }
+    }
 
     p->heap_end = addr;
     return addr;
@@ -414,9 +438,8 @@ static long sys_munmap(trap_frame_t* frame, long addr, long size, long a3, long 
     return 0;
 }
 
-static long sys_exec(trap_frame_t* frame, long path, long argv, long envp, long a4, long a5, long a6) {
+static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_ptr, long a4, long a5, long a6) {
     (void)a4; (void)a5; (void)a6;
-    (void)argv; (void)envp;
     process_t *p = sched_current();
     if (!p) return -1;
     if (!is_user_pointer((void*)path)) return -1;
@@ -425,42 +448,160 @@ static long sys_exec(trap_frame_t* frame, long path, long argv, long envp, long 
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
+    char argv_buf[64][256];
+    int argc = 0;
+
+    if (argv_ptr && is_user_pointer((void*)argv_ptr)) {
+        for (int i = 0; i < 63; i++) {
+            u64 str_ptr;
+            if (copy_from_user(&str_ptr, (void*)((char*)argv_ptr + i * 8), 8) != 0) break;
+            if (str_ptr == 0) break;
+            if (!is_user_pointer((void*)str_ptr)) break;
+            if (copy_from_user(argv_buf[argc], (void*)str_ptr, 255) != 0) break;
+            argv_buf[argc][255] = '\0';
+            argc++;
+        }
+    }
+
+    if (argc == 0) {
+        const char* name = path_buf;
+        const char* slash = strrchr(path_buf, '/');
+        if (slash) name = slash + 1;
+        strncpy(argv_buf[0], name, 255);
+        argv_buf[0][255] = '\0';
+        argc = 1;
+    }
+
     u8 *elf_data = NULL;
     u32 elf_size = 0;
+
     if (ufs_read(path_buf, &elf_data, &elf_size) != 0) {
         extern int get_module_data(const char* name, u8** buf, u32* size);
         const char* mod_name = path_buf;
-        if (strcmp(path_buf, "/bin/sfsh") == 0 || strcmp(path_buf, "sfsh") == 0) {
-            mod_name = "sfsh";
+        if (strcmp(path_buf, "/bin/sfsh") == 0 || strcmp(path_buf, "sfsh") == 0) mod_name = "sfsh";
+        if (get_module_data(mod_name, &elf_data, &elf_size) != 0) return -1;
+    }
+
+    u64* new_pml4 = create_address_space();
+    if (!new_pml4) {
+        kfree(elf_data);
+        return -1;
+    }
+
+    u64 max_vaddr = 0;
+    u64 entry = elf_load(elf_data, elf_size, new_pml4, &max_vaddr);
+    if (entry == 0) {
+        free_address_space(new_pml4);
+        kfree(elf_data);
+        return -1;
+    }
+
+    u64 user_stack_top = 0x0000004000000000ULL;
+    u64 stack_pages = 64;
+
+    for (u64 i = 0; i < stack_pages; i++) {
+        u64 phys = (u64)pmm_alloc_page();
+        if (!phys) {
+            free_address_space(new_pml4);
+            kfree(elf_data);
+            return -1;
         }
-        if (get_module_data(mod_name, &elf_data, &elf_size) != 0) {
+        u64 virt = user_stack_top - (stack_pages - i) * 4096;
+        if (paging_map_for_process(new_pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+            pmm_free_page((void*)phys);
+            free_address_space(new_pml4);
+            kfree(elf_data);
             return -1;
         }
     }
 
-    int res = elf_load_current(elf_data, elf_size, p);
-    kfree(elf_data);
+    u64* old_pml4 = (u64*)p->cr3;
+    p->cr3 = (u64)new_pml4;
+    p->user_rip = entry;
+    p->heap_start = (max_vaddr + 4095) & ~4095ULL;
+    p->heap_end = p->heap_start;
 
-    if (res == 0) {
-        frame->rip = p->user_rip;
-        frame->rsp = p->user_rsp;
-        frame->rflags = 0x202;
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(new_pml4) : "memory");
 
-        frame->rdi = 0;
-        frame->rsi = 0;
-        frame->rdx = 0;
-        frame->r10 = 0;
-        frame->r8 = 0;
-        frame->r9 = 0;
-        frame->rbx = 0;
-        frame->rbp = 0;
-        frame->r12 = 0;
-        frame->r13 = 0;
-        frame->r14 = 0;
-        frame->r15 = 0;
+    u64 rsp = user_stack_top;
+    rsp &= ~0xFULL;
+
+    u64 argv_ptrs[64];
+    for (int i = 0; i < argc; i++) {
+        u64 len = strlen(argv_buf[i]) + 1;
+        rsp -= len;
+        rsp &= ~0xFULL;
+        memcpy((void*)rsp, argv_buf[i], len);
+        argv_ptrs[i] = rsp;
     }
 
-    return res;
+    rsp &= ~0xFULL;
+
+    u8 random_bytes[16] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+                           0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    rsp -= 16;
+    memcpy((void*)rsp, random_bytes, 16);
+    u64 at_random_ptr = rsp;
+
+    rsp -= 8; *(u64*)rsp = 0;
+
+    u64 auxv[] = {
+        6, 4096,
+        25, at_random_ptr,
+        9, entry,
+        0, 0
+    };
+    rsp -= sizeof(auxv);
+    memcpy((void*)rsp, auxv, sizeof(auxv));
+
+    rsp -= 8; *(u64*)rsp = 0;
+
+    for (int i = 0; i < 64; i++) {
+        rsp -= 8; *(u64*)rsp = 0;
+    }
+
+    for (int i = argc - 1; i >= 0; i--) {
+        rsp -= 8;
+        *(u64*)rsp = argv_ptrs[i];
+    }
+
+    u64 argv_base = rsp;
+
+    rsp -= 8; *(u64*)rsp = 0;
+    rsp -= 8; *(u64*)rsp = (u64)argc;
+    rsp &= ~0xFULL;
+    rsp -= 8;
+
+    p->user_rsp = rsp;
+
+    __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+
+    if (old_pml4 && old_pml4 != (u64*)0x1000) {
+        free_address_space(old_pml4);
+    }
+
+    kfree(elf_data);
+
+    frame->rip = entry;
+    frame->rsp = rsp;
+    frame->rflags = 0x202;
+    frame->rdi = argc;
+    frame->rsi = argv_base;
+    frame->rdx = 0;
+    frame->r10 = 0;
+    frame->r8 = 0;
+    frame->r9 = 0;
+    frame->rax = 0;
+    frame->rbx = 0;
+    frame->rbp = 0;
+    frame->r12 = 0;
+    frame->r13 = 0;
+    frame->r14 = 0;
+    frame->r15 = 0;
+
+    return 0;
 }
 
 static long sys_waitpid(trap_frame_t* frame, long pid, long status, long options, long a4, long a5, long a6) {
@@ -694,48 +835,85 @@ static long sys_partition_umount(trap_frame_t* frame, long a1, long a2, long a3,
 }
 
 static long sys_socket(trap_frame_t* frame, long domain, long type, long protocol, long a4, long a5, long a6) {
-    (void)frame; (void)domain; (void)type; (void)protocol; (void)a4; (void)a5; (void)a6;
-    return tcp_socket();
+    (void)frame; (void)protocol; (void)a4; (void)a5; (void)a6;
+    if (domain == 1) return unix_socket_create();
+    if (domain == 2) return tcp_socket();
+    return -1;
 }
 
-static long sys_connect(trap_frame_t* frame, long fd, long addr, long port, long a4, long a5, long a6) {
-    (void)frame; (void)a4; (void)a5; (void)a6;
-    return tcp_connect(fd, (u32)addr, (u16)port);
+static long sys_connect(trap_frame_t* frame, long fd, long addr, long addrlen, long a4, long a5, long a6) {
+    (void)frame; (void)addrlen; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+
+    u16 family;
+    if (copy_from_user(&family, (void*)addr, 2) != 0) return -1;
+
+    if (p->fds[fd].type == FD_TYPE_UNIX) {
+        struct { u16 fam; char path[108]; } un;
+        if (copy_from_user(&un, (void*)addr, sizeof(un)) != 0) return -1;
+        return unix_connect(fd, un.path);
+    }
+    if (p->fds[fd].type == FD_TYPE_TCP || family == 2) {
+        struct { u16 fam; u16 port; u32 ip; } in;
+        if (copy_from_user(&in, (void*)addr, sizeof(in)) != 0) return -1;
+        return tcp_connect(fd, in.ip, in.port);
+    }
+    return -1;
 }
 
 static long sys_send(trap_frame_t* frame, long fd, long buf, long len, long flags, long a5, long a6) {
     (void)frame; (void)flags; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
     if (!is_user_pointer((void*)buf)) return -1;
 
-    u8 *data = kmalloc(len);
-    if (!data) return -1;
-    if (copy_from_user(data, (void*)buf, len) != 0) {
+    if (p->fds[fd].type == FD_TYPE_UNIX) {
+        u8 *data = kmalloc(len);
+        if (!data) return -1;
+        if (copy_from_user(data, (void*)buf, len) != 0) { kfree(data); return -1; }
+        int res = unix_send(fd, data, len);
         kfree(data);
-        return -1;
+        return res;
     }
-
-    int res = tcp_send(fd, data, len);
-    kfree(data);
-    return res;
+    if (p->fds[fd].type == FD_TYPE_TCP) {
+        u8 *data = kmalloc(len);
+        if (!data) return -1;
+        if (copy_from_user(data, (void*)buf, len) != 0) { kfree(data); return -1; }
+        int res = tcp_send(fd, data, len);
+        kfree(data);
+        return res;
+    }
+    return -1;
 }
 
 static long sys_recv(trap_frame_t* frame, long fd, long buf, long len, long flags, long a5, long a6) {
     (void)frame; (void)flags; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
     if (!is_user_pointer((void*)buf)) return -1;
 
-    u8 *data = kmalloc(len);
-    if (!data) return -1;
-
-    int res = tcp_recv(fd, data, len);
-    if (res > 0) {
-        if (copy_to_user((void*)buf, data, res) != 0) {
-            kfree(data);
-            return -1;
+    if (p->fds[fd].type == FD_TYPE_UNIX) {
+        u8 *data = kmalloc(len);
+        if (!data) return -1;
+        int res = unix_recv(fd, data, len);
+        if (res > 0) {
+            if (copy_to_user((void*)buf, data, res) != 0) { kfree(data); return -1; }
         }
+        kfree(data);
+        return res;
     }
-
-    kfree(data);
-    return res;
+    if (p->fds[fd].type == FD_TYPE_TCP) {
+        u8 *data = kmalloc(len);
+        if (!data) return -1;
+        int res = tcp_recv(fd, data, len);
+        if (res > 0) {
+            if (copy_to_user((void*)buf, data, res) != 0) { kfree(data); return -1; }
+        }
+        kfree(data);
+        return res;
+    }
+    return -1;
 }
 
 static long sys_gethostbyname(trap_frame_t* frame, long name, long ip, long a3, long a4, long a5, long a6) {
@@ -842,7 +1020,7 @@ static long sys_clone(trap_frame_t* frame, long rip, long rsp, long a3, long a4,
 
 static long sys_fork(trap_frame_t* frame, long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-    return sched_clone(frame->rip, frame->rsp);
+    return sched_fork(frame);
 }
 
 static long sys_dup(trap_frame_t* frame, long oldfd, long a2, long a3, long a4, long a5, long a6) {
@@ -891,6 +1069,33 @@ static long sys_setcolor(trap_frame_t* frame, long fg, long bg, long a3, long a4
 typedef long (*syscall_t)(trap_frame_t*, long, long, long, long, long, long);
 static syscall_t syscall_table[64];
 
+static long sys_bind(trap_frame_t* frame, long fd, long addr, long addrlen, long a4, long a5, long a6) {
+    (void)frame; (void)addrlen; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+    if (p->fds[fd].type != FD_TYPE_UNIX) return -1;
+
+    struct { u16 fam; char path[108]; } un;
+    if (copy_from_user(&un, (void*)addr, sizeof(un)) != 0) return -1;
+    return unix_bind(fd, un.path);
+}
+
+static long sys_listen(trap_frame_t* frame, long fd, long backlog, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+    if (p->fds[fd].type != FD_TYPE_UNIX) return -1;
+    return unix_listen(fd, backlog);
+}
+
+static long sys_accept(trap_frame_t* frame, long fd, long addr, long addrlen, long a4, long a5, long a6) {
+    (void)frame; (void)addr; (void)addrlen; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+    if (p->fds[fd].type != FD_TYPE_UNIX) return -1;
+    return unix_accept(fd);
+}
+
 int syscall_init(void) {
     for (int i = 0; i < 64; i++) syscall_table[i] = NULL;
 
@@ -923,7 +1128,6 @@ int syscall_init(void) {
     syscall_table[26] = sys_dup2;
     syscall_table[27] = sys_ioctl;
     syscall_table[28] = sys_clone;
-    syscall_table[57] = sys_fork;
     syscall_table[30] = sys_disk_list;
     syscall_table[37] = sys_partition_mount;
     syscall_table[38] = sys_partition_umount;
@@ -936,12 +1140,14 @@ int syscall_init(void) {
     syscall_table[45] = sys_send;
     syscall_table[46] = sys_recv;
     syscall_table[47] = sys_gethostbyname;
-    syscall_table[48] = sys_getip;
-    syscall_table[50] = sys_meminfo;
+    syscall_table[48] = sys_bind;
+    syscall_table[49] = sys_listen;
+    syscall_table[50] = sys_accept;
     syscall_table[51] = sys_ps;
     syscall_table[52] = sys_gettime;
     syscall_table[53] = sys_clear;
     syscall_table[54] = sys_setcolor;
+    syscall_table[57] = sys_fork;
 
     wrmsr(MSR_LSTAR, (u64)syscall_entry);
 
@@ -959,6 +1165,8 @@ int syscall_init(void) {
 }
 
 long syscall_handler_c(trap_frame_t* frame, long num) {
+    __asm__ volatile("sti");
+
     long a1 = frame->rdi;
     long a2 = frame->rsi;
     long a3 = frame->rdx;

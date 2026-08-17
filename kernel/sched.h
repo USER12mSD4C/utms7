@@ -11,6 +11,11 @@
 #define PROC_BLOCKED    4
 #define PROC_ZOMBIE     5
 
+#define FD_TYPE_FILE 0
+#define FD_TYPE_DRM  1
+#define FD_TYPE_TCP  2
+#define FD_TYPE_UNIX 3
+
 #define TIME_SLICE_MS   10
 #define MAX_PROCESSES   64
 
@@ -29,6 +34,8 @@ typedef struct {
     int type;
     union {
         file_data_t file;
+        void *unix_sock;
+        void *tcp_sock;
     } data;
 } fd_entry_t;
 
@@ -103,5 +110,10 @@ int sched_clone(u64 user_rip, u64 user_rsp);
 extern volatile int sched_need_resched;
 
 u64 sched_do_switch(struct interrupt_frame *frame);
+
+void sched_block_on(void *channel);
+void sched_wakeup(void *channel);
+
+int sched_fork(void *frame);
 
 #endif

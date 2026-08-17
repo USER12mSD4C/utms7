@@ -82,23 +82,30 @@ int paging_map_for_process(u64* pml4_ptr, u64 phys, u64 virt, u64 flags) {
     u64 pdpt_idx = (virt >> 30) & 0x1FF;
     u64 pd_idx    = (virt >> 21) & 0x1FF;
     u64 pt_idx    = (virt >> 12) & 0x1FF;
+
     if ((pml4_ptr[pml4_idx] & PAGE_PRESENT) == 0) {
         u64* new_pdpt = (u64*)pmm_alloc_page();
         if (!new_pdpt) return -1;
+        memset(new_pdpt, 0, 4096);
         pml4_ptr[pml4_idx] = (u64)new_pdpt | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
     }
     u64* pdpt = (u64*)(pml4_ptr[pml4_idx] & ~0xFFFULL);
+
     if ((pdpt[pdpt_idx] & PAGE_PRESENT) == 0) {
         u64* new_pd = (u64*)pmm_alloc_page();
         if (!new_pd) return -1;
+        memset(new_pd, 0, 4096);
         pdpt[pdpt_idx] = (u64)new_pd | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
     }
     u64* pd = (u64*)(pdpt[pdpt_idx] & ~0xFFFULL);
+
     if (flags & PAGE_HUGE) {
         if ((pd[pd_idx] & PAGE_PRESENT) && !(pd[pd_idx] & PAGE_HUGE)) return -1;
         pd[pd_idx] = (phys & ~0x1FFFFFULL) | flags;
+        __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
         return 0;
     }
+
     if ((pd[pd_idx] & PAGE_PRESENT) && (pd[pd_idx] & PAGE_HUGE)) {
         u64 huge_phys = pd[pd_idx] & ~0x1FFFFFULL;
         u64 huge_flags = pd[pd_idx] & 0xFFFULL;
@@ -109,13 +116,16 @@ int paging_map_for_process(u64* pml4_ptr, u64 phys, u64 virt, u64 flags) {
         }
         pd[pd_idx] = (u64)new_pt | PAGE_PRESENT | PAGE_WRITABLE | (huge_flags & PAGE_USER);
     }
+
     if ((pd[pd_idx] & PAGE_PRESENT) == 0) {
         u64* new_pt = (u64*)pmm_alloc_page();
         if (!new_pt) return -1;
+        memset(new_pt, 0, 4096);
         pd[pd_idx] = (u64)new_pt | PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER;
     }
     u64* pt = (u64*)(pd[pd_idx] & ~0xFFFULL);
     pt[pt_idx] = (phys & ~0xFFFULL) | flags;
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
     return 0;
 }
 

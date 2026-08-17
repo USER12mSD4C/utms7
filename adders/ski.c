@@ -48,18 +48,20 @@ static int pmm_done = 0;
 
 static void add_avail_region(u64 s, u64 e) {
     if (e <= s) return;
-    if (!pmm_done) {
+
+    if (!pmm_done && (e - s) >= 16 * 1024 * 1024) {
         u64 psz = (e - s) / 4;
         if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
-        if (psz >= 16 * 1024 * 1024) {
-            pmm_init_region(s, psz);
-            s += psz;
-            pmm_done = 1;
-        }
+        pmm_init_region(s, psz);
+        pmm_done = 1;
     }
-    if (e <= s) return;
-    if (!mem_found) { memory_init(s, e - s); mem_found = 1; }
-    else memory_add_region(s, e - s);
+
+    if (!mem_found) {
+        memory_init(s, e - s);
+        mem_found = 1;
+    } else {
+        memory_add_region(s, e - s);
+    }
 }
 
 static void init_memory_from_multiboot(u64 mb_info_addr) {
@@ -195,6 +197,13 @@ void ski(u64 mb_info_addr) {
     print("OK\n");
     print("\n");
     print_setcolor(0x07, 0x00);
+
+    print("\nDisks found: ");
+    printnum(disk_get_disk_count());
+    print("\n");
+    automount_first_ufs();
+    print("\n");
+
     int total = 0;
     #define X(name, func, crit, ...) total++;
     #include "../kernel/init_table.h"
@@ -238,10 +247,5 @@ void ski(u64 mb_info_addr) {
     #include "../kernel/init_table.h"
     #undef X
 
-    print("\nDisks found: ");
-    printnum(disk_get_disk_count());
-    print("\n");
-    automount_first_ufs();
-    print("\n");
-    print("UTMS loaded\\\\\nUTMS Innovative Technologies [UIT], under UOPL_1.6.3\n\n");
+    print("\nUTMS Kernel loaded\\\\\nUTMS Innovative Technologies [UIT], under UOPL_1.6.4\n\n");
 }

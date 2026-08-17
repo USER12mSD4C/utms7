@@ -49,6 +49,10 @@
 #define SYS_disk_table          42
 #define SYS_partition_create    43
 #define SYS_partition_delete    44
+#define SYS_bind        48
+#define SYS_listen      49
+#define SYS_accept      50
+#define SYS_poll        51
 
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     register long rax __asm__("rax") = num;
@@ -278,3 +282,26 @@ int partition_format(const char* dev, const char* fstype) { return syscall(SYS_p
 int disk_create_table(const char *dev, int gpt) { return syscall(SYS_disk_table, (long)dev, gpt, 0, 0, 0, 0); }
 int partition_create(const char *dev, unsigned long size_mb, int type) { return syscall(SYS_partition_create, (long)dev, (long)size_mb, type, 0, 0, 0); }
 int partition_delete(const char *dev) { return syscall(SYS_partition_delete, (long)dev, 0, 0, 0, 0, 0); }
+
+int bind(int fd, const void *addr, int addrlen) {
+    return syscall(SYS_bind, fd, (long)addr, addrlen, 0, 0, 0);
+}
+
+int listen(int fd, int backlog) {
+    return syscall(SYS_listen, fd, backlog, 0, 0, 0, 0);
+}
+
+int accept(int fd, void *addr, int *addrlen) {
+    return syscall(SYS_accept, fd, (long)addr, (long)addrlen, 0, 0, 0);
+}
+
+extern int main(int argc, char** argv, char** envp) __attribute__((weak));
+
+__attribute__((weak, noreturn)) void _start(long argc, char** argv, char** envp) {
+    if (main) {
+        int ret = main((int)argc, argv, envp);
+        _exit(ret);
+    }
+    _exit(0);
+    while(1);
+}

@@ -1,7 +1,6 @@
 #include "libc.h"
 #include <stdint.h>
 
-#define FILE_BUF_SIZE 4096
 #define O_RDONLY 0x000
 #define O_WRONLY 0x001
 #define O_RDWR   0x002
@@ -9,16 +8,32 @@
 #define O_TRUNC  0x200
 #define O_APPEND 0x400
 
-static unsigned char stdin_buf[FILE_BUF_SIZE];
-static unsigned char stdout_buf[FILE_BUF_SIZE];
+static FILE _stdin_file = { 0, 0, 0 };
+static FILE _stdout_file = { 1, 0, 0 };
+static FILE _stderr_file = { 2, 0, 0 };
 
-static FILE _stdin = { 0, O_RDONLY, 0, 0, 2, FILE_BUF_SIZE, 0, 0, 0, stdin_buf, -1 };
-static FILE _stdout = { 1, O_WRONLY, 0, 0, 1, FILE_BUF_SIZE, 0, 0, 0, stdout_buf, -1 };
-static FILE _stderr = { 2, O_WRONLY, 0, 0, 0, 0, 0, 0, 0, NULL, -1 };
+FILE *stdin = &_stdin_file;
+FILE *stdout = &_stdout_file;
+FILE *stderr = &_stderr_file;
 
-FILE *stdin = &_stdin;
-FILE *stdout = &_stdout;
-FILE *stderr = &_stderr;
+int putchar(int c) {
+    char ch = (char)c;
+    return write(1, &ch, 1);
+}
+
+int puts(const char *s) {
+    int len = 0;
+    while (s[len]) len++;
+    write(1, s, len);
+    write(1, "\n", 1);
+    return len + 1;
+}
+
+int getchar(void) {
+    char c;
+    if (read(0, &c, 1) == 1) return (unsigned char)c;
+    return EOF;
+}
 
 FILE *fopen(const char *path, const char *mode) {
     int flags = 0;
@@ -35,103 +50,33 @@ FILE *fopen(const char *path, const char *mode) {
 
     FILE *f = (FILE *)malloc(sizeof(FILE));
     if (!f) { close(fd); return NULL; }
-
     f->fd = fd;
-    f->flags = flags;
     f->eof = 0;
     f->error = 0;
-    f->buf_mode = 2;
-    f->buf_size = FILE_BUF_SIZE;
-    f->buf_pos = 0;
-    f->buf_len = 0;
-    f->buf_end = 0;
-    f->buffer = (unsigned char *)malloc(FILE_BUF_SIZE);
-    if (!f->buffer) { free(f); close(fd); return NULL; }
-    f->unget_char = -1;
     return f;
 }
 
 int fclose(FILE *stream) {
     if (!stream) return EOF;
-    fflush(stream);
     int res = close(stream->fd);
-    if (stream->buffer) free(stream->buffer);
     free(stream);
     return res;
-}
-
-int fflush(FILE *stream) {
-    if (!stream) return 0;
-    if (stream->flags & O_WRONLY || stream->flags & O_RDWR) {
-        if (stream->buf_end > 0) {
-            ssize_t w = write(stream->fd, stream->buffer, stream->buf_end);
-            if (w < 0) { stream->error = 1; return EOF; }
-            stream->buf_end = 0;
-        }
-    } else {
-        stream->buf_pos = 0;
-        stream->buf_len = 0;
-    }
-    return 0;
 }
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     if (!stream || size == 0 || nmemb == 0) return 0;
     size_t total = size * nmemb;
-    unsigned char *dest = (unsigned char *)ptr;
-    size_t read_count = 0;
-
-    if (stream->unget_char != -1) {
-        *dest++ = (unsigned char)stream->unget_char;
-        stream->unget_char = -1;
-        read_count++;
-        total--;
-    }
-
-    while (total > 0) {
-        if (stream->buf_pos >= stream->buf_len) {
-            ssize_t r = read(stream->fd, stream->buffer, stream->buf_size);
-            if (r <= 0) { stream->eof = 1; break; }
-            stream->buf_len = r;
-            stream->buf_pos = 0;
-        }
-        size_t avail = stream->buf_len - stream->buf_pos;
-        size_t to_copy = (avail < total) ? avail : total;
-        memcpy(dest, stream->buffer + stream->buf_pos, to_copy);
-        stream->buf_pos += to_copy;
-        dest += to_copy;
-        read_count += to_copy;
-        total -= to_copy;
-    }
-    return read_count / size;
+    ssize_t r = read(stream->fd, ptr, total);
+    if (r <= 0) { stream->eof = 1; return 0; }
+    return r / size;
 }
 
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
     if (!stream || size == 0 || nmemb == 0) return 0;
     size_t total = size * nmemb;
-    const unsigned char *src = (const unsigned char *)ptr;
-    size_t written = 0;
-
-    if (stream->buf_mode == 0) {
-        ssize_t w = write(stream->fd, src, total);
-        if (w < 0) { stream->error = 1; return 0; }
-        return w / size;
-    }
-
-    while (total > 0) {
-        size_t space = stream->buf_size - stream->buf_end;
-        size_t to_copy = (space < total) ? space : total;
-        memcpy(stream->buffer + stream->buf_end, src, to_copy);
-        stream->buf_end += to_copy;
-        src += to_copy;
-        written += to_copy;
-        total -= to_copy;
-
-        if (stream->buf_end == stream->buf_size || (stream->buf_mode == 1 && memchr(src - to_copy, '\n', to_copy))) {
-            if (fflush(stream) == EOF) break;
-        }
-    }
-    return written / size;
+    ssize_t w = write(stream->fd, ptr, total);
+    if (w < 0) { stream->error = 1; return 0; }
+    return w / size;
 }
 
 int fgetc(FILE *stream) {
@@ -166,16 +111,7 @@ int fputs(const char *s, FILE *stream) {
     return EOF;
 }
 
-int getchar(void) { return fgetc(stdin); }
-int putchar(int c) { return fputc(c, stdout); }
-
-int puts(const char *s) {
-    if (fputs(s, stdout) == EOF) return EOF;
-    return fputc('\n', stdout);
-}
-
 int fseek(FILE *stream, long offset, int whence) {
-    fflush(stream);
     off_t res = lseek(stream->fd, offset, whence);
     if (res == -1) { stream->error = 1; return -1; }
     stream->eof = 0;
@@ -183,7 +119,6 @@ int fseek(FILE *stream, long offset, int whence) {
 }
 
 long ftell(FILE *stream) {
-    fflush(stream);
     return (long)lseek(stream->fd, 0, SEEK_CUR);
 }
 
@@ -191,16 +126,14 @@ void rewind(FILE *stream) { fseek(stream, 0, SEEK_SET); }
 int feof(FILE *stream) { return stream ? stream->eof : 0; }
 int ferror(FILE *stream) { return stream ? stream->error : 0; }
 void clearerr(FILE *stream) { if (stream) { stream->eof = 0; stream->error = 0; } }
+int fflush(FILE *stream) { (void)stream; return 0; }
 
 int ungetc(int c, FILE *stream) {
-    if (!stream || c == EOF) return EOF;
-    stream->unget_char = c;
-    stream->eof = 0;
-    return c;
+    (void)stream; (void)c;
+    return EOF;
 }
 
 typedef struct {
-    FILE *f;
     char *str;
     size_t pos;
     size_t max;
@@ -208,8 +141,9 @@ typedef struct {
 } printf_ctx_t;
 
 static void printf_out_char(printf_ctx_t *ctx, char c) {
-    if (ctx->f) { fputc(c, ctx->f); }
-    else if (ctx->str && ctx->pos < ctx->max - 1) { ctx->str[ctx->pos++] = c; }
+    if (ctx->str && ctx->pos < ctx->max - 1) {
+        ctx->str[ctx->pos++] = c;
+    }
     ctx->count++;
 }
 
@@ -353,26 +287,8 @@ static int format_parser(printf_ctx_t *ctx, const char *fmt, va_list args) {
     return ctx->count;
 }
 
-int vfprintf(FILE *stream, const char *fmt, va_list args) {
-    printf_ctx_t ctx = { stream, NULL, 0, 0, 0 };
-    return format_parser(&ctx, fmt, args);
-}
-
-int fprintf(FILE *stream, const char *fmt, ...) {
-    va_list args; va_start(args, fmt);
-    int res = vfprintf(stream, fmt, args);
-    va_end(args); return res;
-}
-
-int vprintf(const char *fmt, va_list args) { return vfprintf(stdout, fmt, args); }
-int printf(const char *fmt, ...) {
-    va_list args; va_start(args, fmt);
-    int res = vprintf(fmt, args);
-    va_end(args); return res;
-}
-
 int vsnprintf(char *str, size_t size, const char *fmt, va_list args) {
-    printf_ctx_t ctx = { NULL, str, 0, size, 0 };
+    printf_ctx_t ctx = { str, 0, size, 0 };
     int res = format_parser(&ctx, fmt, args);
     if (str && size > 0) str[(ctx.pos < size) ? ctx.pos : size - 1] = '\0';
     return res;
@@ -385,14 +301,36 @@ int snprintf(char *str, size_t size, const char *fmt, ...) {
 }
 
 int vsprintf(char *str, const char *fmt, va_list args) { return vsnprintf(str, 0xFFFFFFFF, fmt, args); }
+
 int sprintf(char *str, const char *fmt, ...) {
     va_list args; va_start(args, fmt);
     int res = vsprintf(str, fmt, args);
     va_end(args); return res;
 }
 
+int vprintf(const char *fmt, va_list args) {
+    char buf[4096];
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    if (len > 0) write(1, buf, len);
+    return len;
+}
+
+int printf(const char *fmt, ...) {
+    va_list args; va_start(args, fmt);
+    int res = vprintf(fmt, args);
+    va_end(args); return res;
+}
+
+int fprintf(FILE *stream, const char *fmt, ...) {
+    va_list args; va_start(args, fmt);
+    char buf[4096];
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    if (len > 0) fwrite(buf, 1, len, stream);
+    return len;
+}
+
 typedef struct {
-    FILE *f;
     const char *str;
     size_t pos;
     int eof;
@@ -401,11 +339,6 @@ typedef struct {
 
 static int scanf_get_char(scanf_ctx_t *ctx) {
     if (ctx->unget != -1) { int c = ctx->unget; ctx->unget = -1; return c; }
-    if (ctx->f) {
-        int c = fgetc(ctx->f);
-        if (c == EOF) ctx->eof = 1;
-        return c;
-    }
     if (ctx->str) {
         if (ctx->str[ctx->pos] == '\0') { ctx->eof = 1; return EOF; }
         return (unsigned char)ctx->str[ctx->pos++];
@@ -507,7 +440,7 @@ static int scan_parser(scanf_ctx_t *ctx, const char *fmt, va_list args) {
 }
 
 int vsscanf(const char *str, const char *fmt, va_list args) {
-    scanf_ctx_t ctx = { NULL, str, 0, 0, -1 };
+    scanf_ctx_t ctx = { str, 0, 0, -1 };
     return scan_parser(&ctx, fmt, args);
 }
 
@@ -518,8 +451,8 @@ int sscanf(const char *str, const char *fmt, ...) {
 }
 
 int vfscanf(FILE *stream, const char *fmt, va_list args) {
-    scanf_ctx_t ctx = { stream, NULL, 0, 0, -1 };
-    return scan_parser(&ctx, fmt, args);
+    (void)stream; (void)fmt; (void)args;
+    return 0;
 }
 
 int fscanf(FILE *stream, const char *fmt, ...) {
@@ -528,7 +461,11 @@ int fscanf(FILE *stream, const char *fmt, ...) {
     va_end(args); return res;
 }
 
-int vscanf(const char *fmt, va_list args) { return vfscanf(stdin, fmt, args); }
+int vscanf(const char *fmt, va_list args) {
+    (void)fmt; (void)args;
+    return 0;
+}
+
 int scanf(const char *fmt, ...) {
     va_list args; va_start(args, fmt);
     int res = vscanf(fmt, args);

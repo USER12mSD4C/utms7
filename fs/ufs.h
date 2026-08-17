@@ -4,16 +4,15 @@
 
 #include "../include/types.h"
 
-#define UFS_BLOCK_SIZE 512
-#define UFS_MAX_NAME 28
-#define UFS_MAX_PATH 256
-#define UFS_DIRECT_BLOCKS 10
-#define UFS_CACHE_SIZE 64
+#define UTMSFS_BLOCK_SIZE 4096
+#define UTMSFS_MAGIC 0x55544D53
+#define UTMSFS_VERSION 2
 
-#define UFS_MODE_FILE  0x8000
-#define UFS_MODE_DIR   0x4000
-#define UFS_MODE_RW    0x01FF
+#define UTMSFS_INODE_FILE  0x8000
+#define UTMSFS_INODE_DIR   0x4000
+#define UTMSFS_INODE_SYMLINK 0xA000
 
+// In-memory VFS node (kept for shell/libc ABI compatibility)
 typedef struct {
     u16 mode;
     u16 uid;
@@ -22,12 +21,12 @@ typedef struct {
     u8  reserved[3];
     u32 size;
     u32 blocks;
-    u32 direct[UFS_DIRECT_BLOCKS];
+    u32 direct[10];
     u32 indirect;
     u32 atime;
     u32 mtime;
     u32 ctime;
-    char name[UFS_MAX_NAME];
+    char name[28];
     u8 is_dir;
     u8 pad[1];
 } __attribute__((packed)) FSNode;

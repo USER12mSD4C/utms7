@@ -59,16 +59,8 @@ struct dirent {
 
 typedef struct _FILE {
     int fd;
-    int flags;
     int eof;
     int error;
-    int buf_mode;
-    int buf_size;
-    int buf_pos;
-    int buf_len;
-    int buf_end;
-    unsigned char *buffer;
-    int unget_char;
 } FILE;
 
 extern FILE *stdin;
@@ -222,5 +214,25 @@ unsigned int gethostbyname(const char *name);
 
 void clear_screen(void);
 void set_color(int fg, int bg);
+
+#define AF_UNIX 1
+#define AF_INET 2
+#define SOCK_STREAM 1
+#define SOCK_DGRAM 2
+
+struct sockaddr_un {
+    u16 sun_family;
+    char sun_path[108];
+};
+
+struct sockaddr_in {
+    u16 sin_family;
+    u16 sin_port;
+    u32 sin_addr;
+};
+
+int bind(int fd, const void *addr, int addrlen);
+int listen(int fd, int backlog);
+int accept(int fd, void *addr, int *addrlen);
 
 #endif

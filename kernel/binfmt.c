@@ -30,15 +30,12 @@ static u64 raw_load(u8* data, u32 size, u64* pml4, u64* out_max_vaddr) {
             pmm_free_page((void*)phys);
             return 0;
         }
-    }
-    u64 old_cr3;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
-    if (old_cr3 != (u64)pml4) {
-        __asm__ volatile("mov %0, %%cr3" : : "r"(pml4) : "memory");
-    }
-    memcpy((void*)RAW_LOAD_BASE, data, size);
-    if (old_cr3 != (u64)pml4) {
-        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+
+        // Копируем данные напрямую в физическую страницу
+        u64 chunk = size - i * 4096;
+        if (chunk > 4096) chunk = 4096;
+        memset((void*)phys, 0, 4096);
+        memcpy((void*)phys, data + i * 4096, chunk);
     }
     if (out_max_vaddr) {
         *out_max_vaddr = RAW_LOAD_BASE + pages * 4096;

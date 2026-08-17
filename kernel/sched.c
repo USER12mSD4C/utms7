@@ -7,6 +7,7 @@
 #include "../include/io.h"
 #include "../drivers/drm.h"
 #include "gdt.h"
+#include "syscall.h"
 
 #define TIME_SLICE_MS       10
 #define KERNEL_STACK_SIZE   8192
@@ -551,9 +552,10 @@ int sched_clone(u64 user_rip, u64 user_rsp) {
     child->pid = alloc_pid();
     child->ppid = parent->pid;
     strncpy(child->name, parent->name, 27);
-    strcat(child->name, "_th");
+    child->name[27] = '\0';
     child->state = PROC_READY;
     child->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
+
     if (parent->cr3 == (u64)0x1000) {
         child->cr3 = parent->cr3;
     } else {
@@ -565,9 +567,11 @@ int sched_clone(u64 user_rip, u64 user_rsp) {
         }
         child->cr3 = (u64)cas;
     }
+
     child->heap_start = parent->heap_start;
     child->heap_end = parent->heap_end;
     child->user_rip = user_rip;
+    child->user_rsp = user_rsp;
 
     for (int i = 0; i < 32; i++) {
         child->fds[i] = parent->fds[i];
@@ -577,6 +581,7 @@ int sched_clone(u64 user_rip, u64 user_rsp) {
 
     child->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
     if (!child->kstack) {
+        if (child->cr3 != (u64)0x1000) free_address_space((u64*)child->cr3);
         child->state = PROC_UNUSED;
         __asm__ volatile ("sti");
         return -1;
@@ -656,29 +661,17 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
     u64 max_vaddr = 0;
     u64 entry = binfmt_load(elf_data, elf_size, pml4, &max_vaddr);
     if (entry == 0) {
-        print("DBG pml4=");
-        printhex((u64)pml4);
-        print("\n");
-        for (int i = 0; i < 256; i++) {
-            if (pml4[i]) {
-                print(" [");
-                printhex(i);
-                print("]=");
-                printhex(pml4[i]);
-            }
-        }
-        print("\n");
         free_address_space(pml4);
         p->state = PROC_UNUSED;
         __asm__ volatile ("sti");
         return -1;
     }
     p->user_rip = entry;
-    p->heap_start = (max_vaddr + 4095) & ~4095;
+    p->heap_start = (max_vaddr + 4095) & ~4095ULL;
     p->heap_end = p->heap_start;
 
-    u64 user_stack_top = 0x7FFFFFFFF000;
-    u64 stack_pages = 8;
+    u64 user_stack_top = 0x0000004000000000ULL;
+    u64 stack_pages = 64;
     for (u64 i = 0; i < stack_pages; i++) {
         u64 phys = (u64)pmm_alloc_page();
         if (!phys) {
@@ -688,18 +681,63 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
             return -1;
         }
         u64 virt = user_stack_top - (stack_pages - i) * 4096;
-        paging_map_for_process(pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER);
-
-        u64 old_cr3;
-        __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
-        if (old_cr3 != p->cr3) {
-            __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
-        }
-        memset((void*)virt, 0, 4096);
-        if (old_cr3 != p->cr3) {
-            __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+        if (paging_map_for_process(pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+            pmm_free_page((void*)phys);
+            free_address_space(pml4);
+            p->state = PROC_UNUSED;
+            __asm__ volatile ("sti");
+            return -1;
         }
     }
+
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(pml4) : "memory");
+
+    u64 rsp = user_stack_top;
+    rsp &= ~0xFULL;
+
+    rsp -= (strlen(name) + 1);
+    memcpy((void*)rsp, name, strlen(name) + 1);
+    u64 prog_name_ptr = rsp;
+
+    rsp &= ~0xFULL;
+
+    u8 random_bytes[16] = {0};
+    rsp -= 16;
+    memcpy((void*)rsp, random_bytes, 16);
+    u64 at_random_ptr = rsp;
+
+    u64 auxv[] = {
+        6, 4096,
+        25, at_random_ptr,
+        9, entry,
+        0, 0
+    };
+    rsp -= sizeof(auxv);
+    memcpy((void*)rsp, auxv, sizeof(auxv));
+
+    u64 envp_null = 0;
+    rsp -= 8;
+    memcpy((void*)rsp, &envp_null, 8);
+
+    u64 argv_null = 0;
+    rsp -= 8;
+    memcpy((void*)rsp, &argv_null, 8);
+
+    rsp -= 8;
+    memcpy((void*)rsp, &prog_name_ptr, 8);
+
+    u64 argc = 1;
+    rsp -= 8;
+    memcpy((void*)rsp, &argc, 8);
+
+    rsp &= ~0xFULL;
+    rsp -= 8;
+
+    __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+
+    p->user_rsp = rsp;
 
     p->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
     if (!p->kstack) {
@@ -719,8 +757,8 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
     frame->rbx = 0;
     frame->rcx = 0;
     frame->rdx = 0;
-    frame->rsi = 0;
-    frame->rdi = 0;
+    frame->rsi = rsp + 8;
+    frame->rdi = 1;
     frame->rbp = 0;
     frame->r8  = 0;
     frame->r9  = 0;
@@ -736,7 +774,7 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
     frame->rip = entry;
     frame->cs = 0x2B;
     frame->rflags = 0x202;
-    frame->rsp = user_stack_top - 8;
+    frame->rsp = rsp;
     frame->ss = 0x23;
 
     memcpy(p->fpu_context, clean_fpu_state, 512);
@@ -750,6 +788,28 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
 
     __asm__ volatile ("sti");
     return p->pid;
+}
+
+void sched_block_on(void *channel) {
+    if (!current || !sched_initialized) return;
+    __asm__ volatile ("cli");
+    current->state = PROC_BLOCKED;
+    current->waiting_for = (struct process *)channel;
+    __asm__ volatile ("sti");
+    sched_do_switch_yield();
+}
+
+void sched_wakeup(void *channel) {
+    if (!sched_initialized) return;
+    __asm__ volatile ("cli");
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROC_BLOCKED && processes[i].waiting_for == (struct process *)channel) {
+            processes[i].state = PROC_READY;
+            processes[i].waiting_for = NULL;
+            enqueue_ready(&processes[i]);
+        }
+    }
+    __asm__ volatile ("sti");
 }
 
 int spawn_userspace_init(void) {
@@ -774,4 +834,110 @@ int spawn_userspace_init(void) {
 
     print("[init] /init not found on UFS and no Multiboot2 module found, system halted.\n");
     return 0;
+}
+
+int sched_fork(void *frame_ptr) {
+    if (!sched_initialized || !frame_ptr) return -1;
+
+    __asm__ volatile ("cli");
+
+    process_t *parent = current;
+    if (!parent) {
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    process_t *child = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state == PROC_UNUSED) {
+            child = &processes[i];
+            memset(child, 0, sizeof(process_t));
+            break;
+        }
+    }
+
+    if (!child) {
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    child->pid = alloc_pid();
+    child->ppid = parent->pid;
+    strncpy(child->name, parent->name, 31);
+    child->name[31] = '\0';
+    child->state = PROC_READY;
+    child->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
+
+    if (parent->cr3 == (u64)0x1000) {
+        child->cr3 = parent->cr3;
+    } else {
+        u64* cas = copy_address_space((u64*)parent->cr3);
+        if (!cas) {
+            child->state = PROC_UNUSED;
+            __asm__ volatile ("sti");
+            return -1;
+        }
+        child->cr3 = (u64)cas;
+    }
+
+    child->heap_start = parent->heap_start;
+    child->heap_end = parent->heap_end;
+
+    for (int i = 0; i < 32; i++) {
+        child->fds[i] = parent->fds[i];
+    }
+
+    memcpy(child->fpu_context, parent->fpu_context, 512);
+
+    child->kstack = (u64)kmalloc(KERNEL_STACK_SIZE);
+    if (!child->kstack) {
+        if (child->cr3 != (u64)0x1000) free_address_space((u64*)child->cr3);
+        child->state = PROC_UNUSED;
+        __asm__ volatile ("sti");
+        return -1;
+    }
+
+    u64 stack_top = child->kstack + KERNEL_STACK_SIZE;
+    u64 child_frame_addr = (stack_top - sizeof(struct interrupt_frame)) & ~0xFULL;
+    child->kstack_top = child_frame_addr;
+
+    struct interrupt_frame *child_frame = (struct interrupt_frame *)child_frame_addr;
+    trap_frame_t *parent_frame = (trap_frame_t *)frame_ptr;
+
+    memset(child_frame, 0, sizeof(struct interrupt_frame));
+
+    // Копируем регистры родителя, чтобы child продолжил выполнение с тем же контекстом
+    child_frame->rax = 0; // Child всегда получает 0 из fork()
+    child_frame->rbx = parent_frame->rbx;
+    child_frame->rcx = 0;
+    child_frame->rdx = parent_frame->rdx;
+    child_frame->rsi = parent_frame->rsi;
+    child_frame->rdi = parent_frame->rdi;
+    child_frame->rbp = parent_frame->rbp;
+    child_frame->r8  = parent_frame->r8;
+    child_frame->r9  = parent_frame->r9;
+    child_frame->r10 = parent_frame->r10;
+    child_frame->r11 = 0;
+    child_frame->r12 = parent_frame->r12;
+    child_frame->r13 = parent_frame->r13;
+    child_frame->r14 = parent_frame->r14;
+    child_frame->r15 = parent_frame->r15;
+
+    child_frame->error_code = 0;
+    child_frame->vector = 128;
+
+    child_frame->rip = parent_frame->rip;
+    child_frame->cs = 0x2B;
+    child_frame->rflags = parent_frame->rflags | 0x202;
+    child_frame->rsp = parent_frame->rsp;
+    child_frame->ss = 0x23;
+
+    child->user_rip = child_frame->rip;
+    child->user_rsp = child_frame->rsp;
+
+    enqueue_ready(child);
+    process_count++;
+
+    __asm__ volatile ("sti");
+    return child->pid;
 }
