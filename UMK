@@ -130,7 +130,7 @@ iso: kernel.bin init.bin sfsh.bin cc.bin kom
 	sh -c 'echo "    module2 /modules/cc.bin cc" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "}" >> iso/boot/grub/grub.cfg'
-	grub2-mkrescue -o utms.iso iso/
+	grub-mkrescue -o utms.iso iso/
 eoc
 
 disk1g.img:

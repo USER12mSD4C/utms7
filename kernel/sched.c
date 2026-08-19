@@ -470,15 +470,35 @@ int sched_waitpid(u32 pid, int *status) {
     if (!sched_initialized) return -1;
 
     while (1) {
+        u64 free_kstack = 0;
+        u64 free_cr3 = 0;
+
         __asm__ volatile ("cli");
+
         for (int i = 0; i < MAX_PROCESSES; i++) {
             if (processes[i].pid == pid && processes[i].state == PROC_ZOMBIE) {
                 if (status) *status = processes[i].exit_code;
+
+                free_kstack = processes[i].kstack;
+                free_cr3 = processes[i].cr3;
+
+                processes[i].kstack = 0;
+                processes[i].kstack_top = 0;
+                processes[i].cr3 = 0;
                 processes[i].state = PROC_UNUSED;
+
                 __asm__ volatile ("sti");
+
+                if (free_kstack) kfree((void*)free_kstack);
+
+                if (free_cr3 && free_cr3 != 0x1000) {
+                    free_address_space((u64*)free_cr3);
+                }
+
                 return pid;
             }
         }
+
         __asm__ volatile ("sti");
 
         sched_yield();
@@ -847,6 +867,8 @@ int sched_fork(void *frame_ptr) {
         return -1;
     }
 
+    trap_frame_t *parent_frame = (trap_frame_t *)frame_ptr;
+
     process_t *child = NULL;
     for (int i = 0; i < MAX_PROCESSES; i++) {
         if (processes[i].state == PROC_UNUSED) {
@@ -902,12 +924,9 @@ int sched_fork(void *frame_ptr) {
     child->kstack_top = child_frame_addr;
 
     struct interrupt_frame *child_frame = (struct interrupt_frame *)child_frame_addr;
-    trap_frame_t *parent_frame = (trap_frame_t *)frame_ptr;
-
     memset(child_frame, 0, sizeof(struct interrupt_frame));
 
-    // Копируем регистры родителя, чтобы child продолжил выполнение с тем же контекстом
-    child_frame->rax = 0; // Child всегда получает 0 из fork()
+    child_frame->rax = 0;
     child_frame->rbx = parent_frame->rbx;
     child_frame->rcx = 0;
     child_frame->rdx = parent_frame->rdx;
@@ -925,11 +944,10 @@ int sched_fork(void *frame_ptr) {
 
     child_frame->error_code = 0;
     child_frame->vector = 128;
-
-    child_frame->rip = parent_frame->rip;
+    child_frame->rip = parent_frame->rcx;
     child_frame->cs = 0x2B;
-    child_frame->rflags = parent_frame->rflags | 0x202;
-    child_frame->rsp = parent_frame->rsp;
+    child_frame->rflags = (parent_frame->r11 & 0x3FFFFULL) | 0x202ULL;
+    child_frame->rsp = parent_frame->user_rsp;
     child_frame->ss = 0x23;
 
     child->user_rip = child_frame->rip;
@@ -939,5 +957,6 @@ int sched_fork(void *frame_ptr) {
     process_count++;
 
     __asm__ volatile ("sti");
+
     return child->pid;
 }

@@ -1,4 +1,3 @@
-// kernel/syscall.h
 #ifndef SYSCALL_H
 #define SYSCALL_H
 
@@ -33,26 +32,48 @@
 #define SYS_dup2        26
 #define SYS_ioctl       27
 #define SYS_clone       28
-
+#define SYS_disk_list   30
+#define SYS_partition_mount 37
+#define SYS_partition_umount 38
+#define SYS_partition_format 39
 #define SYS_socket      40
 #define SYS_connect     41
+#define SYS_disk_table  42
+#define SYS_partition_create 43
+#define SYS_partition_delete 44
 #define SYS_send        45
 #define SYS_recv        46
 #define SYS_gethostbyname 47
-
+#define SYS_bind        48
+#define SYS_listen      49
+#define SYS_accept      50
+#define SYS_ps          51
+#define SYS_gettime     52
 #define SYS_clear       53
 #define SYS_setcolor    54
-
-#define SYS_meminfo     50
-#define SYS_gettime     52
+#define SYS_meminfo     55
 #define SYS_fork        57
 
-// Trap frame pushed by syscall_entry
 typedef struct {
-    u64 rax, rdi, rsi, rdx, r10, r8, r9;
-    u64 r15, r14, r13, r12, rbx, rbp;
-    u64 rip, rflags, rsp;
-} trap_frame_t;
+    u64 rax;
+    u64 rdi;
+    u64 rsi;
+    u64 rdx;
+    u64 r10;
+    u64 r8;
+    u64 r9;
+    u64 r15;
+    u64 r14;
+    u64 r13;
+    u64 r12;
+    u64 rbx;
+    u64 rbp;
+    u64 rcx;
+    u64 r11;
+    u64 user_rsp;
+} syscall_frame_t;
+
+typedef syscall_frame_t trap_frame_t;
 
 int syscall_init(void);
 long syscall_handler_c(trap_frame_t* frame, long num);

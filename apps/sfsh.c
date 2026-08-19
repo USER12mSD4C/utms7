@@ -319,7 +319,8 @@ static int cmd_disks(int argc, char **argv) {
         write(1, &c, 1);
         set_color(COL_RESET, 0);
         out("  ");
-        put_u64(disks[i].total_sectors * 512 / (1024*1024));
+        u64 ss = disks[i].sector_size ? disks[i].sector_size : 512;
+        put_u64((disks[i].total_sectors * ss + (1024 * 1024 - 1)) / (1024 * 1024));
         out(" MB  ");
         out(disks[i].model);
         out(disks[i].is_gpt ? "  GPT\n" : "  MBR\n");
@@ -331,7 +332,7 @@ static int cmd_disks(int argc, char **argv) {
             write(1, &c2, 1);
             put_u64(disks[i].partitions[j].partition_num);
             out("  ");
-            put_u64(disks[i].partitions[j].size / (1024*1024));
+            put_u64((disks[i].partitions[j].size + (1024 * 1024 - 1)) / (1024 * 1024));
             out(" MB  ");
             switch(disks[i].partitions[j].type) {
                 case 1: set_color(COL_OK, 0); out("UFS\n"); break;

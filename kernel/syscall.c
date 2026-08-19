@@ -439,9 +439,11 @@ static long sys_munmap(trap_frame_t* frame, long addr, long size, long a3, long 
 }
 
 static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_ptr, long a4, long a5, long a6) {
-    (void)a4; (void)a5; (void)a6;
+    (void)envp_ptr; (void)a4; (void)a5; (void)a6;
+
     process_t *p = sched_current();
     if (!p) return -1;
+
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
@@ -467,6 +469,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
         const char* name = path_buf;
         const char* slash = strrchr(path_buf, '/');
         if (slash) name = slash + 1;
+
         strncpy(argv_buf[0], name, 255);
         argv_buf[0][255] = '\0';
         argc = 1;
@@ -477,9 +480,14 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
 
     if (ufs_read(path_buf, &elf_data, &elf_size) != 0) {
         extern int get_module_data(const char* name, u8** buf, u32* size);
-        const char* mod_name = path_buf;
-        if (strcmp(path_buf, "/bin/sfsh") == 0 || strcmp(path_buf, "sfsh") == 0) mod_name = "sfsh";
-        if (get_module_data(mod_name, &elf_data, &elf_size) != 0) return -1;
+
+        const char* mod_name = strrchr(path_buf, '/');
+        if (mod_name) mod_name++;
+        else mod_name = path_buf;
+
+        if (get_module_data(mod_name, &elf_data, &elf_size) != 0) {
+            return -1;
+        }
     }
 
     u64* new_pml4 = create_address_space();
@@ -506,6 +514,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
             kfree(elf_data);
             return -1;
         }
+
         u64 virt = user_stack_top - (stack_pages - i) * 4096;
         if (paging_map_for_process(new_pml4, phys, virt, PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
             pmm_free_page((void*)phys);
@@ -515,11 +524,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
         }
     }
 
-    u64* old_pml4 = (u64*)p->cr3;
-    p->cr3 = (u64)new_pml4;
-    p->user_rip = entry;
-    p->heap_start = (max_vaddr + 4095) & ~4095ULL;
-    p->heap_end = p->heap_start;
+    __asm__ volatile ("cli");
 
     u64 old_cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
@@ -529,6 +534,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     rsp &= ~0xFULL;
 
     u64 argv_ptrs[64];
+
     for (int i = 0; i < argc; i++) {
         u64 len = strlen(argv_buf[i]) + 1;
         rsp -= len;
@@ -537,15 +543,16 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
         argv_ptrs[i] = rsp;
     }
 
-    rsp &= ~0xFULL;
+    u8 random_bytes[16] = {
+        0x12, 0x34, 0x56, 0x78,
+        0x9A, 0xBC, 0xDE, 0xF0,
+        0x11, 0x22, 0x33, 0x44,
+        0x55, 0x66, 0x77, 0x88
+    };
 
-    u8 random_bytes[16] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
-                           0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
     rsp -= 16;
     memcpy((void*)rsp, random_bytes, 16);
     u64 at_random_ptr = rsp;
-
-    rsp -= 8; *(u64*)rsp = 0;
 
     u64 auxv[] = {
         6, 4096,
@@ -553,53 +560,60 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
         9, entry,
         0, 0
     };
+
     rsp -= sizeof(auxv);
     memcpy((void*)rsp, auxv, sizeof(auxv));
 
-    rsp -= 8; *(u64*)rsp = 0;
-
-    for (int i = 0; i < 64; i++) {
-        rsp -= 8; *(u64*)rsp = 0;
-    }
-
-    for (int i = argc - 1; i >= 0; i--) {
-        rsp -= 8;
-        *(u64*)rsp = argv_ptrs[i];
-    }
-
-    u64 argv_base = rsp;
-
-    rsp -= 8; *(u64*)rsp = 0;
-    rsp -= 8; *(u64*)rsp = (u64)argc;
-    rsp &= ~0xFULL;
     rsp -= 8;
+    *(u64*)rsp = 0;
+    u64 envp_base = rsp;
 
-    p->user_rsp = rsp;
+    rsp -= (u64)(argc + 1) * 8;
+    rsp &= ~0xFULL;
 
-    __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
-
-    if (old_pml4 && old_pml4 != (u64*)0x1000) {
-        free_address_space(old_pml4);
+    for (int i = 0; i < argc; i++) {
+        *(u64*)(rsp + 8 + (u64)i * 8) = argv_ptrs[i];
     }
 
-    kfree(elf_data);
+    *(u64*)(rsp + 8 + (u64)argc * 8) = 0;
 
-    frame->rip = entry;
-    frame->rsp = rsp;
-    frame->rflags = 0x202;
+    u64 argv_base = rsp + 8;
+    *(u64*)rsp = (u64)argc;
+
+    p->cr3 = (u64)new_pml4;
+    p->user_rip = entry;
+    p->user_rsp = rsp;
+    p->heap_start = (max_vaddr + 4095) & ~4095ULL;
+    p->heap_end = p->heap_start;
+
+    frame->rax = 0;
+    frame->rbx = 0;
+    frame->rcx = entry;
+    frame->r11 = 0x202;
+    frame->user_rsp = rsp;
+
     frame->rdi = argc;
     frame->rsi = argv_base;
-    frame->rdx = 0;
+    frame->rdx = envp_base;
+
     frame->r10 = 0;
     frame->r8 = 0;
     frame->r9 = 0;
-    frame->rax = 0;
-    frame->rbx = 0;
+
     frame->rbp = 0;
     frame->r12 = 0;
     frame->r13 = 0;
     frame->r14 = 0;
     frame->r15 = 0;
+
+    if (old_cr3 != (u64)new_pml4) {
+        u64* old_pml4 = (u64*)old_cr3;
+        if (old_pml4 && old_pml4 != (u64*)0x1000) {
+            free_address_space(old_pml4);
+        }
+    }
+
+    kfree(elf_data);
 
     return 0;
 }

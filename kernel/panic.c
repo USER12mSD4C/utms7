@@ -2,10 +2,51 @@
 #include "../drivers/drm.h"
 #include "../include/io.h"
 #include "../include/string.h"
-#include "sched.h"
+
+#define PANIC_ART_WIDTH 68
+
+static const char* panic_art[] = {
+    "++++++++.         +++++++++++++++-...............................",
+    "+         ++++++++      +++++++++++-.............................",
+    " +++++++++++++++++++++++.-  +++++++++--..........................",
+    "++++.                   ++++. .++++++++ .........................",
+    " -++++++++++++-++++ -+++++++   +++. ++++++ ......................",
+    "++++++.     +++++-       ++++++++ ++ .+++++......................",
+    "+ ++   +  -+++++- ++--.      -++++. +- +++++-....................",
+    "+  +++++.--++++  ++   +++       -+++  +  ++++ ...................",
+    "+++++++++.++++++++++++.+++         ++. ++ ++++...................",
+    "+++++++.+ --++++.++++-  +++          ++  + +++...................",
+    "++++++   .--+++-.+++ .++++++          ++  + +++ .................",
+    "++++ .   -. --.++-  ++.+++++++         ++  + +++.................",
+    "++++ -  -     .-  + - ++++++++ +        ++ + +++.................",
+    "++++++-. .  +.-++ . .+-++++--- .+        ++  +++.................",
+    "++++++++++  + +++++-+++++++.++ .++        + ++++ ................",
+    " +++++++++++++++++..  --       ++-+    ++++ +++- ................",
+    "  +++++++++++++++++    ++++++++++++   ++ .++   ..................",
+    "  ++++++++-+++++++++++++++++ -- +++  +++++-- ....................",
+    "   +++++++++. +++++++++.-++++++++-++++-  + ++....................",
+    "   .+++-+-++++++++++++- ++-+++ ..++++++ ++++ ....................",
+    ". .     +.      ++++++ .       -.- ++++-+..+-....................",
+    ".-.++   .+- + ++++++++++  ++++++++++++-.+. - ....................",
+    "-.-.         ++++++++++++++++++++++++++  +++ ....................",
+    ".. +-     +-.-    ..+++++++++++++++++ ++++++ -...................",
+    "+.+  --  +   -   . ++ -  +++++++++++++       -...................",
+    " -----. - . - ++++++-+++++++++++++++++  .     ...................",
+    "+-.--. .   ++ +++++ - ...+++++++++++++ -++    ...................",
+    " ++---. - .+++++++    ++++++++++++++++ +++-   ...................",
+    "++-+.--  +++++.     ++++++++++++++++++ ++++  .-..................",
+    "-.+  +-+ +.     ++++++++++++++++++++  ++++++ -...................",
+    "+ -++ ...-   +++++++++++++++++  -. - +++++++- ...................",
+    "       -++. -+++++++++++. -    .  ++-++++++++ -..................",
+    "..     -.---. +++++-.    ..-+-+ +++ ++++++++++-..................",
+    "...+ -- +. + . .     .  .-. - +++++++++++++++++ ................."
+};
+
+#define PANIC_ART_LINES ((u32)(sizeof(panic_art) / sizeof(panic_art[0])))
 
 static void print_hex(u64 num) {
     char hex[] = "0123456789ABCDEF";
+
     for (int i = 60; i >= 0; i -= 4) {
         print_char(hex[(num >> i) & 0xF]);
     }
@@ -14,138 +55,238 @@ static void print_hex(u64 num) {
 static void print_num(u32 num) {
     char buf[16];
     int i = 0;
+
     if (num == 0) {
         print_char('0');
         return;
     }
+
     while (num > 0) {
         buf[i++] = '0' + (num % 10);
         num /= 10;
     }
+
     while (i > 0) print_char(buf[--i]);
 }
 
-void panic(const char* message) {
-    // Сначала запрещаем прерывания
-    __asm__ volatile ("cli");
+static void panic_pad_art(const char* line) {
+    u64 len = strlen(line);
 
-    // Переключаемся на безопасный стек ядра только если планировщик работает
-    extern process_t *current;
-    if (current && current->kstack_top) {
-        __asm__ volatile ("mov %0, %%rsp" : : "r"(current->kstack_top + 8192 - 4096));
+    if (len >= PANIC_ART_WIDTH) {
+        print_char(' ');
+        return;
     }
 
-    // Устанавливаем цвета для panic
-    print_setcolor(0x4F, 0);
-    print_clear();
-    print("KERNEL PANIC: ");
-    print(message);
-    print("\n\n");
+    for (u64 i = len; i < PANIC_ART_WIDTH; i++) {
+        print_char(' ');
+    }
+}
 
-    // Сохраняем регистры
-    u64 rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp, r8, r9, r10, r11, r12, r13, r14, r15;
-    u64 cr0, cr2, cr3, cr4, rip;
+void panic(const char* message) {
+    __asm__ volatile ("cli");
 
-    __asm__ volatile("mov %%rax, %0" : "=r"(rax));
-    __asm__ volatile("mov %%rbx, %0" : "=r"(rbx));
-    __asm__ volatile("mov %%rcx, %0" : "=r"(rcx));
-    __asm__ volatile("mov %%rdx, %0" : "=r"(rdx));
-    __asm__ volatile("mov %%rsi, %0" : "=r"(rsi));
-    __asm__ volatile("mov %%rdi, %0" : "=r"(rdi));
-    __asm__ volatile("mov %%rbp, %0" : "=r"(rbp));
+    u64 rsp;
+    u64 rip;
+    u64 cr3;
+
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-    __asm__ volatile("mov %%r8, %0"  : "=r"(r8));
-    __asm__ volatile("mov %%r9, %0"  : "=r"(r9));
-    __asm__ volatile("mov %%r10, %0" : "=r"(r10));
-    __asm__ volatile("mov %%r11, %0" : "=r"(r11));
-    __asm__ volatile("mov %%r12, %0" : "=r"(r12));
-    __asm__ volatile("mov %%r13, %0" : "=r"(r13));
-    __asm__ volatile("mov %%r14, %0" : "=r"(r14));
-    __asm__ volatile("mov %%r15, %0" : "=r"(r15));
-
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
 
-    // RIP получаем из стека (адрес возврата)
     rip = (u64)__builtin_return_address(0);
 
-    print("++++++++.         +++++++++++++++-...............................\n");
-    print("+         ++++++++      +++++++++++-.............................Registers:\n");
-    print(" +++++++++++++++++++++++.-  +++++++++--.........................."); print("RAX="); print_hex(rax); print(" RBX="); print_hex(rbx); print("\n");
-    print("++++.                   ++++. .++++++++ ........................."); print("RCX="); print_hex(rcx); print(" RDX="); print_hex(rdx); print("\n");
-    print(" -++++++++++++-++++ -+++++++   +++. ++++++ ......................"); print("RSI="); print_hex(rsi); print(" RDI="); print_hex(rdi); print("\n");
-    print("++++++.     +++++-       ++++++++ ++ .+++++......................"); print("RBP="); print_hex(rbp); print(" RSP="); print_hex(rsp); print("\n");
-    print("+ ++   +  -+++++- ++--.      -++++. +- +++++-...................."); print("R8 ="); print_hex(r8);  print(" R9 ="); print_hex(r9);  print("\n");
-    print("+  +++++.--++++  ++   +++       -+++  +  ++++ ..................."); print("R10="); print_hex(r10); print(" R11="); print_hex(r11); print("\n");
-    print("+++++++++.++++++++++++.+++         ++. ++ ++++..................."); print("R12="); print_hex(r12); print(" R13="); print_hex(r13); print("\n");
-    print("+++++++.+ --++++.++++-  +++          ++  + +++..................."); print("R14="); print_hex(r14); print(" R15="); print_hex(r15); print("\n");
-    print("++++++   .--+++-.+++ .++++++          ++  + +++ .................\n");
-    print("++++ .   -. --.++-  ++.+++++++         ++  + +++................."); print("CR0="); print_hex(cr0); print(" CR2="); print_hex(cr2); print("\n");
-    print("++++ -  -     .-  + - ++++++++ +        ++ + +++................."); print("CR3="); print_hex(cr3); print(" CR4="); print_hex(cr4); print("\n");
-    print("++++++-. .  +.-++ . .+-++++--- .+        ++  +++................."); print("RIP="); print_hex(rip); print("\n");
-    print("++++++++++  + +++++-+++++++.++ .++        + ++++ ................\n");
-    print(" +++++++++++++++++..  --       ++-+    ++++ +++- ................\n");
-    print("  +++++++++++++++++    ++++++++++++   ++ .++   ..................\n");
-    print("  ++++++++-+++++++++++++++++ -- +++  +++++-- ....................\n");
-    print("   +++++++++. +++++++++.-++++++++-++++-  + ++....................\n");
-    print("   .+++-+-++++++++++++- ++-+++ ..++++++ ++++ ....................\n");
-    print(". .     +.      ++++++ .       -.- ++++-+..+-....................\n");
-    print(".-.++   .+- + ++++++++++  ++++++++++++-.+. - ....................\n");
-    print("-.-.         ++++++++++++++++++++++++++  +++ ....................\n");
-    print(".. +-     +-.-    ..+++++++++++++++++ ++++++ -...................\n");
-    print("+.+  --  +   -   . ++ -  +++++++++++++       -...................\n");
-    print(" -----. - . - ++++++-+++++++++++++++++  .     ...................\n");
-    print("+-.--. .   ++ +++++ - ...+++++++++++++ -++    ...................\n");
-    print(" ++---. - .+++++++    ++++++++++++++++ +++-   ...................\n");
-    print("++-+.--  +++++.     ++++++++++++++++++ ++++  .-..................\n");
-    print("-.+  +-+ +.     ++++++++++++++++++++  ++++++ -...................\n");
-    print("+ -++ ...-   +++++++++++++++++  -. - +++++++- ...................\n");
-    print("       -++. -+++++++++++. -    .  ++-++++++++ -..................\n");
-    print("..     -.---. +++++-.    ..-+-+ +++ ++++++++++-..................\n");
-    print("...+ -- +. + . .     .  .-. - +++++++++++++++++ .................\n");
+    print_setcolor(0x07, 0);
+    print_clear();
 
-    // Отправляем в порт отладки
+    for (u32 i = 0; i < PANIC_ART_LINES; i++) {
+        print_setcolor(0x0B, 0);
+        print(panic_art[i]);
+        panic_pad_art(panic_art[i]);
+
+        print_setcolor(0x0F, 0);
+
+        if (i == 0) {
+            print("KERNEL PANIC");
+        } else if (i == 1) {
+            if (message) print(message);
+        } else if (i == 2) {
+            print("RIP=");
+            print_hex(rip);
+        } else if (i == 3) {
+            print("RSP=");
+            print_hex(rsp);
+        } else if (i == 4) {
+            print("CR3=");
+            print_hex(cr3);
+        }
+
+        print("\n");
+    }
+
     outb(0xE9, 'P');
     outb(0xE9, 'A');
     outb(0xE9, 'N');
     outb(0xE9, 'I');
     outb(0xE9, 'C');
     outb(0xE9, ':');
-    while (*message) outb(0xE9, *message++);
+
+    if (message) {
+        while (*message) outb(0xE9, *message++);
+    }
+
     outb(0xE9, '\n');
 
-    while(1) {
+    while (1) {
         __asm__ volatile ("cli; hlt");
     }
 }
 
 void panic_assert(const char* file, u32 line, const char* expr) {
     __asm__ volatile ("cli");
-    print_setcolor(0x4F, 0);
+
+    print_setcolor(0x07, 0);
     print_clear();
-    print("ASSERTION FAILED\n");
-    print("File: ");
-    print(file);
-    print("\nLine: ");
-    print_num(line);
-    print("\nExpr: ");
-    print(expr);
-    print("\n\nSystem halted.\n");
-    while(1) {
+
+    for (u32 i = 0; i < PANIC_ART_LINES; i++) {
+        print_setcolor(0x0B, 0);
+        print(panic_art[i]);
+        panic_pad_art(panic_art[i]);
+
+        print_setcolor(0x0F, 0);
+
+        if (i == 0) {
+            print("ASSERTION FAILED");
+        } else if (i == 1) {
+            print("FILE=");
+            print(file);
+        } else if (i == 2) {
+            print("LINE=");
+            print_num(line);
+        } else if (i == 3) {
+            print("EXPR=");
+            print(expr);
+        }
+
+        print("\n");
+    }
+
+    while (1) {
         __asm__ volatile ("cli; hlt");
     }
 }
 
 void double_fault_handler(void) {
-    // Для double fault используем отдельный стек (IST в IDT)
     __asm__ volatile ("cli");
-    print_setcolor(0x4F, 0);
+
+    print_setcolor(0x07, 0);
     print_clear();
-    print("DOUBLE FAULT\n");
-    print("not your fault, right?\n");
-    while(1) {
+
+    for (u32 i = 0; i < PANIC_ART_LINES; i++) {
+        print_setcolor(0x0B, 0);
+        print(panic_art[i]);
+        panic_pad_art(panic_art[i]);
+
+        print_setcolor(0x0F, 0);
+
+        if (i == 0) {
+            print("DOUBLE FAULT");
+        } else if (i == 1) {
+            print("not your fault, right?");
+        }
+
+        print("\n");
+    }
+
+    while (1) {
+        __asm__ volatile ("cli; hlt");
+    }
+}
+
+void triple_fault_handler(void) {
+    __asm__ volatile ("cli");
+
+    print_setcolor(0x07, 0);
+    print_clear();
+
+    for (u32 i = 0; i < PANIC_ART_LINES; i++) {
+        print_setcolor(0x0B, 0);
+        print(panic_art[i]);
+        panic_pad_art(panic_art[i]);
+
+        print_setcolor(0x0F, 0);
+
+        if (i == 0) {
+            print("TRIPLE FAULT");
+        }
+
+        print("\n");
+    }
+
+    while (1) {
+        __asm__ volatile ("cli; hlt");
+    }
+}
+
+void panic_exception(int num, u64 error_code, u64 cr2, u64 rip, u64 cs, u64 rsp) {
+    __asm__ volatile ("cli");
+
+    u64 cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+
+    print_setcolor(0x07, 0);
+    print_clear();
+
+    for (u32 i = 0; i < PANIC_ART_LINES; i++) {
+        print_setcolor(0x0B, 0);
+        print(panic_art[i]);
+        panic_pad_art(panic_art[i]);
+
+        print_setcolor(0x0F, 0);
+
+        if (i == 0) {
+            print("KERNEL EXCEPTION");
+        } else if (i == 1) {
+            print("VECTOR=");
+            print_num((u32)num);
+            print(" ERR=");
+            print_hex(error_code);
+        } else if (i == 2) {
+            print("CR2=");
+            print_hex(cr2);
+            print(" RIP=");
+            print_hex(rip);
+        } else if (i == 3) {
+            print("CS=");
+            print_hex(cs);
+            print(" RSP=");
+            print_hex(rsp);
+        } else if (i == 4) {
+            print("CR3=");
+            print_hex(cr3);
+        }
+
+        print("\n");
+    }
+
+    print_setcolor(0x0F, 0);
+
+    u32 label_pad = PANIC_ART_WIDTH + 42;
+    if (label_pad > 10) label_pad -= 10;
+
+    for (u32 i = 0; i < label_pad; i++) {
+        print_char(' ');
+    }
+
+    print("UTMS7/JJBA\n");
+
+    outb(0xE9, 'E');
+    outb(0xE9, 'X');
+    outb(0xE9, 'C');
+    outb(0xE9, ':');
+    outb(0xE9, (char)('0' + (num / 10)));
+    outb(0xE9, (char)('0' + (num % 10)));
+    outb(0xE9, '\n');
+
+    while (1) {
         __asm__ volatile ("cli; hlt");
     }
 }

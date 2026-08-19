@@ -50,10 +50,25 @@ static void add_avail_region(u64 s, u64 e) {
     if (e <= s) return;
 
     if (!pmm_done && (e - s) >= 16 * 1024 * 1024) {
-        u64 psz = (e - s) / 4;
-        if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
-        pmm_init_region(s, psz);
-        pmm_done = 1;
+        u64 base = (s + 4095) & ~4095ULL;
+
+        if (base < e) {
+            u64 avail = e - base;
+            u64 psz = avail / 4;
+
+            if (psz > 256 * 1024 * 1024) psz = 256 * 1024 * 1024;
+
+            psz &= ~4095ULL;
+
+            if (psz >= 4 * 1024 * 1024) {
+                pmm_init_region(base, psz);
+                pmm_done = 1;
+
+                s = base + psz;
+
+                if (s >= e) return;
+            }
+        }
     }
 
     if (!mem_found) {
