@@ -31,6 +31,10 @@ lib/%.o: lib/%.c
 	$(CC) $(UCFLAGS) -c -o $@ $<
 eoc
 
+lib/crt0.o: lib/crt0.asm
+	$(AS) $(ASFLAGS) -o $@ $<
+eoc
+
 fs/%.o: fs/%.c
 	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
@@ -72,25 +76,20 @@ drivers/mbr.o: drivers/mbr.c
 	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
-
 apps/cc/%.o: apps/cc/%.c
 	$(CC) $(UCFLAGS) -c -o $@ $<
 eoc
 
 CC_OBJS = apps/cc/main.o apps/cc/lexer.o apps/cc/parser.o apps/cc/ast.o apps/cc/codegen.o apps/cc/elf.o
 
-cc.bin: $(CC_OBJS) $(LIBC)
-	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e _start -nostdlib -o cc.bin $(CC_OBJS) $(LIBC)
-eoc
-
-
-CORE = kernel/kernel.o kernel/kinit.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o kernel/unix.o
+CORE = kernel/kernel.o kernel/kmod.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o kernel/unix.o kernel/vfs.o
 ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/gdt_flush.o
 DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
 LIBC = lib/string.o lib/ctype.o lib/stdlib.o lib/stdio.o lib/errno.o lib/libc.o
+UCRT = lib/crt0.o $(LIBC)
 LIB = lib/font.o lib/zlib.o $(LIBC)
-FS = fs/ufs.o fs/fat.o
+FS = fs/ufs.o fs/fat.o fs/fat32.o fs/ext4.o
 ADDERS = adders/ski.o
 
 ALL = $(CORE) $(ASM) $(DRV) $(NET) $(LIB) $(FS) $(ADDERS)
@@ -99,20 +98,58 @@ kernel.bin: $(ALL)
 	$(LD) $(LDFLAGS) -o kernel.bin $(ALL)
 eoc
 
-init.bin: apps/init.o $(LIBC)
-	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e _start -nostdlib -o init.bin apps/init.o $(LIBC)
+init.bin: apps/init.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o init.bin $(UCRT) apps/init.o
 eoc
 
-sfsh.bin: apps/sfsh.o $(LIBC)
-	$(LD) -m elf_x86_64 -Ttext 0x40000000 -e _start -nostdlib -o sfsh.bin apps/sfsh.o $(LIBC)
+sfsh.bin: apps/sfsh.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o sfsh.bin $(UCRT) apps/sfsh.o
 eoc
 
-kom: tools/mkmod
+udisk.bin: apps/udisk.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o udisk.bin apps/udisk.o $(UCRT)
+eoc
+
+lsblk.bin: apps/lsblk.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o lsblk.bin apps/lsblk.o $(UCRT)
+eoc
+
+mount.bin: apps/mount.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mount.bin apps/mount.o $(UCRT)
+eoc
+
+umount.bin: apps/umount.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o umount.bin apps/umount.o $(UCRT)
+eoc
+
+mkfs.bin: apps/mkfs.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.bin apps/mkfs.o $(UCRT)
+eoc
+
+cc.bin: $(CC_OBJS) $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o cc.bin $(CC_OBJS) $(UCRT)
+eoc
+
+mkfs.ufs.bin: apps/mkfs.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.ufs.bin apps/mkfs.o $(UCRT)
+eoc
+
+mkfs.fat.bin: apps/mkfs.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.fat.bin apps/mkfs.o $(UCRT)
+eoc
+
+mkfs.ext4.bin: apps/mkfs.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.ext4.bin apps/mkfs.o $(UCRT)
+eoc
+
+kom:
 	mkdir -p modules
+	cp drivers/mbr.o modules/mbr.ko
+	cp drivers/gpt.o modules/gpt.ko
 	echo " MODULES BUILT "
 eoc
 
-iso: kernel.bin init.bin sfsh.bin cc.bin kom
+iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin kom
 	echo " CREATING ISO "
 	rm -rf iso
 	mkdir -p iso/boot/grub iso/modules
@@ -120,6 +157,14 @@ iso: kernel.bin init.bin sfsh.bin cc.bin kom
 	cp init.bin iso/modules/init.bin
 	cp sfsh.bin iso/modules/sfsh.bin
 	cp cc.bin iso/modules/cc.bin
+	cp udisk.bin iso/modules/udisk.bin
+	cp lsblk.bin iso/modules/lsblk.bin
+	cp mount.bin iso/modules/mount.bin
+	cp umount.bin iso/modules/umount.bin
+	cp mkfs.bin iso/modules/mkfs.bin
+	cp mkfs.ufs.bin iso/modules/mkfs.ufs.bin
+    cp mkfs.fat.bin iso/modules/mkfs.fat.bin
+    cp mkfs.ext4.bin iso/modules/mkfs.ext4.bin
 	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
 	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
 	sh -c 'echo "set default=0" >> iso/boot/grub/grub.cfg'
@@ -128,6 +173,14 @@ iso: kernel.bin init.bin sfsh.bin cc.bin kom
 	sh -c 'echo "    module2 /modules/init.bin init" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/sfsh.bin sfsh" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/cc.bin cc" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/udisk.bin udisk" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/lsblk.bin lsblk" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/mount.bin mount" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/umount.bin umount" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/mkfs.bin mkfs" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/mkfs.ufs.bin mkfs.ufs" >> iso/boot/grub/grub.cfg'
+    sh -c 'echo "    module2 /modules/mkfs.fat.bin mkfs.fat" >> iso/boot/grub/grub.cfg'
+    sh -c 'echo "    module2 /modules/mkfs.ext4.bin mkfs.ext4" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "}" >> iso/boot/grub/grub.cfg'
 	grub-mkrescue -o utms.iso iso/
@@ -143,6 +196,14 @@ build:
 	call init.bin
 	call sfsh.bin
 	call cc.bin
+	call udisk.bin
+	call lsblk.bin
+	call mount.bin
+	call umount.bin
+	call mkfs.bin
+	call mkfs.ufs.bin
+    call mkfs.fat.bin
+    call mkfs.ext4.bin
 	call kom
 	echo " BUILD COMPLETE "
 	+flags:
@@ -171,6 +232,11 @@ run: iso
 	qemu-system-x86_64 -cdrom utms.iso -m 512 -drive id=disk1,file=disk1g.img,format=raw,if=none -device ahci,id=ahci -device ide-hd,drive=disk1,bus=ahci.0 -vga vmware -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -serial stdio -display gtk
 eoc
 
+debug: iso disk1g.img
+	echo " STARTING UTMS (debug) "
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -drive id=disk1,file=disk1g.img,format=raw,if=none -device ahci,id=ahci -device ide-hd,drive=disk1,bus=ahci.0 -vga vmware -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -s -S
+eoc
+
 runD:
 	call iso
 	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -no-reboot -no-shutdown -d int,cpu_reset -D ./qemu.log
@@ -193,7 +259,7 @@ eoc
 
 clean:
 	echo " CLEANING "
-	rm -rf apps/cc/*.o apps/cc/*.d lib/*.o lib/*.d fs/*.o fs/*.d kernel/*.o kernel/*.d drivers/*.o drivers/*.d adders/*.o adders/*.d apps/*.o apps/*.d *.bin *.iso iso/ modules/ tools/mkmod init.bin sh.bin
+	rm -rf apps/cc/*.o apps/cc/*.d lib/*.o lib/*.d fs/*.o fs/*.d kernel/*.o kernel/*.d drivers/*.o drivers/*.d adders/*.o adders/*.d apps/*.o apps/*.d *.bin *.iso iso/ modules/ tools/mkmod init.bin sh.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin
 	+flags:
 		-fg(all):
 			echo "[ALL] Full clean with disks..."

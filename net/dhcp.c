@@ -1,4 +1,3 @@
-// net/dhcp.c
 #include "dhcp.h"
 #include "udp.h"
 #include "net.h"
@@ -36,80 +35,81 @@ typedef struct {
 
 static u32 dhcp_xid = 0x12345678;
 static u32 dhcp_server = 0;
+static int dhcp_success = 0;
 
-int dhcp_send_discover(u8 *mac, u32 xid) {
+static int dhcp_send_discover(u8 *mac, u32 xid) {
     dhcp_pkt_t pkt;
     u8 *opt;
-    
+
     memset(&pkt, 0, sizeof(pkt));
-    
+
     pkt.op = 1;
     pkt.htype = 1;
     pkt.hlen = 6;
     pkt.xid = htonl(xid);
     memcpy(pkt.chaddr, mac, 6);
     pkt.magic = htonl(DHCP_MAGIC_COOKIE);
-    
+
     opt = pkt.options;
     *opt++ = 53;
     *opt++ = 1;
     *opt++ = DHCP_DISCOVER;
-    
+
     *opt++ = 55;
     *opt++ = 4;
     *opt++ = 1;
     *opt++ = 3;
     *opt++ = 6;
     *opt++ = 15;
-    
+
     *opt++ = 255;
-    
+
     return udp_send(0xFFFFFFFF, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, (u8*)&pkt, opt - (u8*)&pkt);
 }
 
-int dhcp_send_request(u8 *mac, u32 xid, u32 requested_ip, u32 server_ip) {
+static int dhcp_send_request(u8 *mac, u32 xid, u32 requested_ip, u32 server_ip) {
     dhcp_pkt_t pkt;
     u8 *opt;
-    
+
     memset(&pkt, 0, sizeof(pkt));
-    
+
     pkt.op = 1;
     pkt.htype = 1;
     pkt.hlen = 6;
     pkt.xid = htonl(xid);
     memcpy(pkt.chaddr, mac, 6);
     pkt.magic = htonl(DHCP_MAGIC_COOKIE);
-    
+
     opt = pkt.options;
     *opt++ = 53;
     *opt++ = 1;
     *opt++ = DHCP_REQUEST;
-    
+
     *opt++ = 50;
     *opt++ = 4;
     *opt++ = (requested_ip >> 24) & 0xFF;
     *opt++ = (requested_ip >> 16) & 0xFF;
     *opt++ = (requested_ip >> 8) & 0xFF;
     *opt++ = requested_ip & 0xFF;
-    
+
     *opt++ = 54;
     *opt++ = 4;
     *opt++ = (server_ip >> 24) & 0xFF;
     *opt++ = (server_ip >> 16) & 0xFF;
     *opt++ = (server_ip >> 8) & 0xFF;
     *opt++ = server_ip & 0xFF;
-    
+
     *opt++ = 255;
-    
+
     return udp_send(0xFFFFFFFF, DHCP_CLIENT_PORT, DHCP_SERVER_PORT, (u8*)&pkt, opt - (u8*)&pkt);
 }
 
 void dhcp_handle_packet(u8 *packet, int len) {
     dhcp_pkt_t *pkt = (dhcp_pkt_t*)packet;
-    
-    if (len < sizeof(dhcp_pkt_t) - sizeof(pkt->options)) return;
+
+    if (len < (int)(sizeof(dhcp_pkt_t) - sizeof(pkt->options))) return;
     if (ntohl(pkt->magic) != DHCP_MAGIC_COOKIE) return;
-    
+
     u8 *opt = pkt->options;
     u8 *end = (u8*)packet + len;
     u8 msg_type = 0;
@@ -117,11 +117,13 @@ void dhcp_handle_packet(u8 *packet, int len) {
     u32 subnet_mask = 0;
     u32 gateway = 0;
     u32 dns = 0;
-    
+
     while (opt < end && *opt != 255) {
         u8 code = *opt++;
+        if (opt >= end) break;
         u8 length = *opt++;
-        
+        if (opt + length > end) break;
+
         if (code == 53 && length == 1) msg_type = *opt;
         if (code == 54 && length == 4) {
             server_ip = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
@@ -135,24 +137,45 @@ void dhcp_handle_packet(u8 *packet, int len) {
         if (code == 6 && length == 4) {
             dns = (opt[0] << 24) | (opt[1] << 16) | (opt[2] << 8) | opt[3];
         }
-        
+
         opt += length;
     }
-    
+
     if (msg_type == DHCP_OFFER && pkt->yiaddr != 0) {
         dhcp_server = server_ip;
-        dhcp_send_request(net_get_mac(), ntohl(pkt->xid), pkt->yiaddr, server_ip);
+        dhcp_send_request(net_get_mac(), ntohl(pkt->xid), ntohl(pkt->yiaddr), server_ip);
     }
-    
+
     if (msg_type == DHCP_ACK && pkt->yiaddr != 0) {
-        net_set_ip(pkt->yiaddr);
+        net_set_ip(ntohl(pkt->yiaddr));
         if (subnet_mask) net_set_netmask(subnet_mask);
         if (gateway) net_set_gateway(gateway);
         if (dns) net_set_dns(dns);
+        dhcp_success = 1;
     }
 }
 
-void dhcp_start(void) {
-    udp_bind(DHCP_CLIENT_PORT);
+int dhcp_request(void) {
+    int sock = udp_bind(DHCP_CLIENT_PORT);
+    if (sock < 0) return -1;
+
+    dhcp_success = 0;
     dhcp_send_discover(net_get_mac(), dhcp_xid);
+
+    u8 buf[1024];
+    int waited = 0;
+    int timeout = 5000;
+
+    while (waited < timeout) {
+        int rlen = udp_recv(buf, sizeof(buf));
+        if (rlen > 0) {
+            dhcp_handle_packet(buf, rlen);
+            if (dhcp_success) {
+                return 0;
+            }
+        }
+        for (volatile int i = 0; i < 100000; i++);
+        waited++;
+    }
+    return -1;
 }

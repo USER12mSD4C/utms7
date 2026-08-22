@@ -101,6 +101,8 @@ static void ahci_port_start(int port) {
     while (*(volatile u32*)(port_base + AHCI_PxCMD) & AHCI_PxCMD_CR);
     u32 cmd = *(volatile u32*)(port_base + AHCI_PxCMD);
     cmd |= AHCI_PxCMD_FRE;
+    cmd |= (1 << 2);
+    cmd |= (1 << 1);
     cmd |= AHCI_PxCMD_ST;
     *(volatile u32*)(port_base + AHCI_PxCMD) = cmd;
 }
@@ -125,6 +127,23 @@ static void ahci_port_init(int port) {
     cmd_list[0].ctba = ctba_phys;
     memset(&fis_buf[0], 0, 256);
     memset(&cmd_table[0], 0, sizeof(ahci_cmd_table_t));
+
+    u32 sctl = *(volatile u32*)(port_base + 0x2C);
+    sctl = (sctl & ~0xF) | 1;
+    *(volatile u32*)(port_base + 0x2C) = sctl;
+
+    for(volatile int i = 0; i < 100000; i++);
+
+    sctl = sctl & ~0xF;
+    *(volatile u32*)(port_base + 0x2C) = sctl;
+
+    for(int i = 0; i < 1000; i++) {
+        u32 ssts = *(volatile u32*)(port_base + 0x28);
+        u8 det = ssts & 0xF;
+        u8 ipm = (ssts >> 8) & 0xF;
+        if(det == 3 && ipm == 1) break;
+        for(volatile int j = 0; j < 10000; j++);
+    }
 
     ahci_port_start(port);
 }
@@ -163,11 +182,31 @@ static int ahci_send_cmd(int port, int is_write, u8 cmd_code, u64 lba, u32 count
     *(volatile u32*)(port_base + AHCI_PxIS) = 0xFFFFFFFF;
     *(volatile u32*)(port_base + AHCI_PxCI) = 1;
 
-    while (1) {
-        if ((*(volatile u32*)(port_base + AHCI_PxCI) & 1) == 0) break;
-        if (*(volatile u32*)(port_base + AHCI_PxIS) & (1 << 30)) return -1;
+    int timeout = 1000000;
+    while (timeout--) {
+        u32 ci = *(volatile u32*)(port_base + AHCI_PxCI);
+        u32 is = *(volatile u32*)(port_base + AHCI_PxIS);
+
+        if ((ci & 1) == 0) {
+            if (is & (1 << 30)) {
+                u32 tfd = *(volatile u32*)(port_base + AHCI_PxTFD);
+                print("AHCI: Task File Error, PxIS="); printhex(is);
+                print(" PxTFD="); printhex(tfd); print("\n");
+                return -1;
+            }
+            if (is & ((1 << 29) | (1 << 28) | (1 << 27) | (1 << 23))) {
+                print("AHCI: Fatal Error, PxIS="); printhex(is); print("\n");
+                return -1;
+            }
+            return 0;
+        }
+        if (is & ((1 << 30) | (1 << 29) | (1 << 28) | (1 << 27) | (1 << 23))) {
+            print("AHCI: Error during wait, PxIS="); printhex(is); print("\n");
+            return -1;
+        }
     }
-    return 0;
+    print("AHCI: Command Timeout\n");
+    return -1;
 }
 
 static void ahci_port_identify(int port) {
@@ -181,9 +220,10 @@ static void ahci_port_identify(int port) {
 
     u16* data = (u16*)identify_buf;
 
-    print("AHCI: IDENTIFY word0 = "); printhex(data[0]); print("\n");
-    print("AHCI: IDENTIFY word60 = "); printhex(data[60]); print("\n");
-    print("AHCI: IDENTIFY word61 = "); printhex(data[61]); print("\n");
+    print("AHCI: word60="); printhex(data[60]);
+    print(" word61="); printhex(data[61]);
+    print(" word83="); printhex(data[83]);
+    print(" word100="); printhex(data[100]); print("\n");
 
     char model[41];
     for (int i = 0; i < 40; i+=2) {
@@ -195,11 +235,17 @@ static void ahci_port_identify(int port) {
         if (model[i] < 32 || model[i] > 126) model[i] = ' ';
     }
 
-    u64 sectors = (u32)data[60] | ((u32)data[61] << 16);
-    if (sectors == 0) {
-        sectors = ((u64)data[100] | ((u64)data[101] << 16) |
-                   ((u64)data[102] << 32) | ((u64)data[103] << 48));
+    u64 sectors = 0;
+    u64 lba48 = ((u64)data[100] | ((u64)data[101] << 16) |
+                 ((u64)data[102] << 32) | ((u64)data[103] << 48));
+
+    if (lba48 > 0 && lba48 < 0x10000000000ULL) {
+        sectors = lba48;
+    } else {
+        sectors = (u64)data[60] | ((u64)data[61] << 16);
     }
+
+    if (sectors == 0) sectors = 2097152;
 
     print("AHCI: sectors = "); printnum((u32)sectors); print("\n");
     print("AHCI: model = "); print(model); print("\n");

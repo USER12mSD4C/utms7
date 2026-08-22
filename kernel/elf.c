@@ -46,30 +46,43 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
         print("[elf] bad header\n");
         return 0;
     }
-    u64 base = 0;
-    if (hdr->type == ET_DYN) {
-        base = 0x40000000;
+
+    u64 min_vaddr = 0xFFFFFFFFFFFFFFFFULL;
+    for (int i = 0; i < hdr->phnum; i++) {
+        elf64_phdr_t *ph = (elf64_phdr_t*)(data + hdr->phoff + i * hdr->phentsize);
+        if (ph->type == PT_LOAD) {
+            if (ph->vaddr < min_vaddr) min_vaddr = ph->vaddr;
+        }
     }
+
+    if (min_vaddr == 0xFFFFFFFFFFFFFFFFULL) min_vaddr = 0;
+
+    u64 base = 0x40000000ULL - min_vaddr;
     u64 max_vaddr = 0;
 
     for (int i = 0; i < hdr->phnum; i++) {
         elf64_phdr_t *ph = (elf64_phdr_t*)(data + hdr->phoff + i * hdr->phentsize);
         if (ph->type != PT_LOAD) continue;
         if (ph->memsz == 0) continue;
+
         u64 vaddr = ph->vaddr + base;
         u64 memsz = ph->memsz;
         u64 filesz = ph->filesz;
+
         if (vaddr < 0x10000) {
             print("[elf] vaddr too low\n");
             return 0;
         }
+
         u64 end_vaddr = vaddr + memsz;
         if (end_vaddr > max_vaddr) {
             max_vaddr = end_vaddr;
         }
+
         u64 start_page = vaddr & ~0xFFFULL;
         u64 end_page = (vaddr + memsz + 4095) & ~0xFFFULL;
         u64 num_pages = (end_page - start_page) / 4096;
+
         for (u64 j = 0; j < num_pages; j++) {
             u64 virt = start_page + j * 4096;
             u64 phys = (u64)pmm_alloc_page();
@@ -84,7 +97,6 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
                 return 0;
             }
 
-            // Записываем данные напрямую в физическую страницу (1:1 mapping)
             memset((void*)phys, 0, 4096);
 
             u64 seg_start = vaddr;
@@ -93,6 +105,7 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
             u64 pg_end = virt + 4096;
             if (pg_start < seg_start) pg_start = seg_start;
             if (pg_end > seg_end) pg_end = seg_end;
+
             if (pg_start < pg_end) {
                 u64 copy_size = pg_end - pg_start;
                 u64 file_off = ph->offset + (pg_start - vaddr);
@@ -105,7 +118,8 @@ u64 elf_load(u8 *data, u32 size, u64* pml4, u64* out_max_vaddr) {
     if (out_max_vaddr) {
         *out_max_vaddr = (max_vaddr + 4095) & ~4095ULL;
     }
-    return (hdr->type == ET_DYN) ? hdr->entry + base : hdr->entry;
+
+    return hdr->entry + base;
 }
 
 int elf_load_current(u8 *data, u32 size, process_t *p) {

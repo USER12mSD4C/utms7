@@ -1,13 +1,12 @@
 #include "../include/udisk.h"
 #include "../include/string.h"
 #include "../include/gpt.h"
-#include "../fs/ufs.h"
+#include "../kernel/vfs.h"
 #include "disk.h"
 #include "../kernel/memory.h"
 #include "../drivers/drm.h"
 #include "../include/shell_api.h"
 #include "../include/mbr.h"
-#include "../include/gpt.h"
 
 static disk_info_t disks[4];
 static int scanned = 0;
@@ -54,6 +53,7 @@ static void read_mbr_partitions(int disk_num, disk_info_t* d) {
             d->partitions[i].present = 0;
             continue;
         }
+
         partition_t* p = &d->partitions[i];
         p->present = 1;
         p->disk_num = disk_num;
@@ -79,11 +79,12 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
 
     int gpt_protective = 0;
     for (int i = 0; i < 4; i++) {
-        if (header_buf[446 + i*16 + 4] == 0xEE) {
+        if (header_buf[446 + i * 16 + 4] == 0xEE) {
             gpt_protective = 1;
             break;
         }
     }
+
     if (!gpt_protective) return;
 
     u8 gpt_buf[512];
@@ -123,7 +124,14 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
         for (u32 j = 0; j < entries_per_sector && d->partition_count < UDISK_MAX_PARTITIONS; j++) {
             u8* entry = sec + j * h.partition_entry_size;
             u8 all_zero = 1;
-            for (int k = 0; k < 16; k++) if (entry[k]) { all_zero = 0; break; }
+
+            for (int k = 0; k < 16; k++) {
+                if (entry[k]) {
+                    all_zero = 0;
+                    break;
+                }
+            }
+
             if (all_zero) continue;
 
             partition_t* p = &d->partitions[d->partition_count];
@@ -141,14 +149,17 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
             else p->type = PARTITION_UNKNOWN;
 
             u16* name_utf16 = (u16*)(entry + 56);
-            for (int k = 0; k < 36 && k < UDISK_NAME_LEN-1; k++) {
+            for (int k = 0; k < 36 && k < UDISK_NAME_LEN - 1; k++) {
                 p->name[k] = name_utf16[k] & 0xFF;
                 if (p->name[k] == 0) break;
             }
-            p->name[UDISK_NAME_LEN-1] = '\0';
+            p->name[UDISK_NAME_LEN - 1] = '\0';
+
             d->partition_count++;
         }
     }
+
+    (void)drive;
 }
 
 static void scan_disk(int disk_num) {
@@ -186,6 +197,7 @@ int udisk_scan(void) {
     for (int i = 0; i < 4; i++) {
         scan_disk(i);
     }
+
     scanned = 1;
     last_scan_tick = system_ticks;
     return 0;
@@ -204,9 +216,9 @@ partition_t* udisk_get_partition(const char* devname) {
     udisk_scan();
 
     if (disk < 0 || disk > 3) return NULL;
+
     disk_info_t* d = &disks[disk];
     if (!d || !d->present) return NULL;
-
     if (part == 0) return NULL;
 
     for (int i = 0; i < d->partition_count; i++) {
@@ -214,6 +226,7 @@ partition_t* udisk_get_partition(const char* devname) {
             return &d->partitions[i];
         }
     }
+
     return NULL;
 }
 
@@ -233,6 +246,7 @@ int udisk_create_mbr(int disk) {
 
 int udisk_create_gpt(int disk) {
     if (gpt_create_table(0x80 + disk) != 0) return -1;
+
     scanned = 0;
     udisk_scan();
     return 0;
@@ -260,11 +274,24 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
 
     start_lba = (start_lba + 2047) & ~2047ULL;
 
-    if (start_lba + size_sectors > d->total_sectors) return -1;
+    if (start_lba >= d->total_sectors) return -1;
+
+    u64 max_sectors = d->total_sectors - start_lba;
+
+    if (size_sectors > max_sectors) {
+        size_sectors = max_sectors;
+        size_sectors = (size_sectors / 8) * 8;
+    }
+
+    if (size_sectors == 0) {
+        return -1;
+    }
 
     int res;
+
     if (d->is_gpt) {
         const u8* guid;
+
         if (type == PARTITION_UFS) guid = gpt_get_ufs_guid();
         else if (type == PARTITION_FAT32) guid = gpt_get_efi_guid();
         else guid = gpt_get_linux_guid();
@@ -272,6 +299,7 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
         res = gpt_add_partition(0x80 + disk, start_lba, size_sectors, guid);
     } else {
         u8 mbr_type;
+
         if (type == PARTITION_UFS) mbr_type = 0x83;
         else if (type == PARTITION_FAT32) mbr_type = 0x0C;
         else mbr_type = 0x83;
@@ -300,6 +328,7 @@ int udisk_delete_partition(const char* devname) {
     } else {
         u8 sector[512];
         disk_set_disk(disk);
+
         if (disk_read(0, sector) != 0) return -1;
 
         for (int i = 0; i < 4; i++) {
@@ -329,6 +358,7 @@ int udisk_set_type(const char* devname, partition_type_t type) {
 
     if (d->is_gpt) {
         const u8* guid;
+
         if (type == PARTITION_UFS) guid = gpt_get_ufs_guid();
         else if (type == PARTITION_FAT32) guid = gpt_get_efi_guid();
         else guid = gpt_get_linux_guid();
@@ -339,6 +369,7 @@ int udisk_set_type(const char* devname, partition_type_t type) {
     } else {
         u8 sector[512];
         disk_set_disk(disk);
+
         if (disk_read(0, sector) != 0) return -1;
 
         for (int i = 0; i < 4; i++) {
@@ -363,22 +394,17 @@ int udisk_format_partition(const char* devname, const char* fstype) {
     partition_t* p = udisk_get_partition(devname);
     if (!p) return -1;
 
-    if (strcmp(fstype, "ufs") == 0) {
-        u32 blocks = (p->end_lba - p->start_lba + 1);
-        return ufs_format(p->start_lba, blocks, p->disk_num);
-    }
-
-    return -1;
+    return vfs_format(fstype, devname);
 }
 
 static int cmd_disks(int argc, char** argv) {
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
 
-    // Принудительное сканирование перед выводом
     udisk_scan();
 
     for (int i = 0; i < 4; i++) {
-        disk_info_t* d = &disks[i];  // используй напрямую, без udisk_get_info
+        disk_info_t* d = &disks[i];
         if (!d->present) continue;
 
         char name[16] = "/dev/sdX";
@@ -386,13 +412,12 @@ static int cmd_disks(int argc, char** argv) {
 
         shell_print(name);
         shell_print("  ");
-        shell_print_num((u32)(d->total_sectors * 512 / (1024*1024)));
+        shell_print_num((u32)(d->total_sectors * 512 / (1024 * 1024)));
         shell_print(" MB  ");
         shell_print(d->model);
         shell_print(d->is_gpt ? "  GPT" : "  MBR");
         shell_print("\n");
 
-        // Выводим разделы
         for (int j = 0; j < d->partition_count; j++) {
             partition_t* p = &d->partitions[j];
             if (!p->present) continue;
@@ -412,15 +437,24 @@ static int cmd_disks(int argc, char** argv) {
             shell_print("  ");
             shell_print(pname);
             shell_print("  ");
-            shell_print_num((u32)(p->size / (1024*1024)));
+            shell_print_num((u32)(p->size / (1024 * 1024)));
             shell_print(" MB  ");
 
-            switch(p->type) {
-                case PARTITION_UFS: shell_print("UFS"); break;
-                case PARTITION_FAT32: shell_print("FAT32"); break;
-                case PARTITION_EXT4: shell_print("EXT4"); break;
-                default: shell_print("unknown"); break;
+            switch (p->type) {
+                case PARTITION_UFS:
+                    shell_print("UFS");
+                    break;
+                case PARTITION_FAT32:
+                    shell_print("FAT32");
+                    break;
+                case PARTITION_EXT4:
+                    shell_print("EXT4");
+                    break;
+                default:
+                    shell_print("unknown");
+                    break;
             }
+
             shell_print("\n");
         }
     }
@@ -432,16 +466,22 @@ static int cmd_lsblk(int argc, char** argv) {
     return cmd_disks(argc, argv);
 }
 
+static const char* partition_fs_name(u32 type) {
+    switch (type) {
+        case PARTITION_UFS:
+            return "ufs";
+        case PARTITION_FAT32:
+            return "fat";
+        case PARTITION_EXT4:
+            return "ext4";
+        default:
+            return "ufs";
+    }
+}
+
 static int cmd_mount(int argc, char** argv) {
     if (argc < 2) {
         shell_print("Usage: mount /dev/sdX[1-16] [mountpoint]\n");
-        return -1;
-    }
-
-    if (ufs_ismounted()) {
-        shell_print("already mounted on ");
-        shell_print(ufs_get_mount_point());
-        shell_print("\n");
         return -1;
     }
 
@@ -456,37 +496,60 @@ static int cmd_mount(int argc, char** argv) {
         mount_point = argv[2];
     }
 
+    if (vfs_is_mounted(mount_point)) {
+        shell_print("already mounted on ");
+        shell_print(mount_point);
+        shell_print("\n");
+        return -1;
+    }
+
     shell_print("Mounting ");
     shell_print(argv[1]);
+
     if (argc >= 3) {
         shell_print(" to ");
         shell_print(mount_point);
     }
+
     shell_print("... ");
 
-    if (ufs_mount_with_point(p->start_lba, p->disk_num, mount_point) == 0) {
+    const char* fstype = partition_fs_name(p->type);
+
+    if (vfs_mount_fs(fstype, argv[1], mount_point) == 0) {
         shell_print("OK\n");
         extern void fs_set_current_dir(const char*);
         fs_set_current_dir(mount_point);
         return 0;
-    } else {
-        shell_print("FAILED\n");
-        return -1;
     }
+
+    shell_print("FAILED\n");
+    return -1;
 }
 
 static int cmd_umount(int argc, char** argv) {
-    (void)argc; (void)argv;
+    const char* point = "/";
 
-    if (!ufs_ismounted()) {
+    if (argc >= 2) {
+        point = argv[1];
+    }
+
+    if (!vfs_is_mounted(point)) {
         shell_print("not mounted\n");
         return -1;
     }
 
-    if (ufs_umount() == 0) {
+    if (vfs_unmount(point) == 0) {
         shell_print("unmounted\n");
+
+        if (strcmp(point, "/") == 0) {
+            extern void fs_set_current_dir(const char*);
+            fs_set_current_dir("/");
+        }
+
         return 0;
     }
+
+    shell_print("unmount failed\n");
     return -1;
 }
 
@@ -509,10 +572,10 @@ static int cmd_mkfs_ufs(int argc, char** argv) {
     if (udisk_format_partition(argv[1], "ufs") == 0) {
         shell_print("OK\n");
         return 0;
-    } else {
-        shell_print("FAILED\n");
-        return -1;
     }
+
+    shell_print("FAILED\n");
+    return -1;
 }
 
 static int cmd_udisk(int argc, char** argv) {
@@ -552,10 +615,10 @@ static int cmd_udisk(int argc, char** argv) {
         if (udisk_create_mbr(disk) == 0) {
             shell_print("OK\n");
             return 0;
-        } else {
-            shell_print("FAILED\n");
-            return -1;
         }
+
+        shell_print("FAILED\n");
+        return -1;
     }
 
     if (strcmp(argv[1], "gpt") == 0) {
@@ -577,10 +640,10 @@ static int cmd_udisk(int argc, char** argv) {
         if (udisk_create_gpt(disk) == 0) {
             shell_print("OK\n");
             return 0;
-        } else {
-            shell_print("FAILED\n");
-            return -1;
         }
+
+        shell_print("FAILED\n");
+        return -1;
     }
 
     if (strcmp(argv[1], "create") == 0) {
@@ -598,16 +661,19 @@ static int cmd_udisk(int argc, char** argv) {
 
         u32 size_mb = 0;
         char* p = argv[3];
+
         while (*p) {
             if (*p < '0' || *p > '9') {
                 shell_print("invalid size\n");
                 return -1;
             }
+
             size_mb = size_mb * 10 + (*p - '0');
             p++;
         }
 
         partition_type_t type = PARTITION_UFS;
+
         if (argc >= 5) {
             if (strcmp(argv[4], "fat32") == 0) type = PARTITION_FAT32;
             else if (strcmp(argv[4], "ext4") == 0) type = PARTITION_EXT4;
@@ -618,19 +684,21 @@ static int cmd_udisk(int argc, char** argv) {
         shell_print(" size ");
         shell_print_num(size_mb);
         shell_print(" MB");
+
         if (argc >= 5) {
             shell_print(" type ");
             shell_print(argv[4]);
         }
+
         shell_print("... ");
 
         if (udisk_create_partition(argv[2], size_mb, type) == 0) {
             shell_print("OK\n");
             return 0;
-        } else {
-            shell_print("FAILED\n");
-            return -1;
         }
+
+        shell_print("FAILED\n");
+        return -1;
     }
 
     if (strcmp(argv[1], "delete") == 0) {
@@ -652,10 +720,10 @@ static int cmd_udisk(int argc, char** argv) {
         if (udisk_delete_partition(argv[2]) == 0) {
             shell_print("OK\n");
             return 0;
-        } else {
-            shell_print("FAILED\n");
-            return -1;
         }
+
+        shell_print("FAILED\n");
+        return -1;
     }
 
     if (strcmp(argv[1], "type") == 0) {
@@ -671,6 +739,7 @@ static int cmd_udisk(int argc, char** argv) {
         }
 
         partition_type_t type;
+
         if (strcmp(argv[3], "ufs") == 0) type = PARTITION_UFS;
         else if (strcmp(argv[3], "fat32") == 0) type = PARTITION_FAT32;
         else if (strcmp(argv[3], "ext4") == 0) type = PARTITION_EXT4;
@@ -688,10 +757,10 @@ static int cmd_udisk(int argc, char** argv) {
         if (udisk_set_type(argv[2], type) == 0) {
             shell_print("OK\n");
             return 0;
-        } else {
-            shell_print("FAILED\n");
-            return -1;
         }
+
+        shell_print("FAILED\n");
+        return -1;
     }
 
     shell_print("unknown udisk command\n");
@@ -703,7 +772,7 @@ int disk_commands_init(void) {
     shell_register_command("lsblk", cmd_lsblk, "list block devices");
     shell_register_command("udisk", cmd_udisk, "partition manager");
     shell_register_command("mkfs.ufs", cmd_mkfs_ufs, "format partition");
-    shell_register_command("mount", cmd_mount, "mount ufs partition");
-    shell_register_command("umount", cmd_umount, "unmount ufs");
+    shell_register_command("mount", cmd_mount, "mount filesystem through VFS");
+    shell_register_command("umount", cmd_umount, "unmount filesystem through VFS");
     return 0;
 }

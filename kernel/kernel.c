@@ -96,9 +96,6 @@ int multiboot_get_module(const char* name, u8** start, u32* size) {
         ptr += (tag_size + 7) & ~7;
     }
 
-    print("[mb] module '");
-    print(name);
-    print("' not found\n");
     return -1;
 }
 

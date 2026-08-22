@@ -36,25 +36,18 @@ int gdt_init(void) {
     kernel_tss.iomap_base = sizeof(kernel_tss);
     kernel_tss.ist[0] = (u64)double_fault_stack + sizeof(double_fault_stack);
 
-    // 0: NULL
     gdt[0] = 0;
 
-    // 1: Kernel Code (0x08)
     gdt[1] = 0x00af9a000000ffffULL;
 
-    // 2: Kernel Data (0x10)
     gdt[2] = 0x00cf92000000ffffULL;
 
-    // 3: Dummy User 32-bit Code (0x18)
     gdt[3] = 0;
 
-    // 4: User Data (0x20)
-    gdt[4] = 0x00cff2000000ffffULL;
+    gdt[4] = 0x00aff2000000ffffULL;
 
-    // 5: User Code (0x28)
     gdt[5] = 0x00affa000000ffffULL;
 
-    // 6-7: TSS (0x30)
     u64 base = (u64)&kernel_tss;
     u64 limit = sizeof(kernel_tss) - 1;
     gdt[6] = (limit & 0xFFFF)

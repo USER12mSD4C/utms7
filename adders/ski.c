@@ -9,10 +9,9 @@
 #include "../include/string.h"
 #include "../kernel/paging.h"
 #include "../kernel/sched.h"
-#include "../kernel/kinit.h"
+#include "../kernel/kmod.h"
 #include "../drivers/pci.h"
 #include "../net/net.h"
-#include "../include/shell_api.h"
 #include "../drivers/keyboard.h"
 #include "../include/udisk.h"
 
@@ -134,8 +133,6 @@ static void init_memory_from_multiboot(u64 mb_info_addr) {
 static void automount_first_ufs(void) {
     extern int udisk_scan(void);
     extern disk_info_t* udisk_get_info(int disk_num);
-    extern int ufs_mount_with_point(u32 start_lba, int disk, const char* point);
-    extern void fs_set_current_dir(const char*);
 
     udisk_scan();
 
@@ -147,13 +144,16 @@ static void automount_first_ufs(void) {
             partition_t* p = &d->partitions[j];
             if (!p->present || p->type != PARTITION_UFS) continue;
 
-            if (ufs_mount_with_point(p->start_lba, p->disk_num, "/") == 0) {
+            char dev[32];
+            snprintf(dev, sizeof(dev), "/dev/sd%c%d", 'a' + i, p->partition_num);
+
+            if (vfs_mount_fs("ufs", dev, "/") == 0) {
                 print_setcolor(0x0A, 0);
-                print("[UFS] mounted /dev/sd");
-                print_char('a' + i);
-                if (p->partition_num > 0) printnum(p->partition_num);
+                print("[UFS] mounted ");
+                print(dev);
                 print(" on /\n");
                 print_setcolor(0x07, 0);
+                extern void fs_set_current_dir(const char*);
                 fs_set_current_dir("/");
                 return;
             }

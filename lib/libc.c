@@ -53,6 +53,7 @@
 #define SYS_listen      49
 #define SYS_accept      50
 #define SYS_poll        51
+#define SYS_fs_register  58
 
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     register long rax __asm__("rax") = num;
@@ -94,6 +95,7 @@ int rmdir(const char *path) { return syscall(SYS_rmdir, (long)path, 0, 0, 0, 0, 
 int unlink(const char *path) { return syscall(SYS_unlink, (long)path, 0, 0, 0, 0, 0); }
 int rename(const char *old, const char *new) { return syscall(SYS_rename, (long)old, (long)new, 0, 0, 0, 0); }
 int chdir(const char *path) { return syscall(SYS_chdir, (long)path, 0, 0, 0, 0, 0); }
+int fs_register(const char* name) { return syscall(SYS_fs_register, (long)name, 0, 0, 0, 0, 0); }
 
 char *getcwd(char *buf, size_t size) {
     long res = syscall(SYS_getcwd, (long)buf, size, 0, 0, 0, 0);
@@ -297,11 +299,5 @@ int accept(int fd, void *addr, int *addrlen) {
 
 extern int main(int argc, char** argv, char** envp) __attribute__((weak));
 
-__attribute__((weak, noreturn)) void _start(long argc, char** argv, char** envp) {
-    if (main) {
-        int ret = main((int)argc, argv, envp);
-        _exit(ret);
-    }
-    _exit(0);
-    while(1);
-}
+int symlink(const char *target, const char *linkpath) { return syscall(55, (long)target, (long)linkpath, 0, 0, 0, 0); }
+int readlink(const char *path, char *buf, size_t size) { return syscall(56, (long)path, (long)buf, size, 0, 0, 0); }

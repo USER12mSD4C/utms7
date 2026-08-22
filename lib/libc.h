@@ -40,21 +40,10 @@ struct stat {
 };
 
 struct dirent {
-    u16 mode;
-    u16 uid;
-    u16 gid;
-    u8  nlink;
-    u8  reserved[3];
+    char name[256];
     u32 size;
-    u32 blocks;
-    u32 direct[10];
-    u32 indirect;
-    u32 atime;
-    u32 mtime;
-    u32 ctime;
-    char name[28];
     u8 is_dir;
-    u8 pad[1];
+    u8 pad[3];
 } __attribute__((packed));
 
 typedef struct _FILE {
@@ -87,6 +76,7 @@ int rename(const char *old, const char *new);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);
 int readdir(const char *path, struct dirent *entries, int *count);
+int fs_register(const char* name);
 
 void *malloc(size_t size);
 void *calloc(size_t nmemb, size_t size);
@@ -234,5 +224,35 @@ struct sockaddr_in {
 int bind(int fd, const void *addr, int addrlen);
 int listen(int fd, int backlog);
 int accept(int fd, void *addr, int *addrlen);
+
+typedef enum {
+    PARTITION_NONE = 0,
+    PARTITION_UFS,
+    PARTITION_FAT32,
+    PARTITION_EXT4,
+    PARTITION_UNKNOWN
+} partition_type_t;
+
+typedef struct {
+    u8 present;
+    u8 disk_num;
+    u8 partition_num;
+    u64 start_lba;
+    u64 end_lba;
+    u64 size;
+    u32 type;
+    char name[32];
+} __attribute__((packed)) partition_info_t;
+
+typedef struct {
+    u8 present;
+    u8 disk_num;
+    char model[41];
+    u64 total_sectors;
+    u32 sector_size;
+    u8 partition_count;
+    partition_info_t partitions[16];
+    u8 is_gpt;
+} __attribute__((packed)) disk_info_user_t;
 
 #endif

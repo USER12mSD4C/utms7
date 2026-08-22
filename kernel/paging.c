@@ -146,12 +146,16 @@ u64* create_address_space(void) {
     pdpt[0] = kernel_pdpt[0];
     u64 fb_phys = drm_fb_phys();
     u64 fb_size = drm_fb_size();
-    for (u64 off = 0; off < fb_size; off += 4096) {
-        if (paging_map_for_process(new_pml4, fb_phys + off, fb_phys + off,
-                                   PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
-            break;
+
+    if (fb_phys >= 0x40000000ULL && fb_size != 0) {
+        for (u64 off = 0; off < fb_size; off += 4096) {
+            if (paging_map_for_process(new_pml4, fb_phys + off, fb_phys + off,
+                PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+                break;
+            }
         }
     }
+
     return new_pml4;
 }
 

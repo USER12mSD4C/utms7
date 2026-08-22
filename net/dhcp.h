@@ -3,7 +3,7 @@
 
 #include "../include/types.h"
 
-void dhcp_start(void);
+int dhcp_request(void);
 void dhcp_handle_packet(u8 *packet, int len);
 
 #endif

@@ -53,6 +53,7 @@
 #define SYS_setcolor    54
 #define SYS_meminfo     55
 #define SYS_fork        57
+#define SYS_fs_register  58
 
 typedef struct {
     u64 rax;
@@ -71,7 +72,7 @@ typedef struct {
     u64 rcx;
     u64 r11;
     u64 user_rsp;
-} syscall_frame_t;
+} __attribute__((packed)) syscall_frame_t;
 
 typedef syscall_frame_t trap_frame_t;
 

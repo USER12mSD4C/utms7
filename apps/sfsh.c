@@ -2,6 +2,8 @@
 #include "../include/syscall.h"
 
 #define MAX_LINE 512
+#define MAX_TOKENS 64
+#define MAX_ARGS 32
 
 #define COL_RESET 0x07
 #define COL_USER  0x0B
@@ -19,6 +21,7 @@ typedef struct {
 } ps_entry_t;
 
 static char cwd[256] = "/";
+static char heredoc_file[64];
 
 static void out(const char *s) {
     write(1, s, strlen(s));
@@ -27,53 +30,95 @@ static void out(const char *s) {
 static void put_u64(unsigned long long v) {
     char buf[24];
     int i = 0;
-    if (v == 0) { out("0"); return; }
-    while (v > 0) { buf[i++] = (char)('0' + (v % 10)); v /= 10; }
-    while (i-- > 0) { char c = buf[i]; write(1, &c, 1); }
+
+    if (v == 0) {
+        out("0");
+        return;
+    }
+
+    while (v > 0) {
+        buf[i++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+
+    while (i-- > 0) {
+        char c = buf[i];
+        write(1, &c, 1);
+    }
 }
 
 static void refresh_cwd(void) {
-    if (!getcwd(cwd, sizeof(cwd))) strcpy(cwd, "/");
+    if (!getcwd(cwd, sizeof(cwd))) {
+        strcpy(cwd, "/");
+    }
 }
 
 static void print_prompt(void) {
     char p[300];
-    if (cwd[0] == '/' && cwd[1] == '\0') strcpy(p, "~");
-    else if (cwd[0] == '/') { p[0] = '~'; strcpy(p + 1, cwd); }
-    else strcpy(p, cwd);
 
-    set_color(COL_BRACE, 0); out("{");
-    set_color(COL_USER, 0);  out("user12ms@utms");
-    set_color(COL_RESET, 0); out("; ");
-    set_color(COL_PATH, 0);  out(p);
-    set_color(COL_BRACE, 0); out("}");
-    set_color(COL_OK, 0);    out("$ ");
+    if (cwd[0] == '/' && cwd[1] == '\0') {
+        strcpy(p, "~");
+    } else if (cwd[0] == '/') {
+        p[0] = '~';
+        strcpy(p + 1, cwd);
+    } else {
+        strcpy(p, cwd);
+    }
+
+    set_color(COL_BRACE, 0);
+    out("{");
+    set_color(COL_USER, 0);
+    out("user12ms@utms");
+    set_color(COL_RESET, 0);
+    out("; ");
+    set_color(COL_PATH, 0);
+    out(p);
+    set_color(COL_BRACE, 0);
+    out("}");
+    set_color(COL_OK, 0);
+    out("$ ");
     set_color(COL_RESET, 0);
 }
 
 static int cmd_help(int argc, char **argv) {
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
+
     out("UTMS7 shell commands:\n");
     out("  help          this list\n");
+    out("  exit          leave shell\n");
     out("  clear         clear screen\n");
     out("  echo <args>   print args\n");
     out("  pwd           current directory\n");
     out("  cd <dir>      change directory\n");
     out("  ls [dir]      list directory\n");
-    out("  cat <file>    print file\n");
+    out("  cat [files]   copy input/files to output\n");
     out("  mkdir <dir>   create directory\n");
-    out("  touch <file>  create empty file\n");
-    out("  rm <path>     remove file\n");
-    out("  write <f> <t> write text to file\n");
-    out("  ps            processes\n");
+    out("  touch <file>  create file\n");
+    out("  rm <path>     remove file or directory\n");
+    out("  ps            process list\n");
     out("  mem           memory usage\n");
     out("  uptime        seconds since boot\n");
     out("  uname         system info\n");
+    out("\nRedirection:\n");
+    out("  cmd > file\n");
+    out("  cmd >> file\n");
+    out("  cmd < file\n");
+    out("  cmd <<EOF\n");
+
+    return 0;
+}
+
+static int cmd_exit(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    _exit(0);
     return 0;
 }
 
 static int cmd_clear(int argc, char **argv) {
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
     clear_screen();
     return 0;
 }
@@ -88,7 +133,9 @@ static int cmd_echo(int argc, char **argv) {
 }
 
 static int cmd_pwd(int argc, char **argv) {
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
+
     refresh_cwd();
     out(cwd);
     out("\n");
@@ -96,26 +143,32 @@ static int cmd_pwd(int argc, char **argv) {
 }
 
 static int cmd_cd(int argc, char **argv) {
+    int res;
+
     if (argc < 2) {
-        chdir("/");
-        refresh_cwd();
-        return 0;
+        res = chdir("/");
+    } else {
+        res = chdir(argv[1]);
     }
-    if (chdir(argv[1]) != 0) {
+
+    if (res != 0) {
         set_color(COL_ERR, 0);
-        out("cd: no such directory: ");
-        out(argv[1]);
+        out("cd: cannot change directory: ");
+        if (argc < 2) out("/");
+        else out(argv[1]);
         out("\n");
         set_color(COL_RESET, 0);
         return -1;
     }
+
     refresh_cwd();
     return 0;
 }
 
-static int cmd_ls(int argc, char **argv) {
-    const char *path = (argc > 1) ? argv[1] : cwd;
+static int cmd_ls(int argc, char** argv) {
+    const char* path = (argc > 1) ? argv[1] : cwd;
     struct dirent ents[128];
+
     long n = syscall(SYS_readdir, (long)path, (long)ents, 128, 0, 0, 0);
     if (n < 0) {
         set_color(COL_ERR, 0);
@@ -125,6 +178,7 @@ static int cmd_ls(int argc, char **argv) {
         set_color(COL_RESET, 0);
         return -1;
     }
+
     for (long i = 0; i < n; i++) {
         if (ents[i].is_dir) {
             set_color(COL_DIR, 0);
@@ -138,338 +192,417 @@ static int cmd_ls(int argc, char **argv) {
             out(" B\n");
         }
     }
+
     set_color(COL_RESET, 0);
     return 0;
 }
 
-static int cmd_cat(int argc, char **argv) {
-    if (argc < 2) {
-        out("usage: cat <file>\n");
-        return -1;
-    }
-    int fd = open(argv[1], 0);
-    if (fd < 0) {
-        set_color(COL_ERR, 0);
-        out("cat: cannot open '");
-        out(argv[1]);
-        out("'\n");
-        set_color(COL_RESET, 0);
-        return -1;
-    }
+static int cat_fd(int fd) {
     char buf[512];
     ssize_t r;
+
     while ((r = read(fd, buf, sizeof(buf))) > 0) {
         write(1, buf, (size_t)r);
     }
-    close(fd);
-    return 0;
+
+    return (r < 0) ? -1 : 0;
+}
+
+static int cmd_cat(int argc, char **argv) {
+    if (argc == 1) {
+        return cat_fd(0);
+    }
+
+    int ret = 0;
+
+    for (int i = 1; i < argc; i++) {
+        int fd = open(argv[i], O_RDONLY);
+        if (fd < 0) {
+            set_color(COL_ERR, 0);
+            out("cat: cannot open ");
+            out(argv[i]);
+            out("\n");
+            set_color(COL_RESET, 0);
+            ret = -1;
+            continue;
+        }
+
+        if (cat_fd(fd) != 0) ret = -1;
+        close(fd);
+    }
+
+    return ret;
 }
 
 static int cmd_mkdir(int argc, char **argv) {
-    if (argc < 2) { out("usage: mkdir <dir>\n"); return -1; }
+    if (argc < 2) {
+        out("usage: mkdir <dir>\n");
+        return -1;
+    }
+
     if (mkdir(argv[1], 0755) != 0) {
         set_color(COL_ERR, 0);
         out("mkdir: failed\n");
         set_color(COL_RESET, 0);
         return -1;
     }
+
     return 0;
 }
 
 static int cmd_touch(int argc, char **argv) {
-    if (argc < 2) { out("usage: touch <file>\n"); return -1; }
-    int fd = open(argv[1], 0x41, 0644);
+    if (argc < 2) {
+        out("usage: touch <file>\n");
+        return -1;
+    }
+
+    int fd = open(argv[1], O_WRONLY | O_CREAT, 0644);
     if (fd < 0) {
         set_color(COL_ERR, 0);
         out("touch: failed\n");
         set_color(COL_RESET, 0);
         return -1;
     }
+
     close(fd);
     return 0;
 }
 
 static int cmd_rm(int argc, char **argv) {
-    if (argc < 2) { out("usage: rm <path>\n"); return -1; }
+    if (argc < 2) {
+        out("usage: rm <path>\n");
+        return -1;
+    }
+
     if (unlink(argv[1]) != 0 && rmdir(argv[1]) != 0) {
         set_color(COL_ERR, 0);
-        out("rm: cannot remove '");
+        out("rm: cannot remove ");
         out(argv[1]);
-        out("'\n");
+        out("\n");
         set_color(COL_RESET, 0);
         return -1;
     }
-    return 0;
-}
 
-static int cmd_write(int argc, char **argv) {
-    if (argc < 3) { out("usage: write <file> <text...>\n"); return -1; }
-    int fd = open(argv[1], 0x41, 0644);
-    if (fd < 0) {
-        set_color(COL_ERR, 0);
-        out("write: cannot open '");
-        out(argv[1]);
-        out("'\n");
-        set_color(COL_RESET, 0);
-        return -1;
-    }
-    for (int i = 2; i < argc; i++) {
-        write(fd, argv[i], strlen(argv[i]));
-        if (i < argc - 1) write(fd, " ", 1);
-    }
-    write(fd, "\n", 1);
-    close(fd);
     return 0;
 }
 
 static int cmd_ps(int argc, char **argv) {
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
+
     ps_entry_t ents[32];
     long n = syscall(SYS_ps, (long)ents, 32, 0, 0, 0, 0);
-    if (n <= 0) { out("no processes\n"); return 0; }
+
+    if (n <= 0) {
+        out("no processes\n");
+        return 0;
+    }
+
     out("PID  PPID  ST  NAME\n");
+
     for (long i = 0; i < n; i++) {
         put_u64((unsigned long long)ents[i].pid);
         out("    ");
         put_u64((unsigned long long)ents[i].ppid);
         out("    ");
+
         switch (ents[i].state) {
-            case 1: out("R   "); break;
-            case 2: out("R   "); break;
-            case 3: out("S   "); break;
-            case 4: out("B   "); break;
-            case 5: out("Z   "); break;
-            default: out("?   "); break;
+            case 1:
+                out("R   ");
+                break;
+            case 2:
+                out("R   ");
+                break;
+            case 3:
+                out("S   ");
+                break;
+            case 4:
+                out("B   ");
+                break;
+            case 5:
+                out("Z   ");
+                break;
+            default:
+                out("?   ");
+                break;
         }
+
         out(ents[i].name);
         out("\n");
     }
+
     return 0;
 }
 
 static int cmd_mem(int argc, char **argv) {
-    (void)argc; (void)argv;
-    unsigned long long t = 0, u = 0, f = 0;
+    (void)argc;
+    (void)argv;
+
+    unsigned long long t = 0;
+    unsigned long long u = 0;
+    unsigned long long f = 0;
+
     syscall(SYS_meminfo, (long)&t, (long)&u, (long)&f, 0, 0, 0);
-    out("total: "); put_u64(t / 1024); out(" KB\n");
-    out("used:  "); put_u64(u / 1024); out(" KB\n");
-    out("free:  "); put_u64(f / 1024); out(" KB\n");
+
+    out("total: ");
+    put_u64(t / 1024);
+    out(" KB\n");
+
+    out("used:  ");
+    put_u64(u / 1024);
+    out(" KB\n");
+
+    out("free:  ");
+    put_u64(f / 1024);
+    out(" KB\n");
+
     return 0;
 }
 
 static int cmd_uptime(int argc, char **argv) {
-    (void)argc; (void)argv;
-    unsigned long s = time();
+    (void)argc;
+    (void)argv;
+
+    unsigned long ticks = (unsigned long)syscall(SYS_gettime, 0, 0, 0, 0, 0, 0);
+    unsigned long s = ticks / 1000;
     unsigned long h = s / 3600;
     unsigned long m = (s % 3600) / 60;
     unsigned long sec = s % 60;
+
     out("up ");
-    if (h) { put_u64(h); out("h "); }
-    if (h || m) { put_u64(m); out("m "); }
+
+    if (h) {
+        put_u64(h);
+        out("h ");
+    }
+
+    if (h || m) {
+        put_u64(m);
+        out("m ");
+    }
+
     put_u64(sec);
     out("s\n");
+
     return 0;
 }
 
 static int cmd_uname(int argc, char **argv) {
-    (void)argc; (void)argv;
+    (void)argc;
+    (void)argv;
+
     out("UTMS7 0.2 x86_64 hybrid kernel\n");
     return 0;
 }
 
-typedef struct {
-    const char *name;
-    int (*func)(int, char**);
-} sh_cmd_t;
+static int is_builtin(const char *name) {
+    if (strcmp(name, "help") == 0) return 1;
+    if (strcmp(name, "exit") == 0) return 1;
+    if (strcmp(name, "clear") == 0) return 1;
+    if (strcmp(name, "echo") == 0) return 1;
+    if (strcmp(name, "pwd") == 0) return 1;
+    if (strcmp(name, "cd") == 0) return 1;
+    if (strcmp(name, "ls") == 0) return 1;
+    if (strcmp(name, "cat") == 0) return 1;
+    if (strcmp(name, "mkdir") == 0) return 1;
+    if (strcmp(name, "touch") == 0) return 1;
+    if (strcmp(name, "rm") == 0) return 1;
+    if (strcmp(name, "ps") == 0) return 1;
+    if (strcmp(name, "mem") == 0) return 1;
+    if (strcmp(name, "uptime") == 0) return 1;
+    if (strcmp(name, "uname") == 0) return 1;
+    return 0;
+}
 
-static int cmd_disks(int argc, char **argv) {
-    (void)argc; (void)argv;
-    // File: apps/sfsh.c
-    // Найди typedef struct { ... } disk_info_user_t; и замени на:
+static int run_builtin(int argc, char **argv) {
+    if (strcmp(argv[0], "help") == 0) return cmd_help(argc, argv);
+    if (strcmp(argv[0], "exit") == 0) return cmd_exit(argc, argv);
+    if (strcmp(argv[0], "clear") == 0) return cmd_clear(argc, argv);
+    if (strcmp(argv[0], "echo") == 0) return cmd_echo(argc, argv);
+    if (strcmp(argv[0], "pwd") == 0) return cmd_pwd(argc, argv);
+    if (strcmp(argv[0], "cd") == 0) return cmd_cd(argc, argv);
+    if (strcmp(argv[0], "ls") == 0) return cmd_ls(argc, argv);
+    if (strcmp(argv[0], "cat") == 0) return cmd_cat(argc, argv);
+    if (strcmp(argv[0], "mkdir") == 0) return cmd_mkdir(argc, argv);
+    if (strcmp(argv[0], "touch") == 0) return cmd_touch(argc, argv);
+    if (strcmp(argv[0], "rm") == 0) return cmd_rm(argc, argv);
+    if (strcmp(argv[0], "ps") == 0) return cmd_ps(argc, argv);
+    if (strcmp(argv[0], "mem") == 0) return cmd_mem(argc, argv);
+    if (strcmp(argv[0], "uptime") == 0) return cmd_uptime(argc, argv);
+    if (strcmp(argv[0], "uname") == 0) return cmd_uname(argc, argv);
+    return -1;
+}
 
-        typedef struct {
-            u8 present;
-            u8 disk_num;
-            char model[41];
-            u64 total_sectors;
-            u32 sector_size;
-            u8 partition_count;
-            struct {
-                u8 present;
-                u8 disk_num;
-                u8 partition_num;
-                u64 start_lba;
-                u64 end_lba;
-                u64 size;
-                int type;
-                char name[32];
-            } __attribute__((packed)) partitions[16];
-            u8 is_gpt;
-        } __attribute__((packed)) disk_info_user_t;
+static int run_builtin_with_redirect(int argc, char **argv, int in_fd, int out_fd) {
+    int saved_in = -1;
+    int saved_out = -1;
 
-    disk_info_user_t disks[4];
-    int n = disk_list(disks, 4);
-    if (n <= 0) { out("no disks\n"); return 0; }
+    if (in_fd != 0) {
+        saved_in = dup(0);
+        dup2(in_fd, 0);
+        close(in_fd);
+    }
 
-    for (int i = 0; i < n; i++) {
-        if (!disks[i].present) continue;
-        set_color(COL_DIR, 0);
-        out("/dev/sd");
-        char c = 'a' + i;
-        write(1, &c, 1);
+    if (out_fd != 1) {
+        saved_out = dup(1);
+        dup2(out_fd, 1);
+        dup2(out_fd, 2);
+        close(out_fd);
+    }
+
+    int ret = run_builtin(argc, argv);
+
+    if (saved_in >= 0) {
+        dup2(saved_in, 0);
+        close(saved_in);
+    }
+
+    if (saved_out >= 0) {
+        dup2(saved_out, 1);
+        dup2(saved_out, 2);
+        close(saved_out);
+    }
+
+    return ret;
+}
+
+static int run_external(int argc, char **argv, int in_fd, int out_fd) {
+    int pid = fork();
+
+    if (pid == 0) {
+        if (in_fd != 0) {
+            dup2(in_fd, 0);
+            close(in_fd);
+        }
+
+        if (out_fd != 1) {
+            dup2(out_fd, 1);
+            dup2(out_fd, 2);
+            close(out_fd);
+        }
+
+        if (strchr(argv[0], '/')) {
+            execve(argv[0], argv, NULL);
+        } else {
+            char path[256];
+
+            strcpy(path, "./");
+            strcat(path, argv[0]);
+            execve(path, argv, NULL);
+
+            strcpy(path, "/bin/");
+            strcat(path, argv[0]);
+            execve(path, argv, NULL);
+
+            strcpy(path, "/sbin/");
+            strcat(path, argv[0]);
+            execve(path, argv, NULL);
+
+            execve(argv[0], argv, NULL);
+        }
+
+        set_color(COL_ERR, 0);
+        out("sh: command not found: ");
+        out(argv[0]);
+        out("\n");
         set_color(COL_RESET, 0);
-        out("  ");
-        u64 ss = disks[i].sector_size ? disks[i].sector_size : 512;
-        put_u64((disks[i].total_sectors * ss + (1024 * 1024 - 1)) / (1024 * 1024));
-        out(" MB  ");
-        out(disks[i].model);
-        out(disks[i].is_gpt ? "  GPT\n" : "  MBR\n");
+        _exit(127);
+    }
 
-        for (int j = 0; j < disks[i].partition_count; j++) {
-            if (!disks[i].partitions[j].present) continue;
-            out("  /dev/sd");
-            char c2 = 'a' + i;
-            write(1, &c2, 1);
-            put_u64(disks[i].partitions[j].partition_num);
-            out("  ");
-            put_u64((disks[i].partitions[j].size + (1024 * 1024 - 1)) / (1024 * 1024));
-            out(" MB  ");
-            switch(disks[i].partitions[j].type) {
-                case 1: set_color(COL_OK, 0); out("UFS\n"); break;
-                case 2: out("FAT32\n"); break;
-                case 3: out("EXT4\n"); break;
-                default: out("unknown\n"); break;
-            }
-            set_color(COL_RESET, 0);
+    if (pid > 0) {
+        if (in_fd != 0) close(in_fd);
+        if (out_fd != 1) close(out_fd);
+
+        int status;
+        waitpid(pid, &status, 0);
+        return status;
+    }
+
+    if (in_fd != 0) close(in_fd);
+    if (out_fd != 1) close(out_fd);
+
+    set_color(COL_ERR, 0);
+    out("sh: fork failed\n");
+    set_color(COL_RESET, 0);
+
+    return -1;
+}
+
+static int make_heredoc_file(void) {
+    const char *candidates[3];
+    candidates[0] = "/tmp/.heredoc";
+    candidates[1] = "/.heredoc";
+    candidates[2] = ".heredoc";
+
+    for (int i = 0; i < 3; i++) {
+        int fd = open(candidates[i], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            close(fd);
+            strncpy(heredoc_file, candidates[i], sizeof(heredoc_file) - 1);
+            heredoc_file[sizeof(heredoc_file) - 1] = '\0';
+            return 0;
         }
     }
+
+    return -1;
+}
+
+static int collect_heredoc(const char *delim, const char *path) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -1;
+
+    char hline[MAX_LINE];
+    int hpos = 0;
+    char c;
+
+    out("> ");
+
+    while (1) {
+        if (read(0, &c, 1) <= 0) continue;
+
+        if (c == '\n' || c == '\r') {
+            hline[hpos] = '\0';
+
+            if (strcmp(hline, delim) == 0) break;
+
+            write(fd, hline, (size_t)hpos);
+            write(fd, "\n", 1);
+
+            hpos = 0;
+            out("> ");
+        } else if (c == '\b' || c == 0x7F) {
+            if (hpos > 0) hpos--;
+        } else if (c >= 32 && c <= 126) {
+            if (hpos < MAX_LINE - 1) hline[hpos++] = c;
+        }
+    }
+
+    close(fd);
     return 0;
 }
 
-static int cmd_mount(int argc, char **argv) {
-    if (argc < 2) { out("usage: mount /dev/sdX[1-16] [point]\n"); return -1; }
-    const char* point = (argc >= 3) ? argv[2] : "/";
-    if (partition_mount(argv[1], point) != 0) {
-        set_color(COL_ERR, 0);
-        out("mount failed\n");
-        set_color(COL_RESET, 0);
-        return -1;
-    }
-    refresh_cwd();
-    return 0;
-}
+int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
 
-static int cmd_umount(int argc, char **argv) {
-    (void)argc; (void)argv;
-    if (partition_umount() != 0) {
-        set_color(COL_ERR, 0);
-        out("umount failed\n");
-        set_color(COL_RESET, 0);
-        return -1;
-    }
-    strcpy(cwd, "/");
-    return 0;
-}
-
-static int cmd_mkfs(int argc, char **argv) {
-    if (argc < 2) { out("usage: mkfs.ufs /dev/sdX[1-16]\n"); return -1; }
-    if (partition_format(argv[1], "ufs") != 0) {
-        set_color(COL_ERR, 0);
-        out("format failed\n");
-        set_color(COL_RESET, 0);
-        return -1;
-    }
-    set_color(COL_OK, 0);
-    out("formatted\n");
     set_color(COL_RESET, 0);
-    return 0;
-}
-
-static int cmd_mktable(int argc, char **argv) {
-    if (argc < 3) { out("usage: mktable /dev/sdX <mbr|gpt>\n"); return -1; }
-    int gpt = (strcmp(argv[2], "gpt") == 0);
-    if (!gpt && strcmp(argv[2], "mbr") != 0) { out("unknown table type\n"); return -1; }
-    if (disk_create_table(argv[1], gpt) != 0) {
-        set_color(COL_ERR, 0); out("failed\n"); set_color(COL_RESET, 0);
-        return -1;
-    }
-    set_color(COL_OK, 0); out("table created\n"); set_color(COL_RESET, 0);
-    return 0;
-}
-
-static int cmd_mkpart(int argc, char **argv) {
-    if (argc < 3) { out("usage: mkpart /dev/sdX <sizeMB>\n"); return -1; }
-    unsigned long mb = 0;
-    for (char *p = argv[2]; *p; p++) {
-        if (*p < '0' || *p > '9') { out("invalid size\n"); return -1; }
-        mb = mb * 10 + (unsigned long)(*p - '0');
-    }
-    if (partition_create(argv[1], mb, 1) != 0) {
-        set_color(COL_ERR, 0); out("failed\n"); set_color(COL_RESET, 0);
-        return -1;
-    }
-    set_color(COL_OK, 0); out("partition created\n"); set_color(COL_RESET, 0);
-    return 0;
-}
-
-static int cmd_rmpart(int argc, char **argv) {
-    if (argc < 2) { out("usage: rmpart /dev/sdX1\n"); return -1; }
-    if (partition_delete(argv[1]) != 0) {
-        set_color(COL_ERR, 0); out("failed\n"); set_color(COL_RESET, 0);
-        return -1;
-    }
-    set_color(COL_OK, 0); out("partition deleted\n"); set_color(COL_RESET, 0);
-    return 0;
-}
-
-static const sh_cmd_t cmds[] = {
-    { "help", cmd_help },
-    { "clear", cmd_clear },
-    { "echo", cmd_echo },
-    { "pwd", cmd_pwd },
-    { "cd", cmd_cd },
-    { "ls", cmd_ls },
-    { "cat", cmd_cat },
-    { "mkdir", cmd_mkdir },
-    { "touch", cmd_touch },
-    { "rm", cmd_rm },
-    { "write", cmd_write },
-    { "ps", cmd_ps },
-    { "mem", cmd_mem },
-    { "uptime", cmd_uptime },
-    { "uname", cmd_uname },
-    { "disks", cmd_disks },
-    { "lsblk", cmd_disks },
-    { "mount", cmd_mount },
-    { "umount", cmd_umount },
-    { "mkfs.ufs", cmd_mkfs },
-    { "mktable", cmd_mktable },
-    { "mkpart", cmd_mkpart },
-    { "rmpart", cmd_rmpart },
-};
-
-int main(void) {
-    write(1, "DEBUG: main started\n", 20);
-    set_color(COL_RESET, 0);
-    write(1, "DEBUG: after set_color\n", 23);
     refresh_cwd();
-    write(1, "DEBUG: after refresh_cwd\n", 25);
     out("UTMS7 shell ready. Type 'help'.\n");
-    write(1, "DEBUG: after first out\n", 23);
 
     char line[MAX_LINE];
-    int pos;
-    char c;
 
     while (1) {
         print_prompt();
-        pos = 0;
+
+        int pos = 0;
+        char c;
+
         line[0] = '\0';
 
         while (1) {
             if (read(0, &c, 1) <= 0) continue;
 
-            if (c == '\b' || c == 0x7F || c == 0x0E) {
+            if (c == '\b' || c == 0x7F) {
                 if (pos > 0) {
                     pos--;
                     write(1, "\b \b", 3);
@@ -493,52 +626,150 @@ int main(void) {
 
         if (pos == 0) continue;
 
-        char *argv[16];
-        int argc = 0;
+        char *tokens[MAX_TOKENS];
+        int targc = 0;
         char *p = line;
 
-        while (*p && argc < 15) {
+        while (*p && targc < MAX_TOKENS - 1) {
             while (*p == ' ' || *p == '\t') p++;
             if (!*p) break;
 
-            argv[argc++] = p;
+            tokens[targc++] = p;
 
             while (*p && *p != ' ' && *p != '\t') p++;
+
             if (*p) *p++ = '\0';
         }
 
-        argv[argc] = NULL;
+        tokens[targc] = NULL;
 
-        if (argc == 0) continue;
+        char *cmd_argv[MAX_ARGS + 1];
+        int cmd_argc = 0;
 
-        int found = 0;
-        for (unsigned i = 0; i < sizeof(cmds) / sizeof(cmds[0]); i++) {
-            if (strcmp(cmds[i].name, argv[0]) == 0) {
-                cmds[i].func(argc, argv);
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            int pid = fork();
-            if (pid == 0) {
-                execve(argv[0], argv, NULL);
-                set_color(COL_ERR, 0);
-                out("sh: command not found: ");
-                out(argv[0]);
-                out("\n");
-                set_color(COL_RESET, 0);
-                _exit(1);
-            } else if (pid > 0) {
-                int status;
-                waitpid(pid, &status, 0);
+        int in_fd = 0;
+        int out_fd = 1;
+
+        int heredoc = 0;
+        char *heredoc_delim = NULL;
+
+        int parse_error = 0;
+
+        for (int i = 0; i < targc; i++) {
+            if (strcmp(tokens[i], ">") == 0) {
+                if (i + 1 >= targc) {
+                    parse_error = 1;
+                    break;
+                }
+
+                if (out_fd > 1) close(out_fd);
+
+                out_fd = open(tokens[++i], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (out_fd < 0) {
+                    parse_error = 1;
+                    break;
+                }
+            } else if (strcmp(tokens[i], ">>") == 0) {
+                if (i + 1 >= targc) {
+                    parse_error = 1;
+                    break;
+                }
+
+                if (out_fd > 1) close(out_fd);
+
+                out_fd = open(tokens[++i], O_WRONLY | O_CREAT | O_APPEND, 0644);
+                if (out_fd < 0) {
+                    parse_error = 1;
+                    break;
+                }
+            } else if (strcmp(tokens[i], "<") == 0) {
+                if (i + 1 >= targc) {
+                    parse_error = 1;
+                    break;
+                }
+
+                if (in_fd != 0) close(in_fd);
+
+                in_fd = open(tokens[++i], O_RDONLY);
+                if (in_fd < 0) {
+                    parse_error = 1;
+                    break;
+                }
+            } else if (strcmp(tokens[i], "<<") == 0) {
+                if (i + 1 >= targc) {
+                    parse_error = 1;
+                    break;
+                }
+
+                heredoc = 1;
+                heredoc_delim = tokens[++i];
             } else {
-                set_color(COL_ERR, 0);
-                out("sh: fork failed\n");
-                set_color(COL_RESET, 0);
+                if (cmd_argc < MAX_ARGS) cmd_argv[cmd_argc++] = tokens[i];
             }
         }
+
+        cmd_argv[cmd_argc] = NULL;
+
+        if (parse_error || cmd_argc == 0) {
+            if (in_fd != 0) close(in_fd);
+            if (out_fd > 1) close(out_fd);
+
+            set_color(COL_ERR, 0);
+            out("sh: parse error\n");
+            set_color(COL_RESET, 0);
+            continue;
+        }
+
+        heredoc_file[0] = '\0';
+
+        if (heredoc) {
+            if (make_heredoc_file() != 0) {
+                if (in_fd != 0) close(in_fd);
+                if (out_fd > 1) close(out_fd);
+
+                set_color(COL_ERR, 0);
+                out("sh: cannot create heredoc file\n");
+                set_color(COL_RESET, 0);
+                continue;
+            }
+
+            if (collect_heredoc(heredoc_delim, heredoc_file) != 0) {
+                if (in_fd != 0) close(in_fd);
+                if (out_fd > 1) close(out_fd);
+                if (heredoc_file[0]) unlink(heredoc_file);
+
+                set_color(COL_ERR, 0);
+                out("sh: heredoc failed\n");
+                set_color(COL_RESET, 0);
+                continue;
+            }
+
+            if (in_fd != 0) close(in_fd);
+
+            in_fd = open(heredoc_file, O_RDONLY);
+            if (in_fd < 0) {
+                if (out_fd > 1) close(out_fd);
+                unlink(heredoc_file);
+
+                set_color(COL_ERR, 0);
+                out("sh: cannot open heredoc file\n");
+                set_color(COL_RESET, 0);
+                continue;
+            }
+        }
+
+        if (is_builtin(cmd_argv[0])) {
+            run_builtin_with_redirect(cmd_argc, cmd_argv, in_fd, out_fd);
+        } else {
+            run_external(cmd_argc, cmd_argv, in_fd, out_fd);
+        }
+
+        if (heredoc_file[0]) {
+            unlink(heredoc_file);
+            heredoc_file[0] = '\0';
+        }
+
         set_color(COL_RESET, 0);
     }
+
     return 0;
 }

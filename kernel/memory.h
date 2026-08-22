@@ -19,5 +19,6 @@ u64 memory_free(void);
 void pmm_init_region(u64 base, u64 size);
 void* pmm_alloc_page(void);
 void pmm_free_page(void* ptr);
+void* kmalloc_aligned(u64 size, u32 alignment);
 
 #endif

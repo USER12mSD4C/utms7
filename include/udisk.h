@@ -14,8 +14,6 @@ typedef enum {
     PARTITION_UNKNOWN
 } partition_type_t;
 
-// File: include/udisk.h
-
 typedef struct {
     u8 present;
     u8 disk_num;
@@ -23,8 +21,8 @@ typedef struct {
     u64 start_lba;
     u64 end_lba;
     u64 size;
-    partition_type_t type;
-    char name[UDISK_NAME_LEN];
+    u32 type;
+    char name[32];
 } __attribute__((packed)) partition_t;
 
 typedef struct {

@@ -1,7 +1,7 @@
-// net/net.c
 #include "net.h"
 #include "../include/string.h"
 #include "../include/endian.h"
+#include "../include/netconfig.h"
 #include "../kernel/memory.h"
 #include "../drivers/drm.h"
 #include "../drivers/pci.h"
@@ -25,6 +25,9 @@ static int nic_type = 0;  // 0 = none, 1 = e1000, 2 = rtl8139
 
 int net_init(void) {
     print("\nNetwork: Scanning for devices...\n");
+
+    nic_type = 0;
+    network_ready = 0;
 
     // Ищем Intel e1000
     pci_dev_t *dev = pci_find_device(0x8086, 0x100E);
@@ -55,18 +58,6 @@ int net_init(void) {
 
             network_ready = 1;
             nic_type = 1;
-
-            our_ip = 0x0A00020F;
-            our_gateway = 0x0A000202;
-            our_netmask = 0xFFFFFF00;
-            our_dns = 0x0A000202;
-
-            print("Intel e1000 loaded, IP: 10.0.2.15, MAC: ");
-            for (int i = 0; i < 6; i++) {
-                printhex(our_mac[i]);
-                if (i < 5) print(":");
-            }
-            print("\n");
         } else {
             print("Intel e1000 init failed\n");
         }
@@ -111,62 +102,52 @@ int net_init(void) {
     udp_init();
     tcp_init();
 
-    if (network_ready) {
-        our_ip = 0x0A00020F;      // 10.0.2.15
-        our_gateway = 0x0A000202; // 10.0.2.2
-        our_netmask = 0xFFFFFF00; // 255.255.255.0
-        our_dns = 0x08080808;     // 8.8.8.8
-        print("Using static IP: 10.0.2.15\n");
-    }
+    net_config_set_default();
+    net_config_load("/etc/netconfig");
 
-//    if (our_ip == 0) {
-//       our_ip = 0x0A00020F;      // 10.0.2.15
-//        our_gateway = 0x0A000202; // 10.0.2.2
-//        our_netmask = 0xFFFFFF00; // 255.255.255.0
-//        our_dns = 0x0A000202;     // 10.0.2.2
-//        print("Using static IP: 10.0.2.15 (QEMU mode)\n");
-//    }
+    our_ip = net_config_get()->ip;
+    our_netmask = net_config_get()->netmask;
+    our_gateway = net_config_get()->gateway;
+    our_dns = net_config_get()->dns;
+
+    if (net_config_get()->use_dhcp) {
+        print("Requesting IP via DHCP...\n");
+        if (dhcp_request() == 0) {
+            our_ip = net_get_ip();
+            our_netmask = net_get_netmask();
+            our_gateway = net_get_gateway();
+            our_dns = net_get_dns();
+            print("DHCP successful.\n");
+            net_config_save("/etc/netconfig");
+        } else {
+            print("DHCP failed, using static configuration.\n");
+        }
+    }
 
     print("\n=== Network Configuration ===\n");
     print("IP:     ");
-    printnum((our_ip >> 24) & 0xFF);
-    print(".");
-    printnum((our_ip >> 16) & 0xFF);
-    print(".");
-    printnum((our_ip >> 8) & 0xFF);
-    print(".");
-    printnum(our_ip & 0xFF);
-    print("\n");
+    printnum((our_ip >> 24) & 0xFF); print(".");
+    printnum((our_ip >> 16) & 0xFF); print(".");
+    printnum((our_ip >> 8) & 0xFF); print(".");
+    printnum(our_ip & 0xFF); print("\n");
 
     print("Gateway: ");
-    printnum((our_gateway >> 24) & 0xFF);
-    print(".");
-    printnum((our_gateway >> 16) & 0xFF);
-    print(".");
-    printnum((our_gateway >> 8) & 0xFF);
-    print(".");
-    printnum(our_gateway & 0xFF);
-    print("\n");
+    printnum((our_gateway >> 24) & 0xFF); print(".");
+    printnum((our_gateway >> 16) & 0xFF); print(".");
+    printnum((our_gateway >> 8) & 0xFF); print(".");
+    printnum(our_gateway & 0xFF); print("\n");
 
     print("Netmask: ");
-    printnum((our_netmask >> 24) & 0xFF);
-    print(".");
-    printnum((our_netmask >> 16) & 0xFF);
-    print(".");
-    printnum((our_netmask >> 8) & 0xFF);
-    print(".");
-    printnum(our_netmask & 0xFF);
-    print("\n");
+    printnum((our_netmask >> 24) & 0xFF); print(".");
+    printnum((our_netmask >> 16) & 0xFF); print(".");
+    printnum((our_netmask >> 8) & 0xFF); print(".");
+    printnum(our_netmask & 0xFF); print("\n");
 
     print("DNS:     ");
-    printnum((our_dns >> 24) & 0xFF);
-    print(".");
-    printnum((our_dns >> 16) & 0xFF);
-    print(".");
-    printnum((our_dns >> 8) & 0xFF);
-    print(".");
-    printnum(our_dns & 0xFF);
-    print("\n");
+    printnum((our_dns >> 24) & 0xFF); print(".");
+    printnum((our_dns >> 16) & 0xFF); print(".");
+    printnum((our_dns >> 8) & 0xFF); print(".");
+    printnum(our_dns & 0xFF); print("\n");
     print("===========================\n\n");
 
     print("Network ready!\n");

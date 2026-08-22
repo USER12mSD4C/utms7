@@ -1,13 +1,15 @@
-global syscall_entry
+bits 64
+default rel
 
+global syscall_entry
 extern syscall_handler_c
 extern kernel_stack_temp
 extern user_stack_temp
 
 section .text
-bits 64
 
 syscall_entry:
+    cli
     swapgs
     mov [rel user_stack_temp], rsp
     mov rsp, [rel kernel_stack_temp]
@@ -15,14 +17,12 @@ syscall_entry:
     push qword [rel user_stack_temp]
     push r11
     push rcx
-
     push rbp
     push rbx
     push r12
     push r13
     push r14
     push r15
-
     push r9
     push r8
     push r10
@@ -31,9 +31,16 @@ syscall_entry:
     push rdi
     push rax
 
+    and qword [rsp + 112], 0xFFFFFFFFFFFFFAFF
+    or qword [rsp + 112], 0x200
+
     mov rdi, rsp
     mov rsi, rax
     call syscall_handler_c
+    cli
+
+    and qword [rsp + 112], 0xFFFFFFFFFFFFFAFF
+    or qword [rsp + 112], 0x200
 
     pop rax
     pop rdi
@@ -48,13 +55,10 @@ syscall_entry:
     pop r12
     pop rbx
     pop rbp
-
     pop rcx
     pop r11
     pop rsp
-
     swapgs
     o64 sysret
 
 section .note.GNU-stack noalloc noexec nowrite progbits
-default rel

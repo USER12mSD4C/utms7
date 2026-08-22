@@ -10,7 +10,6 @@
 #include "syscall.h"
 
 #define TIME_SLICE_MS       10
-#define KERNEL_STACK_SIZE   8192
 #define MAX_PROCESSES       64
 #define PIT_BASE_FREQ       1193182
 #define PIT_DIVIDER         1193
@@ -546,6 +545,7 @@ int sched_start(void) {
 
 int sched_clone(u64 user_rip, u64 user_rsp) {
     if (!sched_initialized) return -1;
+    if ((user_rsp & 0xFULL) != 0) return -1;
 
     __asm__ volatile ("cli");
 
@@ -680,6 +680,7 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
 
     u64 max_vaddr = 0;
     u64 entry = binfmt_load(elf_data, elf_size, pml4, &max_vaddr);
+    print("SCHED_CREATE: name="); print(name); print(" entry="); printhex(entry); print("\n");
     if (entry == 0) {
         free_address_space(pml4);
         p->state = PROC_UNUSED;
@@ -717,43 +718,33 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
     u64 rsp = user_stack_top;
     rsp &= ~0xFULL;
 
-    rsp -= (strlen(name) + 1);
-    memcpy((void*)rsp, name, strlen(name) + 1);
+    u64 name_len = strlen(name) + 1;
+    rsp -= name_len;
+    memcpy((void*)rsp, name, name_len);
     u64 prog_name_ptr = rsp;
-
-    rsp &= ~0xFULL;
 
     u8 random_bytes[16] = {0};
     rsp -= 16;
     memcpy((void*)rsp, random_bytes, 16);
     u64 at_random_ptr = rsp;
 
-    u64 auxv[] = {
-        6, 4096,
-        25, at_random_ptr,
-        9, entry,
-        0, 0
-    };
-    rsp -= sizeof(auxv);
-    memcpy((void*)rsp, auxv, sizeof(auxv));
-
-    u64 envp_null = 0;
-    rsp -= 8;
-    memcpy((void*)rsp, &envp_null, 8);
-
-    u64 argv_null = 0;
-    rsp -= 8;
-    memcpy((void*)rsp, &argv_null, 8);
-
-    rsp -= 8;
-    memcpy((void*)rsp, &prog_name_ptr, 8);
-
-    u64 argc = 1;
-    rsp -= 8;
-    memcpy((void*)rsp, &argc, 8);
-
+    rsp -= sizeof(u64) * 12;
     rsp &= ~0xFULL;
-    rsp -= 8;
+
+    *(u64*)rsp = 1;
+    *(u64*)(rsp + 8) = prog_name_ptr;
+    *(u64*)(rsp + 16) = 0;
+    *(u64*)(rsp + 24) = 0;
+
+    u64* auxv = (u64*)(rsp + 32);
+    auxv[0] = 6;
+    auxv[1] = 4096;
+    auxv[2] = 25;
+    auxv[3] = at_random_ptr;
+    auxv[4] = 9;
+    auxv[5] = entry;
+    auxv[6] = 0;
+    auxv[7] = 0;
 
     __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
 
@@ -801,7 +792,15 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
 
     for (int i = 0; i < 32; i++) {
         p->fds[i].used = 0;
+        p->fds[i].type = 0;
+        p->fds[i].data.vnode = NULL;
+        p->fds[i].pos = 0;
+        p->fds[i].flags = 0;
     }
+
+    p->fds[0].used = 1;
+    p->fds[1].used = 1;
+    p->fds[2].used = 1;
 
     enqueue_ready(p);
     process_count++;
@@ -836,23 +835,21 @@ int spawn_userspace_init(void) {
     u8 *init_data = NULL;
     u32 init_size = 0;
 
-    if (ufs_ismounted()) {
-        if (ufs_read("/init", &init_data, &init_size) == 0) {
-            int pid = sched_create_process("init", init_data, init_size);
-            kfree(init_data);
-            if (pid >= 0) return 0;
-        }
-    }
-
-    extern int get_module_data(const char* name, u8** buf, u32* size);
-    if (get_module_data("init", &init_data, &init_size) == 0) {
-        print("[init] UFS empty, loaded userspace /init from Multiboot2 RAM module\n");
+    if (vfs_read_entire("/init", &init_data, &init_size) == 0) {
         int pid = sched_create_process("init", init_data, init_size);
         kfree(init_data);
         if (pid >= 0) return 0;
     }
 
-    print("[init] /init not found on UFS and no Multiboot2 module found, system halted.\n");
+    extern int get_module_data(const char* name, u8** buf, u32* size);
+    if (get_module_data("init", &init_data, &init_size) == 0) {
+        print("[init] loaded from Multiboot2\n");
+        int pid = sched_create_process("init", init_data, init_size);
+        kfree(init_data);
+        if (pid >= 0) return 0;
+    }
+
+    print("[init] not found\n");
     return 0;
 }
 

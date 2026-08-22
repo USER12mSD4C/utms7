@@ -193,3 +193,22 @@ void pmm_free_page(void* ptr) {
         pmm_bitmap[byte] &= (u8)~bit;
     }
 }
+
+void* kmalloc_aligned(u64 size, u32 alignment) {
+    if (alignment < 8) alignment = 8;
+
+    u64 total_size = size + alignment + sizeof(void*);
+    void* ptr = kmalloc(total_size);
+    if (!ptr) return NULL;
+
+    void** aligned_ptr = (void**)(((u64)ptr + alignment + sizeof(void*)) & ~(alignment - 1));
+    aligned_ptr[-1] = ptr;
+
+    return aligned_ptr;
+}
+
+void kfree_aligned(void* ptr) {
+    if (!ptr) return;
+    void** aligned_ptr = (void**)ptr;
+    kfree(aligned_ptr[-1]);
+}

@@ -152,9 +152,8 @@ static long sys_exit(trap_frame_t* frame, long code, long a2, long a3, long a4, 
 static long sys_write(trap_frame_t* frame, long fd, long buf, long count, long a4, long a5, long a6) {
     (void)frame; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
-    if (!p || fd < 0 || fd >= MAX_FDS) return -1;
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
     if (!is_user_pointer((void*)buf)) return -1;
-
     if (fd == 1 || fd == 2) {
         char temp[256];
         long left = count;
@@ -168,153 +167,86 @@ static long sys_write(trap_frame_t* frame, long fd, long buf, long count, long a
         }
         return count;
     }
-
-    if (!p->fds[fd].used || p->fds[fd].type != 0) return -1;
-    file_data_t* f = &p->fds[fd].data.file;
-
-    if (f->flags & O_APPEND) f->pos = f->buf_size;
-
-    u32 new_size = f->pos + count;
-    if (new_size > f->buf_capacity) {
-        u32 new_cap = f->buf_capacity;
-        while (new_cap < new_size) {
-            new_cap *= 2;
-            if (new_cap == 0) new_cap = 4096;
-        }
-        u8* new_buf = kmalloc(new_cap);
-        if (!new_buf) return -1;
-        if (f->buf && f->buf_size > 0) memcpy(new_buf, f->buf, f->buf_size);
-        if (f->buf) kfree(f->buf);
-        f->buf = new_buf;
-        f->buf_capacity = new_cap;
-    }
-
-    if (copy_from_user(f->buf + f->pos, (void*)buf, count) != 0) return -1;
-    f->pos += count;
-    if (f->pos > f->buf_size) f->buf_size = f->pos;
-    f->dirty = 1;
-    return count;
+    if (p->fds[fd].type != 0) return -1;
+    vfs_node_t* node = p->fds[fd].data.vnode;
+    if (!node) return -1;
+    u8* tmp_buf = kmalloc(count);
+    if (!tmp_buf) return -1;
+    if (copy_from_user(tmp_buf, (void*)buf, count) != 0) { kfree(tmp_buf); return -1; }
+    if (p->fds[fd].flags & O_APPEND) p->fds[fd].pos = node->size;
+    int res = vfs_write(node, tmp_buf, count, p->fds[fd].pos);
+    if (res > 0) p->fds[fd].pos += res;
+    kfree(tmp_buf);
+    return res;
 }
 
 static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4, long a5, long a6) {
     (void)frame; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
-    if (!p || fd < 0 || fd >= MAX_FDS) return -1;
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
     if (!is_user_pointer((void*)buf)) return -1;
-
     if (fd == 0) {
         long read_count = 0;
         u8 *user_buf = (u8*)buf;
-
-        while (!keyboard_data_ready()) {
-            __asm__ volatile("sti");
-            sched_sleep(1);
-        }
-
+        while (!keyboard_data_ready()) { __asm__ volatile("sti"); sched_sleep(1); }
         while (read_count < count && keyboard_data_ready()) {
             char c = keyboard_getc();
             u8 tmp = (u8)c;
             if (copy_to_user(user_buf + read_count, &tmp, 1) != 0) return -1;
             read_count++;
         }
-
         return read_count;
     }
-
-    if (!p->fds[fd].used || p->fds[fd].type != 0) return -1;
-    file_data_t* f = &p->fds[fd].data.file;
-    if (f->pos >= f->buf_size) return 0;
-
-    long to_copy = count;
-    if (f->pos + to_copy > f->buf_size) to_copy = f->buf_size - f->pos;
-
-    if (copy_to_user((void*)buf, f->buf + f->pos, to_copy) != 0) return -1;
-    f->pos += to_copy;
-    return to_copy;
+    if (p->fds[fd].type != 0) return -1;
+    vfs_node_t* node = p->fds[fd].data.vnode;
+    if (!node) return -1;
+    u8* tmp_buf = kmalloc(count);
+    if (!tmp_buf) return -1;
+    int res = vfs_read(node, tmp_buf, count, p->fds[fd].pos);
+    if (res > 0) {
+        if (copy_to_user((void*)buf, tmp_buf, res) != 0) { kfree(tmp_buf); return -1; }
+        p->fds[fd].pos += res;
+    }
+    kfree(tmp_buf);
+    return res;
 }
 
 static long sys_open(trap_frame_t* frame, long path, long flags, long mode, long a4, long a5, long a6) {
-    (void)frame; (void)mode; (void)a4; (void)a5; (void)a6;
+    (void)frame; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
     if (!p) return -1;
-
     char path_buf[256];
-    if (is_user_pointer((void*)path)) {
-        if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-        path_buf[255] = '\0';
-    } else {
-        strncpy(path_buf, (const char*)path, 255);
-        path_buf[255] = '\0';
-    }
-
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
+    path_buf[255] = '\0';
     int fd = -1;
     for (int i = 3; i < MAX_FDS; i++) {
-        if (!p->fds[i].used) {
-            fd = i;
-            break;
-        }
+        if (!p->fds[i].used) { fd = i; break; }
     }
     if (fd == -1) return -1;
-
     if (strncmp(path_buf, "/dev/dri/card0", 14) == 0) {
         p->fds[fd].used = 1;
         p->fds[fd].type = 1;
         return fd;
     }
-
-    u8* file_buf = NULL;
-    u32 file_size = 0;
-
-    if (ufs_exists(path_buf)) {
-        if (flags & O_TRUNC) {
-            file_buf = kmalloc(4096);
-            if (!file_buf) return -1;
-            file_size = 0;
-        } else {
-            if (ufs_read(path_buf, &file_buf, &file_size) != 0) {
-                file_buf = kmalloc(4096);
-                if (!file_buf) return -1;
-                file_size = 0;
-            }
-        }
-    } else {
-        if (flags & O_CREAT) {
-            file_buf = kmalloc(4096);
-            if (!file_buf) return -1;
-            file_size = 0;
-        } else {
-            return -1;
-        }
-    }
-
+    vfs_node_t* node = vfs_open(path_buf, (int)flags, (int)mode);
+    if (!node) return -1;
     p->fds[fd].used = 1;
     p->fds[fd].type = 0;
-    strcpy(p->fds[fd].data.file.path, path_buf);
-    p->fds[fd].data.file.buf = file_buf;
-    p->fds[fd].data.file.buf_size = file_size;
-    p->fds[fd].data.file.buf_capacity = (file_buf == NULL) ? 0 : 4096;
-    p->fds[fd].data.file.pos = (flags & O_APPEND) ? file_size : 0;
-    p->fds[fd].data.file.dirty = 0;
-    p->fds[fd].data.file.flags = flags & 0xFFF;
-
+    p->fds[fd].data.vnode = node;
+    p->fds[fd].pos = (flags & O_APPEND) ? node->size : 0;
+    p->fds[fd].flags = (int)flags;
     return fd;
 }
 
 static long sys_close(trap_frame_t* frame, long fd, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
-    if (!p || fd < 0 || fd >= MAX_FDS) return -1;
-
-    if (p->fds[fd].used) {
-        if (p->fds[fd].type == FD_TYPE_FILE) {
-            file_data_t* f = &p->fds[fd].data.file;
-            if (f->dirty && f->buf) ufs_write(f->path, f->buf, f->buf_size);
-            if (f->buf) kfree(f->buf);
-        } else if (p->fds[fd].type == FD_TYPE_UNIX) {
-            unix_close(fd);
-        }
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+    if (p->fds[fd].type == 0 && p->fds[fd].data.vnode) {
+        vfs_close(p->fds[fd].data.vnode);
+    } else if (p->fds[fd].type == FD_TYPE_UNIX) {
+        unix_close(fd);
     }
-
     p->fds[fd].used = 0;
     memset(&p->fds[fd], 0, sizeof(fd_entry_t));
     return 0;
@@ -438,21 +370,79 @@ static long sys_munmap(trap_frame_t* frame, long addr, long size, long a3, long 
     return 0;
 }
 
+static int resolve_applet(const char* cmd, char* out_path) {
+    u8* data = NULL;
+    u32 size = 0;
+    if (vfs_read_entire("/bin/applets", &data, &size) != 0) return -1;
+
+    char* p = (char*)data;
+    char* end = p + size;
+    int cmd_len = strlen(cmd);
+
+    while (p < end) {
+        char* line_start = p;
+        while (p < end && *p != '\n') p++;
+
+        char* c = line_start;
+        while (c < p && (*c == ' ' || *c == '\t')) c++;
+        if (c >= p) { if (p < end) p++; continue; }
+
+        char* cmd_start = c;
+        while (c < p && *c != ' ' && *c != '\t') c++;
+        int cur_cmd_len = c - cmd_start;
+
+        while (c < p && (*c == ' ' || *c == '\t')) c++;
+        if (c >= p) { if (p < end) p++; continue; }
+
+        char* bin_start = c;
+        while (c < p && *c != ' ' && *c != '\t' && *c != '\r' && *c != '\n') c++;
+        int bin_len = c - bin_start;
+
+        if (cur_cmd_len == cmd_len && strncmp(cmd_start, cmd, cmd_len) == 0) {
+            if (bin_len > 0 && bin_len < 200) {
+                int has_slash = 0;
+                for (int i = 0; i < bin_len; i++) {
+                    if (bin_start[i] == '/') has_slash = 1;
+                }
+
+                if (has_slash) {
+                    memcpy(out_path, bin_start, bin_len);
+                    out_path[bin_len] = '\0';
+                } else {
+                    out_path[0] = '/';
+                    out_path[1] = 'b';
+                    out_path[2] = 'i';
+                    out_path[3] = 'n';
+                    out_path[4] = '/';
+                    memcpy(out_path + 5, bin_start, bin_len);
+                    out_path[5 + bin_len] = '\0';
+                }
+                kfree(data);
+                return 0;
+            }
+        }
+        if (p < end) p++;
+    }
+    kfree(data);
+    return -1;
+}
+
 static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_ptr, long a4, long a5, long a6) {
     (void)envp_ptr; (void)a4; (void)a5; (void)a6;
+    __asm__ volatile("cli");
 
     process_t *p = sched_current();
     if (!p) return -1;
-
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
-    char argv_buf[64][256];
-    int argc = 0;
+    char (*argv_buf)[256] = kmalloc(64 * 256);
+    if (!argv_buf) return -1;
 
+    int argc = 0;
     if (argv_ptr && is_user_pointer((void*)argv_ptr)) {
         for (int i = 0; i < 63; i++) {
             u64 str_ptr;
@@ -469,7 +459,6 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
         const char* name = path_buf;
         const char* slash = strrchr(path_buf, '/');
         if (slash) name = slash + 1;
-
         strncpy(argv_buf[0], name, 255);
         argv_buf[0][255] = '\0';
         argc = 1;
@@ -477,15 +466,57 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
 
     u8 *elf_data = NULL;
     u32 elf_size = 0;
+    char resolved_path[256];
+    strncpy(resolved_path, path_buf, 255);
+    resolved_path[255] = '\0';
 
-    if (ufs_read(path_buf, &elf_data, &elf_size) != 0) {
+    extern int vfs_readlink(const char*, char*, u32);
+    for (int depth = 0; depth < 8; depth++) {
+        char link_target[256];
+        int res = vfs_readlink(resolved_path, link_target, 255);
+        if (res <= 0) break;
+        link_target[255] = '\0';
+
+        if (link_target[0] == '/') {
+            strncpy(resolved_path, link_target, 255);
+            resolved_path[255] = '\0';
+        } else {
+            char dir[256];
+            strncpy(dir, resolved_path, 255);
+            dir[255] = '\0';
+
+            char* slash = strrchr(dir, '/');
+            if (slash && slash != dir) {
+                *slash = '\0';
+            } else if (slash == dir) {
+                dir[1] = '\0';
+            } else {
+                strcpy(dir, "/");
+            }
+
+            char tmp[512];
+            if (strcmp(dir, "/") == 0) {
+                strcpy(tmp, "/");
+                strcat(tmp, link_target);
+            } else {
+                strcpy(tmp, dir);
+                strcat(tmp, "/");
+                strcat(tmp, link_target);
+            }
+
+            strncpy(resolved_path, tmp, 255);
+            resolved_path[255] = '\0';
+        }
+    }
+
+    if (vfs_read_entire(resolved_path, &elf_data, &elf_size) != 0) {
         extern int get_module_data(const char* name, u8** buf, u32* size);
-
-        const char* mod_name = strrchr(path_buf, '/');
+        const char* mod_name = strrchr(resolved_path, '/');
         if (mod_name) mod_name++;
-        else mod_name = path_buf;
+        else mod_name = resolved_path;
 
         if (get_module_data(mod_name, &elf_data, &elf_size) != 0) {
+            kfree(argv_buf);
             return -1;
         }
     }
@@ -493,25 +524,29 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     u64* new_pml4 = create_address_space();
     if (!new_pml4) {
         kfree(elf_data);
+        kfree(argv_buf);
         return -1;
     }
 
     u64 max_vaddr = 0;
     u64 entry = elf_load(elf_data, elf_size, new_pml4, &max_vaddr);
+    print("SYS_EXEC: path="); print(path_buf); print(" entry="); printhex(entry); print("\n");
+
     if (entry == 0) {
         free_address_space(new_pml4);
         kfree(elf_data);
+        kfree(argv_buf);
         return -1;
     }
 
     u64 user_stack_top = 0x0000004000000000ULL;
     u64 stack_pages = 64;
-
     for (u64 i = 0; i < stack_pages; i++) {
         u64 phys = (u64)pmm_alloc_page();
         if (!phys) {
             free_address_space(new_pml4);
             kfree(elf_data);
+            kfree(argv_buf);
             return -1;
         }
 
@@ -520,11 +555,10 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
             pmm_free_page((void*)phys);
             free_address_space(new_pml4);
             kfree(elf_data);
+            kfree(argv_buf);
             return -1;
         }
     }
-
-    __asm__ volatile ("cli");
 
     u64 old_cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
@@ -534,7 +568,6 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     rsp &= ~0xFULL;
 
     u64 argv_ptrs[64];
-
     for (int i = 0; i < argc; i++) {
         u64 len = strlen(argv_buf[i]) + 1;
         rsp -= len;
@@ -544,41 +577,42 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     }
 
     u8 random_bytes[16] = {
-        0x12, 0x34, 0x56, 0x78,
-        0x9A, 0xBC, 0xDE, 0xF0,
-        0x11, 0x22, 0x33, 0x44,
-        0x55, 0x66, 0x77, 0x88
+        0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0,
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
     };
 
     rsp -= 16;
+    rsp &= ~0xFULL;
     memcpy((void*)rsp, random_bytes, 16);
     u64 at_random_ptr = rsp;
 
-    u64 auxv[] = {
-        6, 4096,
-        25, at_random_ptr,
-        9, entry,
-        0, 0
-    };
+    u64 auxv[8];
+    auxv[0] = 6;
+    auxv[1] = 4096;
+    auxv[2] = 25;
+    auxv[3] = at_random_ptr;
+    auxv[4] = 9;
+    auxv[5] = entry;
+    auxv[6] = 0;
+    auxv[7] = 0;
 
-    rsp -= sizeof(auxv);
-    memcpy((void*)rsp, auxv, sizeof(auxv));
-
-    rsp -= 8;
-    *(u64*)rsp = 0;
-    u64 envp_base = rsp;
-
-    rsp -= (u64)(argc + 1) * 8;
+    u64 args_area = ((u64)argc + 3) * 8 + sizeof(auxv);
+    rsp -= args_area;
     rsp &= ~0xFULL;
 
-    for (int i = 0; i < argc; i++) {
-        *(u64*)(rsp + 8 + (u64)i * 8) = argv_ptrs[i];
-    }
-
-    *(u64*)(rsp + 8 + (u64)argc * 8) = 0;
+    *(u64*)rsp = (u64)argc;
 
     u64 argv_base = rsp + 8;
-    *(u64*)rsp = (u64)argc;
+    for (int i = 0; i < argc; i++) {
+        *(u64*)(argv_base + (u64)i * 8) = argv_ptrs[i];
+    }
+    *(u64*)(argv_base + (u64)argc * 8) = 0;
+
+    u64 envp_base = argv_base + ((u64)argc + 1) * 8;
+    *(u64*)envp_base = 0;
+
+    u64 auxv_base = envp_base + 8;
+    memcpy((void*)auxv_base, auxv, sizeof(auxv));
 
     p->cr3 = (u64)new_pml4;
     p->user_rip = entry;
@@ -587,19 +621,15 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     p->heap_end = p->heap_start;
 
     frame->rax = 0;
-    frame->rbx = 0;
     frame->rcx = entry;
     frame->r11 = 0x202;
     frame->user_rsp = rsp;
-
     frame->rdi = argc;
     frame->rsi = argv_base;
     frame->rdx = envp_base;
-
     frame->r10 = 0;
     frame->r8 = 0;
     frame->r9 = 0;
-
     frame->rbp = 0;
     frame->r12 = 0;
     frame->r13 = 0;
@@ -614,7 +644,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     }
 
     kfree(elf_data);
-
+    kfree(argv_buf);
     return 0;
 }
 
@@ -631,37 +661,32 @@ static long sys_kill(trap_frame_t* frame, long pid, long sig, long a3, long a4, 
 static long sys_lseek(trap_frame_t* frame, long fd, long offset, long whence, long a4, long a5, long a6) {
     (void)frame; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
-    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
-    if (p->fds[fd].type != 0) return -1;
-
-    file_data_t* f = &p->fds[fd].data.file;
-
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used || p->fds[fd].type != 0) return -1;
+    vfs_node_t* node = p->fds[fd].data.vnode;
+    if (!node) return -1;
     switch (whence) {
-        case 0: f->pos = offset; break;
-        case 1: f->pos += offset; break;
-        case 2: f->pos = f->buf_size + offset; break;
+        case 0: p->fds[fd].pos = offset; break;
+        case 1: p->fds[fd].pos += offset; break;
+        case 2: p->fds[fd].pos = node->size + offset; break;
         default: return -1;
     }
-
-    if ((long)f->pos < 0) f->pos = 0;
-    return f->pos;
+    return p->fds[fd].pos;
 }
 
 static long sys_stat(trap_frame_t* frame, long path, long statbuf, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path) || !is_user_pointer((void*)statbuf)) return -1;
-
     char path_buf[256];
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
-
-    if (!ufs_exists(path_buf)) return -1;
-
+    vfs_node_t* node = vfs_resolve_path(path_buf);
+    if (!node) return -1;
     sys_stat_t st;
-    st.size = ufs_file_size(path_buf);
-    st.is_dir = ufs_isdir(path_buf) ? 1 : 0;
+    u64 size; u32 mode; u8 is_dir;
+    vfs_stat(node, &size, &mode, &is_dir);
+    st.size = (u32)size;
+    st.is_dir = is_dir;
     st.blocks = (st.size + 511) / 512;
-
     if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;
     return 0;
 }
@@ -673,11 +698,13 @@ static long sys_fstat(trap_frame_t* frame, long fd, long statbuf, long a3, long 
     if (!is_user_pointer((void*)statbuf)) return -1;
 
     sys_stat_t st;
-
     if (p->fds[fd].type == 0) {
-        file_data_t* f = &p->fds[fd].data.file;
-        st.size = f->buf_size;
-        st.is_dir = ufs_isdir(f->path) ? 1 : 0;
+        vfs_node_t* node = p->fds[fd].data.vnode;
+        if (!node) return -1;
+        u64 size; u32 mode; u8 is_dir;
+        vfs_stat(node, &size, &mode, &is_dir);
+        st.size = (u32)size;
+        st.is_dir = is_dir;
         st.blocks = (st.size + 511) / 512;
     } else {
         st.size = 0;
@@ -690,50 +717,40 @@ static long sys_fstat(trap_frame_t* frame, long fd, long statbuf, long a3, long 
 }
 
 static long sys_mkdir(trap_frame_t* frame, long path, long mode, long a3, long a4, long a5, long a6) {
-    (void)frame; (void)mode; (void)a3; (void)a4; (void)a5; (void)a6;
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path)) return -1;
-
     char path_buf[256];
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
-
-    return ufs_mkdir(path_buf);
+    return vfs_mkdir(path_buf, (u32)mode);
 }
 
 static long sys_rmdir(trap_frame_t* frame, long path, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path)) return -1;
-
     char path_buf[256];
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
-
-    return ufs_rmdir(path_buf);
+    return vfs_rmdir(path_buf);
 }
 
 static long sys_unlink(trap_frame_t* frame, long path, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     char path_buf[256];
-    if (is_user_pointer((void*)path)) {
-        if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-        path_buf[255] = '\0';
-    } else {
-        strncpy(path_buf, (const char*)path, 255);
-        path_buf[255] = '\0';
-    }
-
-    return ufs_delete(path_buf);
+    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
+    path_buf[255] = '\0';
+    return vfs_unlink(path_buf);
 }
 
 static long sys_rename(trap_frame_t* frame, long old, long new, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)old) || !is_user_pointer((void*)new)) return -1;
-
     char old_buf[256], new_buf[256];
     if (copy_from_user(old_buf, (void*)old, 255) != 0) return -1;
     if (copy_from_user(new_buf, (void*)new, 255) != 0) return -1;
-
-    return ufs_mv(old_buf, new_buf);
+    old_buf[255] = '\0';
+    new_buf[255] = '\0';
+    return vfs_rename(old_buf, new_buf);
 }
 
 static long sys_chdir(trap_frame_t* frame, long path, long a2, long a3, long a4, long a5, long a6) {
@@ -744,7 +761,7 @@ static long sys_chdir(trap_frame_t* frame, long path, long a2, long a3, long a4,
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
-    if (!ufs_isdir(path_buf)) return -1;
+    if (!vfs_isdir(path_buf)) return -1;
 
     void fs_set_current_dir(const char*);
     fs_set_current_dir(path_buf);
@@ -769,36 +786,38 @@ static long sys_getcwd(trap_frame_t* frame, long buf, long size, long a3, long a
 static long sys_readdir(trap_frame_t* frame, long path, long entries, long count, long a4, long a5, long a6) {
     (void)frame; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path) || !is_user_pointer((void*)entries)) return -1;
-
     char path_buf[256];
     if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
     path_buf[255] = '\0';
 
-    FSNode* kernel_entries;
-    u32 kernel_count;
+    vfs_node_t* dir = vfs_resolve_path(path_buf);
+    if (!dir) return -1;
 
-    if (ufs_readdir(path_buf, &kernel_entries, &kernel_count) != 0) return -1;
+    vfs_dirent_t* kernel_entries = kmalloc(count * sizeof(vfs_dirent_t));
+    if (!kernel_entries) return -1;
 
-    u32 to_copy = kernel_count;
-    if (count && to_copy > (u32)count) to_copy = count;
+    u32 kernel_count = (u32)count;
+    if (vfs_readdir(dir, kernel_entries, &kernel_count) != 0) {
+        kfree(kernel_entries);
+        return -1;
+    }
 
-    for (u32 i = 0; i < to_copy; i++) {
-        FSNode user_entry;
-        memset(&user_entry, 0, sizeof(FSNode));
-        strcpy(user_entry.name, kernel_entries[i].name);
-        user_entry.size = kernel_entries[i].size;
-        user_entry.is_dir = kernel_entries[i].is_dir;
-        user_entry.mode = kernel_entries[i].mode;
-        user_entry.mtime = kernel_entries[i].mtime;
+    for (u32 i = 0; i < kernel_count; i++) {
+        vfs_user_dirent_t user_entry;
+        memset(&user_entry, 0, sizeof(user_entry));
+        strncpy(user_entry.name, kernel_entries[i].name, VFS_MAX_NAME - 1);
+        user_entry.name[VFS_MAX_NAME - 1] = '\0';
+        user_entry.size = (u32)kernel_entries[i].size;
+        user_entry.is_dir = (kernel_entries[i].type == VFS_DIR) ? 1 : 0;
 
-        if (copy_to_user((void*)((char*)entries + i * sizeof(FSNode)), &user_entry, sizeof(FSNode)) != 0) {
+        if (copy_to_user((void*)((char*)entries + i * sizeof(vfs_user_dirent_t)), &user_entry, sizeof(vfs_user_dirent_t)) != 0) {
             kfree(kernel_entries);
             return -1;
         }
     }
 
     kfree(kernel_entries);
-    return to_copy;
+    return kernel_count;
 }
 
 static long sys_disk_list(trap_frame_t* frame, long disks_ptr, long max, long a3, long a4, long a5, long a6) {
@@ -824,19 +843,14 @@ static long sys_partition_mount(trap_frame_t* frame, long dev, long point, long 
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)dev) || !is_user_pointer((void*)point)) return -1;
 
-    char dev_buf[32];
-    char point_buf[256];
+    char dev_buf[32], point_buf[256];
     if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
     if (copy_from_user(point_buf, (void*)point, 255) != 0) return -1;
     dev_buf[31] = '\0';
     point_buf[255] = '\0';
 
-    partition_t* p = udisk_get_partition(dev_buf);
-    if (!p) return -1;
-
-    if (ufs_ismounted()) return -1;
-
-    if (ufs_mount_with_point(p->start_lba, p->disk_num, point_buf) != 0) return -1;
+    if (vfs_is_mounted(point_buf)) return -1;
+    if (vfs_mount_fs("ufs", dev_buf, point_buf) != 0) return -1;
 
     void fs_set_current_dir(const char*);
     fs_set_current_dir(point_buf);
@@ -845,7 +859,7 @@ static long sys_partition_mount(trap_frame_t* frame, long dev, long point, long 
 
 static long sys_partition_umount(trap_frame_t* frame, long a1, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a1; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-    return ufs_umount();
+    return vfs_unmount("/");
 }
 
 static long sys_socket(trap_frame_t* frame, long domain, long type, long protocol, long a4, long a5, long a6) {
@@ -1110,6 +1124,41 @@ static long sys_accept(trap_frame_t* frame, long fd, long addr, long addrlen, lo
     return unix_accept(fd);
 }
 
+static long sys_symlink(trap_frame_t* frame, long target, long linkpath, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+    char t_buf[256], l_buf[256];
+    if (copy_from_user(t_buf, (void*)target, 255) != 0) return -1;
+    if (copy_from_user(l_buf, (void*)linkpath, 255) != 0) return -1;
+    t_buf[255] = '\0'; l_buf[255] = '\0';
+    return vfs_symlink(t_buf, l_buf);
+}
+
+static long sys_readlink(trap_frame_t* frame, long path, long buf, long size, long a4, long a5, long a6) {
+    (void)frame; (void)a4; (void)a5; (void)a6;
+    char p_buf[256], k_buf[256];
+    if (copy_from_user(p_buf, (void*)path, 255) != 0) return -1;
+    p_buf[255] = '\0';
+    int res = vfs_readlink(p_buf, k_buf, 256);
+    if (res < 0) return -1;
+    if (copy_to_user((void*)buf, k_buf, res + 1) != 0) return -1;
+    return res;
+}
+
+static long sys_fs_register(trap_frame_t* frame, long name, long a2, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)name)) return -1;
+    char name_buf[32];
+    if (copy_from_user(name_buf, (void*)name, 31) != 0) return -1;
+    name_buf[31] = '\0';
+
+    if (strcmp(name_buf, "ufs") == 0) {
+        extern int ufs_register(void);
+        return ufs_register();
+    }
+
+    return -1;
+}
+
 int syscall_init(void) {
     for (int i = 0; i < 64; i++) syscall_table[i] = NULL;
 
@@ -1161,14 +1210,17 @@ int syscall_init(void) {
     syscall_table[52] = sys_gettime;
     syscall_table[53] = sys_clear;
     syscall_table[54] = sys_setcolor;
+    syscall_table[55] = sys_symlink;
+    syscall_table[56] = sys_readlink;
     syscall_table[57] = sys_fork;
+    syscall_table[58] = sys_fs_register;
 
     wrmsr(MSR_LSTAR, (u64)syscall_entry);
 
-    u64 star = ((u64)0x1B << 48) | ((u64)0x08 << 32);
+    u64 star = ((u64)0x18 << 48) | ((u64)0x08 << 32);
     wrmsr(MSR_STAR, star);
-
-    wrmsr(MSR_SFMASK, 0x600);
+    wrmsr(MSR_SFMASK, 0x200);
+    wrmsr(0xC0000102, 0);
 
     u64 efer;
     __asm__ volatile("rdmsr" : "=a"(((u32*)&efer)[0]), "=d"(((u32*)&efer)[1]) : "c"(0xC0000080));
@@ -1179,8 +1231,6 @@ int syscall_init(void) {
 }
 
 long syscall_handler_c(trap_frame_t* frame, long num) {
-    __asm__ volatile("sti");
-
     long a1 = frame->rdi;
     long a2 = frame->rsi;
     long a3 = frame->rdx;
