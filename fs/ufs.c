@@ -4,6 +4,7 @@
 #include "../include/string.h"
 #include "../include/udisk.h"
 #include "../include/udisk.h"
+#include "../drivers/drm.h"
 #include "ufs.h"
 
 extern u32 system_ticks;
@@ -53,27 +54,22 @@ typedef struct {
     int mounted;
     u32 part_start;
     int current_disk;
+    vfs_node_t* dev_node;
     u8 blk_buf[UFS_BLOCK_SIZE] __attribute__((aligned(16)));
 } ufs_mount_t;
 
 static vfs_fs_ops_t ufs_ops;
 
 static int ufs_read_block(ufs_mount_t* mnt, u32 b, u8* buf) {
-    disk_set_disk(mnt->current_disk);
-    u32 lba = mnt->part_start + b * 8;
-    for (int i = 0; i < 8; i++) {
-        if (disk_read(lba + i, buf + i * 512) != 0) return -1;
-    }
-    return 0;
+    u64 offset = (u64)b * UFS_BLOCK_SIZE;
+    int res = vfs_read(mnt->dev_node, buf, UFS_BLOCK_SIZE, offset);
+    return (res == UFS_BLOCK_SIZE) ? 0 : -1;
 }
 
 static int ufs_write_block(ufs_mount_t* mnt, u32 b, u8* buf) {
-    disk_set_disk(mnt->current_disk);
-    u32 lba = mnt->part_start + b * 8;
-    for (int i = 0; i < 8; i++) {
-        if (disk_write(lba + i, buf + i * 512) != 0) return -1;
-    }
-    return 0;
+    u64 offset = (u64)b * UFS_BLOCK_SIZE;
+    int res = vfs_write(mnt->dev_node, buf, UFS_BLOCK_SIZE, offset);
+    return (res == UFS_BLOCK_SIZE) ? 0 : -1;
 }
 
 static int ufs_read_inode(ufs_mount_t* mnt, u32 ino, ufs_inode_t* out) {
@@ -230,6 +226,7 @@ static int ufs_add_to_dir(ufs_mount_t* mnt, u32 dir_ino, u32 ino, const char* na
             if (ents[j].inode == 0) {
                 ents[j].inode = ino;
                 ents[j].type = type;
+                print("[add_to_dir] name="); print(name); print("\n");
                 strncpy(ents[j].name, name, 55);
                 ents[j].name[55] = '\0';
                 ents[j].name_len = strlen(ents[j].name);
@@ -299,6 +296,7 @@ static int ufs_vfs_lookup(vfs_node_t* dir, const char* name, vfs_node_t** out) {
     node->private = mnt;
     node->fs_data = (void*)(u64)ino;
     node->fs = &ufs_ops;
+    node->parent = dir;
 
     *out = node;
     return 0;
@@ -472,14 +470,26 @@ static int ufs_vfs_readdir(vfs_node_t* dir, vfs_dirent_t* entries, u32* count) {
     u32 n = 0;
     u32 max = *count;
 
+    print("[readdir] dir_ino="); printnum(dir_ino);
+    print(" size="); printnum(inode.size);
+    print(" blocks="); printnum(blocks); print("\n");
+
     for (u32 i = 0; i < blocks && n < max; i++) {
         u32 b = ufs_get_block(&inode, i);
         if (!b) continue;
         if (ufs_read_block(mnt, b, mnt->blk_buf) != 0) continue;
 
         ufs_dirent_t* ents = (ufs_dirent_t*)mnt->blk_buf;
-        for (int j = 0; j < UFS_BLOCK_SIZE / sizeof(ufs_dirent_t) && n < max; j++) {
-            if (ents[j].inode != 0) {
+        u32 entries_in_block = UFS_BLOCK_SIZE / sizeof(ufs_dirent_t);
+
+        if (i == blocks - 1) {
+            u32 remaining_size = inode.size - i * UFS_BLOCK_SIZE;
+            entries_in_block = remaining_size / sizeof(ufs_dirent_t);
+        }
+
+        for (u32 j = 0; j < entries_in_block && n < max; j++) {
+            if (ents[j].inode != 0 && ents[j].name_len > 0) {
+                print("[readdir] entry: "); print(ents[j].name); print("\n");
                 strncpy(entries[n].name, ents[j].name, VFS_MAX_NAME - 1);
                 entries[n].name[VFS_MAX_NAME - 1] = '\0';
 
@@ -516,20 +526,16 @@ static int ufs_vfs_stat(vfs_node_t* node, u64* size, u32* mode, u8* is_dir) {
 }
 
 static int ufs_vfs_mount(vfs_node_t** root, const char* dev) {
-    int disk = 0, part = 0;
-    if (parse_devname(dev, &disk, &part) != 0) return -1;
-
-    partition_t* p = udisk_get_partition(dev);
-    if (!p) return -1;
+    vfs_node_t* dev_node = vfs_resolve_path(dev);
+    if (!dev_node || dev_node->type != VFS_BLOCK_DEVICE) return -1;
 
     ufs_mount_t* mnt = kmalloc(sizeof(ufs_mount_t));
     if (!mnt) return -1;
 
     memset(mnt, 0, sizeof(ufs_mount_t));
-    mnt->part_start = p->start_lba;
-    mnt->current_disk = p->disk_num;
+    mnt->dev_node = dev_node;
 
-    if (ufs_read_block(mnt, 0, mnt->blk_buf) != 0) {
+    if (vfs_read(dev_node, mnt->blk_buf, UFS_BLOCK_SIZE, 0) != UFS_BLOCK_SIZE) {
         kfree(mnt);
         return -1;
     }
@@ -566,22 +572,78 @@ static int ufs_vfs_unmount(vfs_node_t* root) {
 }
 
 static int ufs_vfs_format(const char* dev) {
-    int disk = 0;
-    int part = 0;
+    vfs_node_t* dev_node = vfs_resolve_path(dev);
+    if (!dev_node || dev_node->type != VFS_BLOCK_DEVICE) return -1;
 
-    if (parse_devname(dev, &disk, &part) != 0 || part == 0) return -1;
+    u64 size = dev_node->size;
+    u32 total_blocks = (u32)(size / UFS_BLOCK_SIZE);
 
-    partition_t* p = udisk_get_partition(dev);
-    if (!p) return -1;
+    if (total_blocks < 10) return -1;
 
-    u64 sector_count = p->end_lba - p->start_lba + 1;
-    if (sector_count < 8) return -1;
-    if (sector_count % 8 != 0) {
-        sector_count = (sector_count / 8) * 8;
+    ufs_mount_t mnt;
+    memset(&mnt, 0, sizeof(mnt));
+    mnt.dev_node = dev_node;
+
+    u32 bitmap_blocks = (total_blocks + 32767) / 32768;
+    u32 inode_count = 1024;
+    u32 inodes_per_block = UFS_BLOCK_SIZE / sizeof(ufs_inode_t);
+    u32 inode_blocks = (inode_count + inodes_per_block - 1) / inodes_per_block;
+
+    mnt.sb.magic = UFS_MAGIC;
+    mnt.sb.version = UFS_VERSION;
+    mnt.sb.total_blocks = total_blocks;
+    mnt.sb.inode_count = inode_count;
+    mnt.sb.bitmap_start = 1;
+    mnt.sb.inode_table_start = mnt.sb.bitmap_start + bitmap_blocks;
+    mnt.sb.data_start = mnt.sb.inode_table_start + inode_blocks;
+    mnt.sb.root_inode = 1;
+    mnt.sb.free_blocks = total_blocks - mnt.sb.data_start;
+    mnt.sb.free_inodes = inode_count;
+
+    memset(mnt.blk_buf, 0, UFS_BLOCK_SIZE);
+    for (u32 i = 0; i < mnt.sb.data_start; i++) {
+        ufs_write_block(&mnt, i, mnt.blk_buf);
     }
 
-    u32 blocks = (u32)(sector_count / 8);
-    return ufs_format((u32)p->start_lba, blocks, p->disk_num);
+    for (u32 i = 0; i < mnt.sb.data_start; i++) ufs_bitmap_set(&mnt, i, 1);
+
+    u32 root_block = ufs_alloc_block(&mnt);
+    if (!root_block) return -1;
+
+    ufs_inode_t root = {0};
+    root.mode = UFS_INODE_DIR | 0755;
+    root.nlink = 2;
+    root.atime = root.mtime = root.ctime = system_ticks;
+    root.size = 2 * sizeof(ufs_dirent_t);
+    root.blocks = (root.size + 511) / 512;
+    root.extents[0].start = root_block;
+    root.extents[0].len = 1;
+    ufs_write_inode(&mnt, 1, &root);
+
+    memset(mnt.blk_buf, 0, UFS_BLOCK_SIZE);
+    ufs_dirent_t* root_ents = (ufs_dirent_t*)mnt.blk_buf;
+    root_ents[0].inode = 1;
+    root_ents[0].type = 2;
+    root_ents[0].name_len = 1;
+    root_ents[0].name[0] = '.';
+    root_ents[0].name[1] = '\0';
+
+    root_ents[1].inode = 1;
+    root_ents[1].type = 2;
+    root_ents[1].name_len = 2;
+    root_ents[1].name[0] = '.';
+    root_ents[1].name[1] = '.';
+    root_ents[1].name[2] = '\0';
+
+    if (ufs_write_block(&mnt, root_block, mnt.blk_buf) != 0) return -1;
+
+    mnt.sb.free_inodes = inode_count - 1;
+
+    memset(mnt.blk_buf, 0, UFS_BLOCK_SIZE);
+    memcpy(mnt.blk_buf, &mnt.sb, sizeof(mnt.sb));
+    ufs_write_block(&mnt, 0, mnt.blk_buf);
+
+    return 0;
 }
 
 static vfs_fs_ops_t ufs_ops = {

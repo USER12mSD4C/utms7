@@ -1,7 +1,6 @@
 # UTMS7
 
-Author: UTMS Innovative Technologies
-This documentation uses Simplified Technical English (ASD-STE100).
+under UOPL 1.6.4
 
 ## 1. Overview
 

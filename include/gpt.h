@@ -2,8 +2,11 @@
 #define GPT_H
 
 #include "../include/types.h"
+#include "../kernel/vfs.h"
 
-// GPT Header
+#define GPT_HEADER_SIGNATURE 0x5452415020494645ULL
+#define GPT_PARTITION_SIGNATURE 0x0000000000000000ULL
+
 typedef struct {
     u64 signature;
     u32 revision;
@@ -19,30 +22,25 @@ typedef struct {
     u32 num_partition_entries;
     u32 partition_entry_size;
     u32 partition_entries_crc32;
+    u8 padding[420];
 } __attribute__((packed)) gpt_header_t;
 
-// GPT Partition Entry
 typedef struct {
-    u8 partition_guid[16];
-    u8 unique_guid[16];
-    u64 first_lba;
-    u64 last_lba;
+    u8 partition_type_guid[16];
+    u8 unique_partition_guid[16];
+    u64 starting_lba;
+    u64 ending_lba;
     u64 attributes;
-    u16 name[36];
+    u16 partition_name[36];
 } __attribute__((packed)) gpt_entry_t;
 
-// Прототипы функций
-int gpt_init(void);
-int gpt_detect(u8 drive);
-int gpt_create_table(u8 drive);
-int gpt_add_partition(u8 drive, u64 start, u64 size, const u8* guid);
-int gpt_read_partitions(u8 drive);
-int gpt_get_entry(int index, gpt_entry_t* entry);
+int gpt_parse(vfs_node_t* dev_node, int disk_num);
+int gpt_create_table(vfs_node_t* dev_node);
+int gpt_add_partition(vfs_node_t* dev_node, u64 start_lba, u64 size_sectors, const u8* type_guid);
 
-// Вспомогательные функции для получения GUID
-const u8* gpt_get_empty_guid(void);
 const u8* gpt_get_ufs_guid(void);
 const u8* gpt_get_efi_guid(void);
 const u8* gpt_get_linux_guid(void);
+const u8* gpt_get_empty_guid(void);
 
 #endif

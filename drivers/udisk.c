@@ -39,6 +39,32 @@ int parse_devname(const char* devname, int* disk, int* part) {
     return 0;
 }
 
+int udisk_add_partition(int disk_num, int part_num, u64 start_lba, u64 end_lba, int type) {
+    if (disk_num < 0 || disk_num > 3) return -1;
+    if (part_num < 1 || part_num > UDISK_MAX_PARTITIONS) return -1;
+
+    disk_info_t* d = &disks[disk_num];
+    if (!d || !d->present) return -1;
+
+    int idx = part_num - 1;
+    partition_t* p = &d->partitions[idx];
+
+    p->present = 1;
+    p->disk_num = disk_num;
+    p->partition_num = part_num;
+    p->start_lba = start_lba;
+    p->end_lba = end_lba;
+    p->size = (end_lba - start_lba + 1) * 512;
+    p->type = type;
+    snprintf(p->name, UDISK_NAME_LEN, "Partition %d", part_num);
+
+    if (d->partition_count < part_num) {
+        d->partition_count = part_num;
+    }
+
+    return 0;
+}
+
 static void read_mbr_partitions(int disk_num, disk_info_t* d) {
     u8 drive = 0x80 + disk_num;
     int count = mbr_read_partitions(drive);
@@ -71,9 +97,9 @@ static void read_mbr_partitions(int disk_num, disk_info_t* d) {
 }
 
 static void read_gpt_partitions(int disk_num, disk_info_t* d) {
-    u8 drive = 0x80 + disk_num;
-    u8 header_buf[512];
+    u8 header_buf[512] __attribute__((aligned(16)));
 
+    disk_set_disk(disk_num);
     if (disk_read(0, header_buf) != 0) return;
     if (header_buf[510] != 0x55 || header_buf[511] != 0xAA) return;
 
@@ -84,10 +110,9 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
             break;
         }
     }
-
     if (!gpt_protective) return;
 
-    u8 gpt_buf[512];
+    u8 gpt_buf[512] __attribute__((aligned(16)));
     if (disk_read(1, gpt_buf) != 0) return;
 
     typedef struct {
@@ -118,8 +143,8 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
     u32 sectors_needed = (h.num_partition_entries + entries_per_sector - 1) / entries_per_sector;
 
     for (u32 s = 0; s < sectors_needed && d->partition_count < UDISK_MAX_PARTITIONS; s++) {
-        u8 sec[512];
-        if (disk_read(h.partition_entry_lba + s, sec) != 0) return;
+        u8 sec[512] __attribute__((aligned(16)));
+        if (disk_read((u32)(h.partition_entry_lba + s), sec) != 0) return;
 
         for (u32 j = 0; j < entries_per_sector && d->partition_count < UDISK_MAX_PARTITIONS; j++) {
             u8* entry = sec + j * h.partition_entry_size;
@@ -131,7 +156,6 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
                     break;
                 }
             }
-
             if (all_zero) continue;
 
             partition_t* p = &d->partitions[d->partition_count];
@@ -158,8 +182,6 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
             d->partition_count++;
         }
     }
-
-    (void)drive;
 }
 
 static void scan_disk(int disk_num) {
@@ -245,7 +267,13 @@ int udisk_create_mbr(int disk) {
 }
 
 int udisk_create_gpt(int disk) {
-    if (gpt_create_table(0x80 + disk) != 0) return -1;
+    char dev_path[16];
+    snprintf(dev_path, sizeof(dev_path), "/dev/sd%c", 'a' + disk);
+
+    vfs_node_t* dev_node = vfs_resolve_path(dev_path);
+    if (!dev_node || dev_node->type != VFS_BLOCK_DEVICE) return -1;
+
+    if (gpt_create_table(dev_node) != 0) return -1;
 
     scanned = 0;
     udisk_scan();
@@ -287,6 +315,12 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
         return -1;
     }
 
+    char dev_path[16];
+    snprintf(dev_path, sizeof(dev_path), "/dev/sd%c", 'a' + disk);
+
+    vfs_node_t* dev_node = vfs_resolve_path(dev_path);
+    if (!dev_node || dev_node->type != VFS_BLOCK_DEVICE) return -1;
+
     int res;
 
     if (d->is_gpt) {
@@ -296,7 +330,7 @@ int udisk_create_partition(const char* devname, u64 size_mb, partition_type_t ty
         else if (type == PARTITION_FAT32) guid = gpt_get_efi_guid();
         else guid = gpt_get_linux_guid();
 
-        res = gpt_add_partition(0x80 + disk, start_lba, size_sectors, guid);
+        res = gpt_add_partition(dev_node, start_lba, size_sectors, guid);
     } else {
         u8 mbr_type;
 
@@ -324,7 +358,13 @@ int udisk_delete_partition(const char* devname) {
     if (!d || !d->present) return -1;
 
     if (d->is_gpt) {
-        if (gpt_add_partition(0x80 + disk, 0, 0, gpt_get_empty_guid()) != 0) return -1;
+        char dev_path[16];
+        snprintf(dev_path, sizeof(dev_path), "/dev/sd%c", 'a' + disk);
+
+        vfs_node_t* dev_node = vfs_resolve_path(dev_path);
+        if (!dev_node || dev_node->type != VFS_BLOCK_DEVICE) return -1;
+
+        if (gpt_add_partition(dev_node, 0, 0, gpt_get_empty_guid()) != 0) return -1;
     } else {
         u8 sector[512];
         disk_set_disk(disk);
@@ -363,7 +403,13 @@ int udisk_set_type(const char* devname, partition_type_t type) {
         else if (type == PARTITION_FAT32) guid = gpt_get_efi_guid();
         else guid = gpt_get_linux_guid();
 
-        if (gpt_add_partition(0x80 + disk, p->start_lba, p->end_lba - p->start_lba + 1, guid) != 0) {
+        char dev_path[16];
+        snprintf(dev_path, sizeof(dev_path), "/dev/sd%c", 'a' + disk);
+
+        vfs_node_t* dev_node = vfs_resolve_path(dev_path);
+        if (!dev_node || dev_node->type != VFS_BLOCK_DEVICE) return -1;
+
+        if (gpt_add_partition(dev_node, p->start_lba, p->end_lba - p->start_lba + 1, guid) != 0) {
             return -1;
         }
     } else {

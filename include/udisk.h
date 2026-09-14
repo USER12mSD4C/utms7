@@ -47,5 +47,6 @@ int udisk_delete_partition(const char* devname);
 int udisk_set_type(const char* devname, partition_type_t type);
 int udisk_format_partition(const char* devname, const char* fstype);
 int parse_devname(const char* devname, int* disk, int* part);
+int udisk_add_partition(int disk_num, int part_num, u64 start_lba, u64 end_lba, int type);
 
 #endif

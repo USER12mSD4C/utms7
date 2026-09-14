@@ -84,7 +84,7 @@ CC_OBJS = apps/cc/main.o apps/cc/lexer.o apps/cc/parser.o apps/cc/ast.o apps/cc/
 
 CORE = kernel/kernel.o kernel/kmod.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o kernel/unix.o kernel/vfs.o
 ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/gdt_flush.o
-DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o
+DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o drivers/devfs.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
 LIBC = lib/string.o lib/ctype.o lib/stdlib.o lib/stdio.o lib/errno.o lib/libc.o
 UCRT = lib/crt0.o $(LIBC)
@@ -104,6 +104,34 @@ eoc
 
 sfsh.bin: apps/sfsh.o $(UCRT)
 	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o sfsh.bin $(UCRT) apps/sfsh.o
+eoc
+
+ls.bin: apps/ls.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o ls.bin $(UCRT) apps/ls.o
+eoc
+
+mkdir.bin: apps/mkdir.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkdir.bin $(UCRT) apps/mkdir.o
+eoc
+
+touch.bin: apps/touch.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o touch.bin $(UCRT) apps/touch.o
+eoc
+
+rm.bin: apps/rm.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o rm.bin $(UCRT) apps/rm.o
+eoc
+
+cat.bin: apps/cat.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o cat.bin $(UCRT) apps/cat.o
+eoc
+
+cp.bin: apps/cp.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o cp.bin $(UCRT) apps/cp.o
+eoc
+
+mk.bin: apps/mk.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mk.bin $(UCRT) apps/mk.o
 eoc
 
 udisk.bin: apps/udisk.o $(UCRT)
@@ -149,7 +177,7 @@ kom:
 	echo " MODULES BUILT "
 eoc
 
-iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin kom
+iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin kom
 	echo " CREATING ISO "
 	rm -rf iso
 	mkdir -p iso/boot/grub iso/modules
@@ -163,8 +191,15 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	cp umount.bin iso/modules/umount.bin
 	cp mkfs.bin iso/modules/mkfs.bin
 	cp mkfs.ufs.bin iso/modules/mkfs.ufs.bin
-    cp mkfs.fat.bin iso/modules/mkfs.fat.bin
-    cp mkfs.ext4.bin iso/modules/mkfs.ext4.bin
+	cp mkfs.fat.bin iso/modules/mkfs.fat.bin
+	cp mkfs.ext4.bin iso/modules/mkfs.ext4.bin
+	cp ls.bin iso/modules/ls.bin
+	cp mkdir.bin iso/modules/mkdir.bin
+	cp touch.bin iso/modules/touch.bin
+	cp rm.bin iso/modules/rm.bin
+	cp cat.bin iso/modules/cat.bin
+	cp cp.bin iso/modules/cp.bin
+	cp mk.bin iso/modules/mk.bin
 	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
 	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
 	sh -c 'echo "set default=0" >> iso/boot/grub/grub.cfg'
@@ -179,8 +214,15 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	sh -c 'echo "    module2 /modules/umount.bin umount" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/mkfs.bin mkfs" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/mkfs.ufs.bin mkfs.ufs" >> iso/boot/grub/grub.cfg'
-    sh -c 'echo "    module2 /modules/mkfs.fat.bin mkfs.fat" >> iso/boot/grub/grub.cfg'
-    sh -c 'echo "    module2 /modules/mkfs.ext4.bin mkfs.ext4" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/mkfs.fat.bin mkfs.fat" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/mkfs.ext4.bin mkfs.ext4" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/ls.bin ls" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/mkdir.bin mkdir" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/touch.bin touch" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/rm.bin rm" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/cat.bin cat" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/cp.bin cp" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/mk.bin mk" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "}" >> iso/boot/grub/grub.cfg'
 	grub-mkrescue -o utms.iso iso/
@@ -202,8 +244,15 @@ build:
 	call umount.bin
 	call mkfs.bin
 	call mkfs.ufs.bin
-    call mkfs.fat.bin
-    call mkfs.ext4.bin
+	call mkfs.fat.bin
+	call mkfs.ext4.bin
+	call ls.bin
+	call mkdir.bin
+	call touch.bin
+	call rm.bin
+	call cat.bin
+	call cp.bin
+	call mk.bin
 	call kom
 	echo " BUILD COMPLETE "
 	+flags:
@@ -259,11 +308,11 @@ eoc
 
 clean:
 	echo " CLEANING "
-	rm -rf apps/cc/*.o apps/cc/*.d lib/*.o lib/*.d fs/*.o fs/*.d kernel/*.o kernel/*.d drivers/*.o drivers/*.d adders/*.o adders/*.d apps/*.o apps/*.d *.bin *.iso iso/ modules/ tools/mkmod init.bin sh.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin
+	rm -rf apps/cc/*.o apps/cc/*.d lib/*.o lib/*.d fs/*.o fs/*.d kernel/*.o kernel/*.d drivers/*.o drivers/*.d adders/*.o adders/*.d apps/*.o apps/*.d *.bin *.iso iso/ modules/ tools/mkmod
 	+flags:
 		-fg(all):
 			echo "[ALL] Full clean with disks..."
-			rm -rf *.o */*.o *.bin *.iso iso/ disk*.img modules/ tools/mkmod init.bin sfsh.bin
+			rm -rf *.o */*.o *.bin *.iso iso/ disk*.img modules/ tools/mkmod
 		eofg
 	;
 eoc

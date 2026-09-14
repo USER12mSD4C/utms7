@@ -402,15 +402,6 @@ static int is_builtin(const char *name) {
     if (strcmp(name, "echo") == 0) return 1;
     if (strcmp(name, "pwd") == 0) return 1;
     if (strcmp(name, "cd") == 0) return 1;
-    if (strcmp(name, "ls") == 0) return 1;
-    if (strcmp(name, "cat") == 0) return 1;
-    if (strcmp(name, "mkdir") == 0) return 1;
-    if (strcmp(name, "touch") == 0) return 1;
-    if (strcmp(name, "rm") == 0) return 1;
-    if (strcmp(name, "ps") == 0) return 1;
-    if (strcmp(name, "mem") == 0) return 1;
-    if (strcmp(name, "uptime") == 0) return 1;
-    if (strcmp(name, "uname") == 0) return 1;
     return 0;
 }
 
@@ -421,15 +412,6 @@ static int run_builtin(int argc, char **argv) {
     if (strcmp(argv[0], "echo") == 0) return cmd_echo(argc, argv);
     if (strcmp(argv[0], "pwd") == 0) return cmd_pwd(argc, argv);
     if (strcmp(argv[0], "cd") == 0) return cmd_cd(argc, argv);
-    if (strcmp(argv[0], "ls") == 0) return cmd_ls(argc, argv);
-    if (strcmp(argv[0], "cat") == 0) return cmd_cat(argc, argv);
-    if (strcmp(argv[0], "mkdir") == 0) return cmd_mkdir(argc, argv);
-    if (strcmp(argv[0], "touch") == 0) return cmd_touch(argc, argv);
-    if (strcmp(argv[0], "rm") == 0) return cmd_rm(argc, argv);
-    if (strcmp(argv[0], "ps") == 0) return cmd_ps(argc, argv);
-    if (strcmp(argv[0], "mem") == 0) return cmd_mem(argc, argv);
-    if (strcmp(argv[0], "uptime") == 0) return cmd_uptime(argc, argv);
-    if (strcmp(argv[0], "uname") == 0) return cmd_uname(argc, argv);
     return -1;
 }
 

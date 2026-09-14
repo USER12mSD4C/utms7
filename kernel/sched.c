@@ -192,7 +192,7 @@ static void idle_loop(void) {
 }
 
 static void pit_handler(void) {
-    outb(0xE9, 'T'); // Маячок: pit_handler вызван
+    outb(0xE9, 'T');
     pit_ticks++;
     if (!sched_initialized) {
         return;
@@ -637,6 +637,12 @@ int sched_clone(u64 user_rip, u64 user_rsp) {
     frame->rsp = user_rsp;
     frame->ss = 0x23;
 
+    u64 guard_phys = (u64)pmm_alloc_page();
+    if (guard_phys) {
+        memset((void*)guard_phys, 0, 4096);
+        paging_map_for_process((u64*)child->cr3, guard_phys, 0x0000004000000000ULL, PAGE_PRESENT | PAGE_USER);
+    }
+
     enqueue_ready(child);
     process_count++;
 
@@ -709,6 +715,12 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
             __asm__ volatile ("sti");
             return -1;
         }
+    }
+
+    u64 guard_phys = (u64)pmm_alloc_page();
+    if (guard_phys) {
+        memset((void*)guard_phys, 0, 4096);
+        paging_map_for_process(pml4, guard_phys, user_stack_top, PAGE_PRESENT | PAGE_USER);
     }
 
     u64 old_cr3;
@@ -949,6 +961,14 @@ int sched_fork(void *frame_ptr) {
 
     child->user_rip = child_frame->rip;
     child->user_rsp = child_frame->rsp;
+
+    if (child->cr3 != (u64)0x1000) {
+        u64 guard_phys = (u64)pmm_alloc_page();
+        if (guard_phys) {
+            memset((void*)guard_phys, 0, 4096);
+            paging_map_for_process((u64*)child->cr3, guard_phys, 0x0000004000000000ULL, PAGE_PRESENT | PAGE_USER);
+        }
+    }
 
     enqueue_ready(child);
     process_count++;

@@ -3,9 +3,10 @@
 
 #include "../include/types.h"
 
-#define VFS_FILE    1
-#define VFS_DIR     2
-#define VFS_SYMLINK 3
+#define VFS_FILE         1
+#define VFS_DIR          2
+#define VFS_SYMLINK      3
+#define VFS_BLOCK_DEVICE 4
 
 #define VFS_MAX_NAME   256
 #define VFS_MAX_MOUNTS 16
@@ -28,6 +29,12 @@ typedef struct {
     u8 pad[3];
 } __attribute__((packed)) vfs_user_dirent_t;
 
+typedef struct {
+    int (*read_block)(void* private, u64 lba, void* buf);
+    int (*write_block)(void* private, u64 lba, const void* buf);
+    u64 (*get_size)(void* private);
+} vfs_block_ops_t;
+
 struct vfs_node {
     char name[VFS_MAX_NAME];
     u32 type;
@@ -43,6 +50,7 @@ struct vfs_node {
     void* private;
     void* fs_data;
     int refcount;
+    vfs_block_ops_t* block_ops;
 };
 
 struct vfs_fs_ops {
@@ -96,5 +104,9 @@ int vfs_exists(const char* path);
 int vfs_isdir(const char* path);
 int vfs_is_mounted(const char* path);
 int vfs_format(const char* fstype, const char* dev);
+
+int vfs_block_read(vfs_node_t* node, void* buf, u64 size, u64 offset);
+int vfs_block_write(vfs_node_t* node, const void* buf, u64 size, u64 offset);
+const char* vfs_absolute_path(const char* path, char* buf, u32 buf_size);
 
 #endif

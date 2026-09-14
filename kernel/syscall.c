@@ -83,6 +83,35 @@ static int copy_from_user(void* dest, const void* src, u64 size) {
     return 0;
 }
 
+static int copy_string_from_user(char* dest, const char* src, u64 max_size) {
+    process_t *p = sched_current();
+    if (!p || !is_user_pointer((void*)src)) return -1;
+
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+    }
+
+    u64 i = 0;
+    while (i < max_size - 1) {
+        dest[i] = src[i];
+        if (dest[i] == '\0') {
+            if (old_cr3 != p->cr3) {
+                __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+            }
+            return 0;
+        }
+        i++;
+    }
+    dest[i] = '\0';
+
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+    }
+    return 0;
+}
+
 static int copy_to_user(void* dest, const void* src, u64 size) {
     process_t *p = sched_current();
     if (!p || !is_user_pointer(dest)) return -1;
@@ -106,10 +135,8 @@ static long sys_partition_format(trap_frame_t* frame, long dev, long fstype, lon
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     char dev_buf[32], fs_buf[16];
     if (!is_user_pointer((void*)dev) || !is_user_pointer((void*)fstype)) return -1;
-    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
-    dev_buf[31] = '\0';
-    if (copy_from_user(fs_buf, (void*)fstype, 15) != 0) return -1;
-    fs_buf[15] = '\0';
+    if (copy_string_from_user(dev_buf, (const char*)dev, 31) != 0) return -1;
+    if (copy_string_from_user(fs_buf, (const char*)fstype, 15) != 0) return -1;
     return udisk_format_partition(dev_buf, fs_buf);
 }
 
@@ -117,8 +144,7 @@ static long sys_disk_table(trap_frame_t* frame, long dev, long kind, long a3, lo
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     char dev_buf[32];
     if (!is_user_pointer((void*)dev)) return -1;
-    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
-    dev_buf[31] = '\0';
+    if (copy_string_from_user(dev_buf, (const char*)dev, 31) != 0) return -1;
     int disk, part;
     if (parse_devname(dev_buf, &disk, &part) != 0 || part != 0) return -1;
     if (kind == 1) return udisk_create_gpt(disk);
@@ -129,8 +155,7 @@ static long sys_partition_create(trap_frame_t* frame, long dev, long size_mb, lo
     (void)frame; (void)a4; (void)a5; (void)a6;
     char dev_buf[32];
     if (!is_user_pointer((void*)dev)) return -1;
-    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
-    dev_buf[31] = '\0';
+    if (copy_string_from_user(dev_buf, (const char*)dev, 31) != 0) return -1;
     return udisk_create_partition(dev_buf, (u64)size_mb, (partition_type_t)type);
 }
 
@@ -138,8 +163,7 @@ static long sys_partition_delete(trap_frame_t* frame, long dev, long a2, long a3
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     char dev_buf[32];
     if (!is_user_pointer((void*)dev)) return -1;
-    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
-    dev_buf[31] = '\0';
+    if (copy_string_from_user(dev_buf, (const char*)dev, 31) != 0) return -1;
     return udisk_delete_partition(dev_buf);
 }
 
@@ -216,8 +240,7 @@ static long sys_open(trap_frame_t* frame, long path, long flags, long mode, long
     process_t *p = sched_current();
     if (!p) return -1;
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
     int fd = -1;
     for (int i = 3; i < MAX_FDS; i++) {
         if (!p->fds[i].used) { fd = i; break; }
@@ -436,8 +459,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
 
     char (*argv_buf)[256] = kmalloc(64 * 256);
     if (!argv_buf) return -1;
@@ -449,8 +471,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
             if (copy_from_user(&str_ptr, (void*)((char*)argv_ptr + i * 8), 8) != 0) break;
             if (str_ptr == 0) break;
             if (!is_user_pointer((void*)str_ptr)) break;
-            if (copy_from_user(argv_buf[argc], (void*)str_ptr, 255) != 0) break;
-            argv_buf[argc][255] = '\0';
+            if (copy_string_from_user(argv_buf[argc], (const char*)str_ptr, 255) != 0) break;
             argc++;
         }
     }
@@ -558,6 +579,12 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
             kfree(argv_buf);
             return -1;
         }
+    }
+
+    u64 guard_phys = (u64)pmm_alloc_page();
+    if (guard_phys) {
+        memset((void*)guard_phys, 0, 4096);
+        paging_map_for_process(new_pml4, guard_phys, user_stack_top, PAGE_PRESENT | PAGE_USER);
     }
 
     u64 old_cr3;
@@ -677,8 +704,7 @@ static long sys_stat(trap_frame_t* frame, long path, long statbuf, long a3, long
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path) || !is_user_pointer((void*)statbuf)) return -1;
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
     vfs_node_t* node = vfs_resolve_path(path_buf);
     if (!node) return -1;
     sys_stat_t st;
@@ -720,8 +746,7 @@ static long sys_mkdir(trap_frame_t* frame, long path, long mode, long a3, long a
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path)) return -1;
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
     return vfs_mkdir(path_buf, (u32)mode);
 }
 
@@ -729,16 +754,14 @@ static long sys_rmdir(trap_frame_t* frame, long path, long a2, long a3, long a4,
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path)) return -1;
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
     return vfs_rmdir(path_buf);
 }
 
 static long sys_unlink(trap_frame_t* frame, long path, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
     return vfs_unlink(path_buf);
 }
 
@@ -746,10 +769,8 @@ static long sys_rename(trap_frame_t* frame, long old, long new, long a3, long a4
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)old) || !is_user_pointer((void*)new)) return -1;
     char old_buf[256], new_buf[256];
-    if (copy_from_user(old_buf, (void*)old, 255) != 0) return -1;
-    if (copy_from_user(new_buf, (void*)new, 255) != 0) return -1;
-    old_buf[255] = '\0';
-    new_buf[255] = '\0';
+    if (copy_string_from_user(old_buf, (const char*)old, 255) != 0) return -1;
+    if (copy_string_from_user(new_buf, (const char*)new, 255) != 0) return -1;
     return vfs_rename(old_buf, new_buf);
 }
 
@@ -758,13 +779,16 @@ static long sys_chdir(trap_frame_t* frame, long path, long a2, long a3, long a4,
     if (!is_user_pointer((void*)path)) return -1;
 
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
 
-    if (!vfs_isdir(path_buf)) return -1;
+    char abs_path[256];
+    const char* resolved = vfs_absolute_path(path_buf, abs_path, sizeof(abs_path));
+    if (!resolved) return -1;
+
+    if (!vfs_isdir(resolved)) return -1;
 
     void fs_set_current_dir(const char*);
-    fs_set_current_dir(path_buf);
+    fs_set_current_dir(resolved);
     return 0;
 }
 
@@ -787,8 +811,7 @@ static long sys_readdir(trap_frame_t* frame, long path, long entries, long count
     (void)frame; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path) || !is_user_pointer((void*)entries)) return -1;
     char path_buf[256];
-    if (copy_from_user(path_buf, (void*)path, 255) != 0) return -1;
-    path_buf[255] = '\0';
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
 
     vfs_node_t* dir = vfs_resolve_path(path_buf);
     if (!dir) return -1;
@@ -844,12 +867,13 @@ static long sys_partition_mount(trap_frame_t* frame, long dev, long point, long 
     if (!is_user_pointer((void*)dev) || !is_user_pointer((void*)point)) return -1;
 
     char dev_buf[32], point_buf[256];
-    if (copy_from_user(dev_buf, (void*)dev, 31) != 0) return -1;
-    if (copy_from_user(point_buf, (void*)point, 255) != 0) return -1;
-    dev_buf[31] = '\0';
-    point_buf[255] = '\0';
+    if (copy_string_from_user(dev_buf, (const char*)dev, 31) != 0) return -1;
+    if (copy_string_from_user(point_buf, (const char*)point, 255) != 0) return -1;
 
-    if (vfs_is_mounted(point_buf)) return -1;
+    if (vfs_is_mounted(point_buf)) {
+        vfs_unmount(point_buf);
+    }
+
     if (vfs_mount_fs("ufs", dev_buf, point_buf) != 0) return -1;
 
     void fs_set_current_dir(const char*);
@@ -949,8 +973,7 @@ static long sys_gethostbyname(trap_frame_t* frame, long name, long ip, long a3, 
     if (!is_user_pointer((void*)name) || !is_user_pointer((void*)ip)) return -1;
 
     char name_buf[256];
-    if (copy_from_user(name_buf, (void*)name, 255) != 0) return -1;
-    name_buf[255] = '\0';
+    if (copy_string_from_user(name_buf, (const char*)name, 255) != 0) return -1;
 
     u32 ip_addr = dns_lookup(name_buf, net_get_dns());
     if (ip_addr == 0) return -1;
@@ -1127,17 +1150,15 @@ static long sys_accept(trap_frame_t* frame, long fd, long addr, long addrlen, lo
 static long sys_symlink(trap_frame_t* frame, long target, long linkpath, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     char t_buf[256], l_buf[256];
-    if (copy_from_user(t_buf, (void*)target, 255) != 0) return -1;
-    if (copy_from_user(l_buf, (void*)linkpath, 255) != 0) return -1;
-    t_buf[255] = '\0'; l_buf[255] = '\0';
+    if (copy_string_from_user(t_buf, (const char*)target, 255) != 0) return -1;
+    if (copy_string_from_user(l_buf, (const char*)linkpath, 255) != 0) return -1;
     return vfs_symlink(t_buf, l_buf);
 }
 
 static long sys_readlink(trap_frame_t* frame, long path, long buf, long size, long a4, long a5, long a6) {
     (void)frame; (void)a4; (void)a5; (void)a6;
     char p_buf[256], k_buf[256];
-    if (copy_from_user(p_buf, (void*)path, 255) != 0) return -1;
-    p_buf[255] = '\0';
+    if (copy_string_from_user(p_buf, (const char*)path, 255) != 0) return -1;
     int res = vfs_readlink(p_buf, k_buf, 256);
     if (res < 0) return -1;
     if (copy_to_user((void*)buf, k_buf, res + 1) != 0) return -1;
@@ -1148,8 +1169,7 @@ static long sys_fs_register(trap_frame_t* frame, long name, long a2, long a3, lo
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)name)) return -1;
     char name_buf[32];
-    if (copy_from_user(name_buf, (void*)name, 31) != 0) return -1;
-    name_buf[31] = '\0';
+    if (copy_string_from_user(name_buf, (const char*)name, 31) != 0) return -1;
 
     if (strcmp(name_buf, "ufs") == 0) {
         extern int ufs_register(void);

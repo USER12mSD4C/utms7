@@ -5,9 +5,19 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include "../include/types.h"
+#include "../include/syscall.h"
 
 #ifndef NULL
 #define NULL ((void*)0)
+#endif
+
+#ifndef O_RDONLY
+#define O_RDONLY   0x000
+#define O_WRONLY   0x001
+#define O_RDWR     0x002
+#define O_CREAT    0x040
+#define O_TRUNC    0x200
+#define O_APPEND   0x400
 #endif
 
 #define LONG_MAX  9223372036854775807L
