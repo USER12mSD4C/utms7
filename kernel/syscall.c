@@ -774,6 +774,56 @@ static long sys_rename(trap_frame_t* frame, long old, long new, long a3, long a4
     return vfs_rename(old_buf, new_buf);
 }
 
+static void normalize_path(const char* input, char* output, u32 out_size) {
+    char parts[64][256];
+    int part_count = 0;
+
+    char tmp[1024];
+    strncpy(tmp, input, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    char* p = tmp;
+    while (*p) {
+        while (*p == '/') p++;
+        if (*p == '\0') break;
+
+        char* start = p;
+        while (*p && *p != '/') p++;
+        char saved = *p;
+        *p = '\0';
+
+        if (strcmp(start, ".") == 0) {
+        } else if (strcmp(start, "..") == 0) {
+            if (part_count > 0) part_count--;
+        } else {
+            if (part_count < 64) {
+                strncpy(parts[part_count], start, 255);
+                parts[part_count][255] = '\0';
+                part_count++;
+            }
+        }
+
+        if (saved) *p = saved;
+        else break;
+        if (*p) p++;
+    }
+
+    if (part_count == 0) {
+        output[0] = '/';
+        output[1] = '\0';
+    } else {
+        u32 pos = 0;
+        for (int i = 0; i < part_count; i++) {
+            if (pos + 1 + strlen(parts[i]) >= out_size - 1) break;
+            output[pos++] = '/';
+            for (int j = 0; parts[i][j]; j++) {
+                output[pos++] = parts[i][j];
+            }
+        }
+        output[pos] = '\0';
+    }
+}
+
 static long sys_chdir(trap_frame_t* frame, long path, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)path)) return -1;
@@ -785,10 +835,13 @@ static long sys_chdir(trap_frame_t* frame, long path, long a2, long a3, long a4,
     const char* resolved = vfs_absolute_path(path_buf, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
 
-    if (!vfs_isdir(resolved)) return -1;
+    char normalized[256];
+    normalize_path(resolved, normalized, sizeof(normalized));
+
+    if (!vfs_isdir(normalized)) return -1;
 
     void fs_set_current_dir(const char*);
-    fs_set_current_dir(resolved);
+    fs_set_current_dir(normalized);
     return 0;
 }
 

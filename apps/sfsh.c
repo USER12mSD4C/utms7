@@ -180,6 +180,8 @@ static int cmd_ls(int argc, char** argv) {
     }
 
     for (long i = 0; i < n; i++) {
+        if (strcmp(ents[i].name, ".") == 0 || strcmp(ents[i].name, "..") == 0) continue;
+
         if (ents[i].is_dir) {
             set_color(COL_DIR, 0);
             out(ents[i].name);

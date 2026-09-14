@@ -30,8 +30,8 @@ typedef struct {
 } __attribute__((packed)) vfs_user_dirent_t;
 
 typedef struct {
-    int (*read_block)(void* private, u64 lba, void* buf);
-    int (*write_block)(void* private, u64 lba, const void* buf);
+    int (*read)(void* private, u64 lba, u32 count, void* buf);
+    int (*write)(void* private, u64 lba, u32 count, const void* buf);
     u64 (*get_size)(void* private);
 } vfs_block_ops_t;
 

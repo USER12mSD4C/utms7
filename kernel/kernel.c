@@ -3,9 +3,10 @@
 #include "../kernel/memory.h"
 #include "../include/string.h"
 #include "../include/multiboot2.h"
+#include "vfs.h"
 
 static u8 multiboot_info_copy[8192] __attribute__((aligned(16)));
-static u64 multiboot_info_ptr = 0;
+u64 multiboot_info_ptr = 0;
 
 void kernel_main(void *mb_info) {
     multiboot2_info_header_t* hdr = (multiboot2_info_header_t*)mb_info;
@@ -112,6 +113,42 @@ int get_module_data(const char* name, u8** buf, u32* size) {
         }
     }
     return -1;
+}
+
+void multiboot_modules_to_ramfs(void) {
+    if (multiboot_info_ptr == 0) return;
+
+    u8* ptr = (u8*)(multiboot_info_ptr + 8);
+    while (1) {
+        u32 type = *(u32*)ptr;
+        u32 tag_size = *(u32*)(ptr + 4);
+        if (type == 0 || tag_size == 0) break;
+
+        if (type == 3 && tag_size > 16) {
+            u64 mod_start = *(u32*)(ptr + 8);
+            u64 mod_end = *(u32*)(ptr + 12);
+            const char* cmdline = (const char*)(ptr + 16);
+
+            const char* name = cmdline;
+            const char* slash = strrchr(cmdline, '/');
+            if (slash) name = slash + 1;
+
+            if (name[0] == '\0') {
+                ptr += (tag_size + 7) & ~7;
+                continue;
+            }
+
+            char path[256];
+            snprintf(path, sizeof(path), "/%s", name);
+
+            vfs_node_t* node = vfs_open(path, 0x40 | 0x200, 0644);
+            if (node) {
+                vfs_write(node, (void*)mod_start, mod_end - mod_start, 0);
+                vfs_close(node);
+            }
+        }
+        ptr += (tag_size + 7) & ~7;
+    }
 }
 
 void shell_print(const char* s) {

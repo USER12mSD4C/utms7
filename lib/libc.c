@@ -102,10 +102,6 @@ char *getcwd(char *buf, size_t size) {
     return res > 0 ? buf : NULL;
 }
 
-int readdir(const char *path, struct dirent *entries, int *count) {
-    return syscall(SYS_readdir, (long)path, (long)entries, (long)count, 0, 0, 0);
-}
-
 typedef struct block_header {
     size_t size;
     struct block_header *next;
@@ -301,3 +297,63 @@ extern int main(int argc, char** argv, char** envp) __attribute__((weak));
 
 int symlink(const char *target, const char *linkpath) { return syscall(55, (long)target, (long)linkpath, 0, 0, 0, 0); }
 int readlink(const char *path, char *buf, size_t size) { return syscall(56, (long)path, (long)buf, size, 0, 0, 0); }
+
+static char strerror_buf[64];
+
+char *strerror(int errnum) {
+    if (errnum == 0) return "Success";
+    snprintf(strerror_buf, sizeof(strerror_buf), "Unknown error %d", errnum);
+    return strerror_buf;
+}
+
+void perror(const char *s) {
+    if (s && *s) {
+        write(2, s, strlen(s));
+        write(2, ": ", 2);
+    }
+    char *err = strerror(errno);
+    write(2, err, strlen(err));
+    write(2, "\n", 1);
+}
+
+DIR *opendir(const char *name) {
+    DIR *d = (DIR*)malloc(sizeof(DIR));
+    if (!d) return NULL;
+    strncpy(d->path, name, 255);
+    d->path[255] = '\0';
+    d->count = 0;
+    d->index = 0;
+
+    int n = syscall(SYS_readdir, (long)d->path, (long)d->entries, 64, 0, 0, 0);
+    if (n < 0) {
+        free(d);
+        return NULL;
+    }
+    d->count = n;
+    return d;
+}
+
+struct dirent *readdir(DIR *dirp) {
+    if (!dirp || dirp->index >= dirp->count) return NULL;
+    return &dirp->entries[dirp->index++];
+}
+
+int closedir(DIR *dirp) {
+    if (dirp) free(dirp);
+    return 0;
+}
+
+int isatty(int fd) {
+    return (fd == 0 || fd == 1 || fd == 2) ? 1 : 0;
+}
+
+int access(const char *pathname, int mode) {
+    struct stat st;
+    if (stat(pathname, &st) == 0) return 0;
+    return -1;
+}
+
+unsigned int getuid(void) { return 0; }
+unsigned int geteuid(void) { return 0; }
+unsigned int getgid(void) { return 0; }
+unsigned int getegid(void) { return 0; }

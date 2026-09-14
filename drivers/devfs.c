@@ -4,6 +4,7 @@
 #include "../include/string.h"
 #include "../include/udisk.h"
 #include "disk.h"
+#include "../drivers/drm.h"
 
 typedef struct {
     int disk_num;
@@ -13,20 +14,18 @@ typedef struct {
 
 static vfs_fs_ops_t devfs_ops;
 
-static int devfs_block_read_block(void* private, u64 lba, void* buf) {
+static int devfs_block_read_block(void* private, u64 lba, u32 count, void* buf) {
     devfs_block_private_t* p = (devfs_block_private_t*)private;
     if (!p) return -1;
-
     disk_set_disk(p->disk_num);
-    return disk_read((u32)(p->start_lba + lba), (u8*)buf);
+    return disk_read((u32)(p->start_lba + lba), count, (u8*)buf);
 }
 
-static int devfs_block_write_block(void* private, u64 lba, const void* buf) {
+static int devfs_block_write_block(void* private, u64 lba, u32 count, const void* buf) {
     devfs_block_private_t* p = (devfs_block_private_t*)private;
     if (!p) return -1;
-
     disk_set_disk(p->disk_num);
-    return disk_write((u32)(p->start_lba + lba), (u8*)buf);
+    return disk_write((u32)(p->start_lba + lba), count, (u8*)buf);
 }
 
 static u64 devfs_block_get_size(void* private) {
@@ -36,8 +35,8 @@ static u64 devfs_block_get_size(void* private) {
 }
 
 static vfs_block_ops_t block_ops = {
-    .read_block = devfs_block_read_block,
-    .write_block = devfs_block_write_block,
+    .read = devfs_block_read_block,
+    .write = devfs_block_write_block,
     .get_size = devfs_block_get_size
 };
 
@@ -47,18 +46,22 @@ static int devfs_block_read(vfs_node_t* node, void* buf, u64 size, u64 offset) {
     u64 lba = offset / 512;
     u64 off = offset % 512;
     u64 copied = 0;
-    u8 sector[512] __attribute__((aligned(16)));
 
-    while (copied < size) {
-        if (node->block_ops->read_block(node->private, lba, sector) != 0) break;
-
-        u64 chunk = 512 - off;
-        if (chunk > size - copied) chunk = size - copied;
-
-        memcpy((u8*)buf + copied, sector + off, chunk);
-        copied += chunk;
-        lba++;
-        off = 0;
+    if (off != 0 || (size % 512) != 0) {
+        u8 sector[512] __attribute__((aligned(16)));
+        while (copied < size) {
+            if (node->block_ops->read(node->private, lba, 1, sector) != 0) break;
+            u64 chunk = 512 - off;
+            if (chunk > size - copied) chunk = size - copied;
+            memcpy((u8*)buf + copied, sector + off, chunk);
+            copied += chunk;
+            lba++;
+            off = 0;
+        }
+    } else {
+        u32 count = size / 512;
+        if (node->block_ops->read(node->private, lba, count, buf) != 0) return 0;
+        copied = size;
     }
 
     return (int)copied;
@@ -70,23 +73,25 @@ static int devfs_block_write(vfs_node_t* node, const void* buf, u64 size, u64 of
     u64 lba = offset / 512;
     u64 off = offset % 512;
     u64 written = 0;
-    u8 sector[512] __attribute__((aligned(16)));
 
-    while (written < size) {
-        if (off != 0 || (size - written) < 512) {
-            if (node->block_ops->read_block(node->private, lba, sector) != 0) break;
+    if (off != 0 || (size % 512) != 0) {
+        u8 sector[512] __attribute__((aligned(16)));
+        while (written < size) {
+            if (off != 0 || (size - written) < 512) {
+                if (node->block_ops->read(node->private, lba, 1, sector) != 0) break;
+            }
+            u64 chunk = 512 - off;
+            if (chunk > size - written) chunk = size - written;
+            memcpy(sector + off, (const u8*)buf + written, chunk);
+            if (node->block_ops->write(node->private, lba, 1, sector) != 0) break;
+            written += chunk;
+            lba++;
+            off = 0;
         }
-
-        u64 chunk = 512 - off;
-        if (chunk > size - written) chunk = size - written;
-
-        memcpy(sector + off, (const u8*)buf + written, chunk);
-
-        if (node->block_ops->write_block(node->private, lba, sector) != 0) break;
-
-        written += chunk;
-        lba++;
-        off = 0;
+    } else {
+        u32 count = size / 512;
+        if (node->block_ops->write(node->private, lba, count, (void*)buf) != 0) return 0;
+        written = size;
     }
 
     return (int)written;

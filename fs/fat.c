@@ -22,8 +22,6 @@ typedef struct {
     u16 head_count;
     u32 hidden_sectors;
     u32 total_sectors_32;
-    
-    // FAT32 specific
     u32 fat_size_32;
     u16 flags;
     u16 version;
@@ -64,17 +62,16 @@ static u32 sectors_per_fat = 0;
 
 int fat_mount(u32 start_lba) {
     u8 sector[512];
-    
-    if (disk_read(start_lba, sector) != 0) return -1;
-    
+
+    if (disk_read(start_lba, 1, sector) != 0) return -1;
+
     memcpy(&boot, sector, sizeof(fat_boot_t));
-    
+
     if (boot.bytes_per_sector != 512) return -1;
     if (boot.signature != 0x28 && boot.signature != 0x29) return -1;
-    
-    // Определяем тип FAT
+
     u32 root_dir_sectors = ((boot.root_entries * 32) + (boot.bytes_per_sector - 1)) / boot.bytes_per_sector;
-    
+
     if (boot.fat_size_16 != 0) {
         sectors_per_fat = boot.fat_size_16;
         fat_type = FAT16;
@@ -82,15 +79,14 @@ int fat_mount(u32 start_lba) {
         sectors_per_fat = boot.fat_size_32;
         fat_type = FAT32;
     }
-    
+
     fat_start = start_lba + boot.reserved_sectors;
     root_start = fat_start + (boot.fat_count * sectors_per_fat);
     data_start = root_start + root_dir_sectors;
-    
+
     return 0;
 }
 
 int fat_read_file(const char* path, u8** buffer, u32* size) {
-    // Упрощенная реализация для чтения файлов
     return -1;
 }

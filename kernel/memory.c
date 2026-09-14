@@ -1,4 +1,3 @@
-// kernel/memory.c
 #include "memory.h"
 #include "../include/string.h"
 
@@ -23,42 +22,6 @@ static void add_free_block(u64 base, u64 size) {
     free_list = block;
 }
 
-static void sort_free_list(void) {
-    if (!free_list || !free_list->next) return;
-    int swapped;
-    do {
-        swapped = 0;
-        block_header_t** pp = &free_list;
-        while (*pp && (*pp)->next) {
-            block_header_t* a = *pp;
-            block_header_t* b = a->next;
-            if ((u64)a > (u64)b) {
-                a->next = b->next;
-                b->next = a;
-                *pp = b;
-                swapped = 1;
-            }
-            pp = &(*pp)->next;
-        }
-    } while (swapped);
-}
-
-static void merge_adjacent_blocks(void) {
-    if (!free_list) return;
-    sort_free_list();
-
-    block_header_t* curr = free_list;
-    while (curr && curr->next) {
-        u8* curr_end = (u8*)curr + sizeof(block_header_t) + curr->size;
-        if (curr_end == (u8*)curr->next) {
-            curr->size += sizeof(block_header_t) + curr->next->size;
-            curr->next = curr->next->next;
-        } else {
-            curr = curr->next;
-        }
-    }
-}
-
 void memory_init(u64 mem_start, u64 mem_size) {
     if (initialized) return;
 
@@ -71,7 +34,16 @@ void memory_init(u64 mem_start, u64 mem_size) {
         total_memory += mem_size;
     }
 
-    merge_adjacent_blocks();
+    block_header_t* curr = free_list;
+    while (curr && curr->next) {
+        u8* curr_end = (u8*)curr + sizeof(block_header_t) + curr->size;
+        if (curr_end == (u8*)curr->next) {
+            curr->size += sizeof(block_header_t) + curr->next->size;
+            curr->next = curr->next->next;
+        } else {
+            curr = curr->next;
+        }
+    }
     initialized = 1;
 }
 
@@ -79,7 +51,16 @@ void memory_add_region(u64 base, u64 size) {
     if (!initialized || size == 0) return;
     add_free_block(base, size);
     total_memory += size;
-    merge_adjacent_blocks();
+    block_header_t* curr = free_list;
+    while (curr && curr->next) {
+        u8* curr_end = (u8*)curr + sizeof(block_header_t) + curr->size;
+        if (curr_end == (u8*)curr->next) {
+            curr->size += sizeof(block_header_t) + curr->next->size;
+            curr->next = curr->next->next;
+        } else {
+            curr = curr->next;
+        }
+    }
 }
 
 void* kmalloc(u64 size) {
@@ -129,10 +110,35 @@ void kfree(void* ptr) {
 
     block->free = 1;
     used_memory -= block->size + sizeof(block_header_t);
-    block->next = free_list;
-    free_list = block;
 
-    merge_adjacent_blocks();
+    block_header_t** pp = &free_list;
+    while (*pp && (u64)(*pp) < (u64)block) {
+        pp = &(*pp)->next;
+    }
+    block->next = *pp;
+    *pp = block;
+
+    if (block->next) {
+        u8* block_end = (u8*)block + sizeof(block_header_t) + block->size;
+        if (block_end == (u8*)block->next) {
+            block->size += sizeof(block_header_t) + block->next->size;
+            block->next = block->next->next;
+        }
+    }
+
+    block_header_t* prev = NULL;
+    block_header_t* curr = free_list;
+    while (curr && curr != block) {
+        prev = curr;
+        curr = curr->next;
+    }
+    if (prev) {
+        u8* prev_end = (u8*)prev + sizeof(block_header_t) + prev->size;
+        if (prev_end == (u8*)block) {
+            prev->size += sizeof(block_header_t) + block->size;
+            prev->next = block->next;
+        }
+    }
 }
 
 u64 memory_used(void) { return used_memory; }

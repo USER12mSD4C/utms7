@@ -55,21 +55,21 @@ static u32 root_dir_sectors;
 
 int fat32_mount(u32 start_lba) {
     partition_offset = start_lba;
-    
+
     u8 sector[512];
-    if (disk_read(start_lba, sector) != 0) {
+    if (disk_read(start_lba, 1, sector) != 0) {
         return -1;
     }
-    
+
     memcpy(&bpb, sector, sizeof(bpb));
-    
+
     if (bpb.bytes_per_sector != 512) return -1;
     if (bpb.sectors_per_cluster == 0) return -1;
     if (bpb.fat_count == 0) return -1;
-    
+
     root_dir_sectors = ((bpb.root_entries * 32) + (bpb.bytes_per_sector - 1)) / bpb.bytes_per_sector;
     first_data_sector = bpb.reserved_sectors + (bpb.fat_count * bpb.fat_size_32) + root_dir_sectors;
-    
+
     return 0;
 }
 
@@ -77,19 +77,18 @@ static u32 fat32_next_cluster(u32 cluster) {
     u32 fat_offset = cluster * 4;
     u32 fat_sector = bpb.reserved_sectors + (fat_offset / bpb.bytes_per_sector);
     u32 fat_offset_in_sector = fat_offset % bpb.bytes_per_sector;
-    
+
     u8 sector[512];
-    disk_read(partition_offset + fat_sector, sector);
-    
+    disk_read(partition_offset + fat_sector, 1, sector);
+
     u32 next = *(u32*)(sector + fat_offset_in_sector);
-    next &= 0x0FFFFFFF; // только 28 бит
-    
-    if (next >= 0x0FFFFFF8) return 0; // конец цепочки
+    next &= 0x0FFFFFFF;
+
+    if (next >= 0x0FFFFFF8) return 0;
     return next;
 }
 
 int fat32_read_file(const char *path, u8 **data, u32 *size) {
-    // TODO: реализовать
     (void)path;
     (void)data;
     (void)size;

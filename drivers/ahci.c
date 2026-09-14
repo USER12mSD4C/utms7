@@ -4,7 +4,6 @@
 #include "pci.h"
 #include "../include/io.h"
 #include "../include/string.h"
-#include "../include/print.h"
 
 #define AHCI_CAP        0x00
 #define AHCI_GHC        0x04
@@ -190,40 +189,28 @@ static int ahci_send_cmd(int port, int is_write, u8 cmd_code, u64 lba, u32 count
         if ((ci & 1) == 0) {
             if (is & (1 << 30)) {
                 u32 tfd = *(volatile u32*)(port_base + AHCI_PxTFD);
-                print("AHCI: Task File Error, PxIS="); printhex(is);
-                print(" PxTFD="); printhex(tfd); print("\n");
                 return -1;
             }
             if (is & ((1 << 29) | (1 << 28) | (1 << 27) | (1 << 23))) {
-                print("AHCI: Fatal Error, PxIS="); printhex(is); print("\n");
                 return -1;
             }
             return 0;
         }
         if (is & ((1 << 30) | (1 << 29) | (1 << 28) | (1 << 27) | (1 << 23))) {
-            print("AHCI: Error during wait, PxIS="); printhex(is); print("\n");
             return -1;
         }
     }
-    print("AHCI: Command Timeout\n");
     return -1;
 }
 
 static void ahci_port_identify(int port) {
     memset(identify_buf, 0, 512);
-    print("AHCI: sending IDENTIFY to port "); printnum(port); print("...\n");
 
     int res = ahci_send_cmd(port, 0, 0xEC, 0, 1, identify_buf);
 
-    print("AHCI: IDENTIFY cmd result = "); printnum(res); print("\n");
     if (res != 0) return;
 
     u16* data = (u16*)identify_buf;
-
-    print("AHCI: word60="); printhex(data[60]);
-    print(" word61="); printhex(data[61]);
-    print(" word83="); printhex(data[83]);
-    print(" word100="); printhex(data[100]); print("\n");
 
     char model[41];
     for (int i = 0; i < 40; i+=2) {
@@ -247,9 +234,6 @@ static void ahci_port_identify(int port) {
 
     if (sectors == 0) sectors = 2097152;
 
-    print("AHCI: sectors = "); printnum((u32)sectors); print("\n");
-    print("AHCI: model = "); print(model); print("\n");
-
     extern void ahci_register_disk(int, u64, const char*);
     ahci_register_disk(port, sectors, model);
 }
@@ -259,11 +243,11 @@ int ahci_read(int port, u64 lba, u32 count, void* buffer) {
 }
 
 int ahci_write(int port, u64 lba, u32 count, void* buffer) {
-    return ahci_send_cmd(port, 1, 0x35, lba, count, buffer);
+    int res = ahci_send_cmd(port, 1, 0x35, lba, count, buffer);
+    return res;
 }
 
 int ahci_init(void) {
-    print("AHCI: scanning...\n");
 
     for (int bus = 0; bus < 256; bus++) {
         for (int slot = 0; slot < 32; slot++) {
@@ -280,14 +264,11 @@ int ahci_init(void) {
                 u8 progif = (class_reg >> 8) & 0xFF;
 
                 if (class == 0x01 && subclass == 0x06 && progif == 0x01) {
-                    print("AHCI: found controller at ");
-                    printnum(bus); print(":"); printnum(slot); print("."); printnum(func); print("\n");
 
                     u32 bar5 = pci_read_config(bus, slot, func, 0x24);
                     u64 bar5_phys = (u64)(bar5 & ~0xF);
 
                     if (bar5_phys == 0) {
-                        print("AHCI: BAR5 is invalid\n");
                         return -1;
                     }
 
@@ -303,9 +284,6 @@ int ahci_init(void) {
                     }
 
                     ahci_ports = *(volatile u32*)(ahci_base + AHCI_PI);
-                    print("AHCI: implemented ports mask = ");
-                    printhex(ahci_ports);
-                    print("\n");
 
                     for (int i = 0; i < 32; i++) {
                         if (ahci_ports & (1 << i)) {
@@ -317,9 +295,6 @@ int ahci_init(void) {
                             if (det == 3 && ipm == 1) {
                                 u32 sig = *(volatile u32*)(port_base + AHCI_PxSIG);
                                 if (sig == SATA_SIG_ATA) {
-                                    print("AHCI: SATA drive found on port ");
-                                    printnum(i);
-                                    print("\n");
                                     ahci_port_init(i);
                                     ahci_port_identify(i);
                                 }
@@ -334,7 +309,6 @@ int ahci_init(void) {
             }
         }
     }
-    print("AHCI: no controller found\n");
     return -1;
 }
 

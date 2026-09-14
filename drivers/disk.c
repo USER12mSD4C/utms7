@@ -1,4 +1,3 @@
-// File: drivers/disk.c
 #include "disk.h"
 #include "../include/ahci.h"
 #include "../include/io.h"
@@ -14,8 +13,6 @@ typedef struct {
 
 static disk_t disks[4];
 static int current_disk = 0;
-
-__attribute__((aligned(16))) static u8 disk_dma_buf[512];
 
 void ahci_register_disk(int port, u64 sectors, const char* model) {
     if (port < 0 || port >= 4) return;
@@ -46,19 +43,16 @@ int disk_set_disk(int n) {
 
 int disk_set_drive(u8 drive) { return disk_set_disk(drive - 0x80); }
 
-int disk_read(u32 lba, u8* buffer) {
+int disk_read(u32 lba, u32 count, u8* buffer) {
     disk_t* d = &disks[current_disk];
     if (!d->present) return -1;
-    int res = ahci_read(d->port, lba, 1, disk_dma_buf);
-    if (res == 0) memcpy(buffer, disk_dma_buf, 512);
-    return res;
+    return ahci_read(d->port, lba, count, buffer);
 }
 
-int disk_write(u32 lba, u8* buffer) {
+int disk_write(u32 lba, u32 count, u8* buffer) {
     disk_t* d = &disks[current_disk];
     if (!d->present) return -1;
-    memcpy(disk_dma_buf, buffer, 512);
-    return ahci_write(d->port, lba, 1, disk_dma_buf);
+    return ahci_write(d->port, lba, count, buffer);
 }
 
 int disk_get_disk_count(void) {

@@ -5,8 +5,8 @@
 #include "../include/types.h"
 
 int disk_init(void);
-int disk_read(u32 lba, u8* buffer);
-int disk_write(u32 lba, u8* buffer);
+int disk_read(u32 lba, u32 count, u8* buffer);
+int disk_write(u32 lba, u32 count, u8* buffer);
 int disk_set_disk(int n);
 int disk_set_drive(u8 drive);
 int disk_get_disk_count(void);

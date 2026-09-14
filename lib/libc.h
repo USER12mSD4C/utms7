@@ -85,7 +85,6 @@ int unlink(const char *path);
 int rename(const char *old, const char *new);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);
-int readdir(const char *path, struct dirent *entries, int *count);
 int fs_register(const char* name);
 
 void *malloc(size_t size);
@@ -264,5 +263,29 @@ typedef struct {
     partition_info_t partitions[16];
     u8 is_gpt;
 } __attribute__((packed)) disk_info_user_t;
+
+extern int errno;
+
+typedef struct _DIR {
+    char path[256];
+    struct dirent entries[64];
+    int count;
+    int index;
+} DIR;
+
+DIR *opendir(const char *name);
+struct dirent *readdir(DIR *dirp);
+int closedir(DIR *dirp);
+
+void perror(const char *s);
+char *strerror(int errnum);
+
+int isatty(int fd);
+int access(const char *pathname, int mode);
+
+unsigned int getuid(void);
+unsigned int geteuid(void);
+unsigned int getgid(void);
+unsigned int getegid(void);
 
 #endif

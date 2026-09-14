@@ -3,7 +3,6 @@
 #include "../kernel/memory.h"
 #include "../include/string.h"
 #include "../include/udisk.h"
-#include "../include/udisk.h"
 #include "../drivers/drm.h"
 #include "ufs.h"
 
@@ -56,6 +55,7 @@ typedef struct {
     int current_disk;
     vfs_node_t* dev_node;
     u8 blk_buf[UFS_BLOCK_SIZE] __attribute__((aligned(16)));
+    u8 inode_buf[UFS_BLOCK_SIZE] __attribute__((aligned(16)));
 } ufs_mount_t;
 
 static vfs_fs_ops_t ufs_ops;
@@ -77,8 +77,8 @@ static int ufs_read_inode(ufs_mount_t* mnt, u32 ino, ufs_inode_t* out) {
     u32 inodes_per_block = UFS_BLOCK_SIZE / sizeof(ufs_inode_t);
     u32 block = mnt->sb.inode_table_start + (ino - 1) / inodes_per_block;
     u32 off = ((ino - 1) % inodes_per_block) * sizeof(ufs_inode_t);
-    if (ufs_read_block(mnt, block, mnt->blk_buf) != 0) return -1;
-    memcpy(out, mnt->blk_buf + off, sizeof(ufs_inode_t));
+    if (ufs_read_block(mnt, block, mnt->inode_buf) != 0) return -1;
+    memcpy(out, mnt->inode_buf + off, sizeof(ufs_inode_t));
     return 0;
 }
 
@@ -87,9 +87,9 @@ static int ufs_write_inode(ufs_mount_t* mnt, u32 ino, ufs_inode_t* in) {
     u32 inodes_per_block = UFS_BLOCK_SIZE / sizeof(ufs_inode_t);
     u32 block = mnt->sb.inode_table_start + (ino - 1) / inodes_per_block;
     u32 off = ((ino - 1) % inodes_per_block) * sizeof(ufs_inode_t);
-    if (ufs_read_block(mnt, block, mnt->blk_buf) != 0) return -1;
-    memcpy(mnt->blk_buf + off, in, sizeof(ufs_inode_t));
-    return ufs_write_block(mnt, block, mnt->blk_buf);
+    if (ufs_read_block(mnt, block, mnt->inode_buf) != 0) return -1;
+    memcpy(mnt->inode_buf + off, in, sizeof(ufs_inode_t));
+    return ufs_write_block(mnt, block, mnt->inode_buf);
 }
 
 static int ufs_bitmap_get(ufs_mount_t* mnt, u32 b) {
@@ -226,7 +226,6 @@ static int ufs_add_to_dir(ufs_mount_t* mnt, u32 dir_ino, u32 ino, const char* na
             if (ents[j].inode == 0) {
                 ents[j].inode = ino;
                 ents[j].type = type;
-                print("[add_to_dir] name="); print(name); print("\n");
                 strncpy(ents[j].name, name, 55);
                 ents[j].name[55] = '\0';
                 ents[j].name_len = strlen(ents[j].name);
@@ -470,10 +469,6 @@ static int ufs_vfs_readdir(vfs_node_t* dir, vfs_dirent_t* entries, u32* count) {
     u32 n = 0;
     u32 max = *count;
 
-    print("[readdir] dir_ino="); printnum(dir_ino);
-    print(" size="); printnum(inode.size);
-    print(" blocks="); printnum(blocks); print("\n");
-
     for (u32 i = 0; i < blocks && n < max; i++) {
         u32 b = ufs_get_block(&inode, i);
         if (!b) continue;
@@ -489,7 +484,6 @@ static int ufs_vfs_readdir(vfs_node_t* dir, vfs_dirent_t* entries, u32* count) {
 
         for (u32 j = 0; j < entries_in_block && n < max; j++) {
             if (ents[j].inode != 0 && ents[j].name_len > 0) {
-                print("[readdir] entry: "); print(ents[j].name); print("\n");
                 strncpy(entries[n].name, ents[j].name, VFS_MAX_NAME - 1);
                 entries[n].name[VFS_MAX_NAME - 1] = '\0';
 
@@ -736,7 +730,8 @@ int ufs_format(u32 start_lba, u32 total_blocks, int disk) {
 int ufs_register(void) {
     return vfs_register_fs(&ufs_ops);
 }
-//TODO блять нахуй блять пизда
+
+//TODO блять нахуй блять пизда не удалять
 /*1. Добавить синхронизацию - блокировки для защиты от гонок при многозадачности
 2. Реализовать запись суперблока - сейчас изменения free_blocks/free_inodes не сохраняются на диск
 3. Добавить журналирование - для восстановления после сбоев питания

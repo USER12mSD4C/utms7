@@ -100,7 +100,7 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
     u8 header_buf[512] __attribute__((aligned(16)));
 
     disk_set_disk(disk_num);
-    if (disk_read(0, header_buf) != 0) return;
+    if (disk_read(0, 1, header_buf) != 0) return;
     if (header_buf[510] != 0x55 || header_buf[511] != 0xAA) return;
 
     int gpt_protective = 0;
@@ -113,7 +113,7 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
     if (!gpt_protective) return;
 
     u8 gpt_buf[512] __attribute__((aligned(16)));
-    if (disk_read(1, gpt_buf) != 0) return;
+    if (disk_read(1, 1, gpt_buf) != 0) return;
 
     typedef struct {
         u64 signature;
@@ -144,7 +144,7 @@ static void read_gpt_partitions(int disk_num, disk_info_t* d) {
 
     for (u32 s = 0; s < sectors_needed && d->partition_count < UDISK_MAX_PARTITIONS; s++) {
         u8 sec[512] __attribute__((aligned(16)));
-        if (disk_read((u32)(h.partition_entry_lba + s), sec) != 0) return;
+        if (disk_read((u32)(h.partition_entry_lba + s), 1, sec) != 0) return;
 
         for (u32 j = 0; j < entries_per_sector && d->partition_count < UDISK_MAX_PARTITIONS; j++) {
             u8* entry = sec + j * h.partition_entry_size;
@@ -259,7 +259,7 @@ int udisk_create_mbr(int disk) {
     sector[510] = 0x55;
     sector[511] = 0xAA;
 
-    if (disk_write(0, sector) != 0) return -1;
+    if (disk_write(0, 1, sector) != 0) return -1;
 
     scanned = 0;
     udisk_scan();
@@ -369,7 +369,7 @@ int udisk_delete_partition(const char* devname) {
         u8 sector[512];
         disk_set_disk(disk);
 
-        if (disk_read(0, sector) != 0) return -1;
+        if (disk_read(0, 1, sector) != 0) return -1;
 
         for (int i = 0; i < 4; i++) {
             u8* entry = sector + 446 + i * 16;
@@ -379,7 +379,7 @@ int udisk_delete_partition(const char* devname) {
             }
         }
 
-        if (disk_write(0, sector) != 0) return -1;
+        if (disk_write(0, 1, sector) != 0) return -1;
     }
 
     scanned = 0;
@@ -416,7 +416,7 @@ int udisk_set_type(const char* devname, partition_type_t type) {
         u8 sector[512];
         disk_set_disk(disk);
 
-        if (disk_read(0, sector) != 0) return -1;
+        if (disk_read(0, 1, sector) != 0) return -1;
 
         for (int i = 0; i < 4; i++) {
             u8* entry = sector + 446 + i * 16;
@@ -428,7 +428,7 @@ int udisk_set_type(const char* devname, partition_type_t type) {
             }
         }
 
-        if (disk_write(0, sector) != 0) return -1;
+        if (disk_write(0, 1, sector) != 0) return -1;
     }
 
     scanned = 0;

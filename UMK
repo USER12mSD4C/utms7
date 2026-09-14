@@ -177,7 +177,7 @@ kom:
 	echo " MODULES BUILT "
 eoc
 
-iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin kom
+iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin kom
 	echo " CREATING ISO "
 	rm -rf iso
 	mkdir -p iso/boot/grub iso/modules

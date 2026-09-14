@@ -2,12 +2,16 @@
 #include "memory.h"
 #include "../include/string.h"
 
+extern u64 multiboot_info_ptr;
+extern void multiboot_modules_to_ramfs(void);
+
 static vfs_fs_ops_t* fs_list[16];
 static int fs_count = 0;
 static vfs_mount_t mounts[VFS_MAX_MOUNTS];
 static vfs_node_t* root_node = NULL;
 static int vfs_ready = 0;
 extern const char* fs_get_current_dir(void);
+extern u64 multiboot_info_ptr;
 
 static char* make_absolute_path(const char* path, char* buf, u32 buf_size) {
     if (!path || !buf || buf_size == 0) return NULL;
@@ -353,6 +357,13 @@ vfs_node_t* vfs_resolve_path(const char* path) {
 int vfs_mount_fs(const char* fstype, const char* dev, const char* mountpoint) {
     if (!fstype || !mountpoint) return -1;
 
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (mounts[i].used && strcmp(mounts[i].path, mountpoint) == 0) {
+            vfs_unmount(mountpoint);
+            break;
+        }
+    }
+
     vfs_fs_ops_t* ops = NULL;
     for (int i = 0; i < fs_count; i++) {
         if (strcmp(fs_list[i]->name, fstype) == 0) {
@@ -360,8 +371,6 @@ int vfs_mount_fs(const char* fstype, const char* dev, const char* mountpoint) {
             break;
         }
     }
-
-    if (!ops || !ops->mount) return -1;
 
     int slot = -1;
     for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
@@ -392,26 +401,37 @@ int vfs_mount_fs(const char* fstype, const char* dev, const char* mountpoint) {
 int vfs_unmount(const char* mountpoint) {
     if (!mountpoint) return -1;
 
+    int best = -1;
     for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (mounts[i].used && strcmp(mounts[i].path, mountpoint) == 0) {
-            vfs_node_t* old_root = mounts[i].root;
-
-            if (mounts[i].fs && mounts[i].fs->unmount) {
-                mounts[i].fs->unmount(old_root);
-            }
-
-            if (root_node == old_root) root_node = NULL;
-
-            mounts[i].used = 0;
-            mounts[i].root = NULL;
-            mounts[i].fs = NULL;
-            mounts[i].path[0] = '\0';
-
-            return 0;
+            best = i;
         }
     }
 
-    return -1;
+    if (best < 0) return -1;
+
+    vfs_node_t* old_root = mounts[best].root;
+
+    if (mounts[best].fs && mounts[best].fs->unmount) {
+        mounts[best].fs->unmount(old_root);
+    }
+
+    mounts[best].used = 0;
+    mounts[best].root = NULL;
+    mounts[best].fs = NULL;
+    mounts[best].path[0] = '\0';
+
+    if (strcmp(mountpoint, "/") == 0) {
+        root_node = NULL;
+        for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+            if (mounts[i].used && strcmp(mounts[i].path, "/") == 0) {
+                root_node = mounts[i].root;
+                break;
+            }
+        }
+    }
+
+    return 0;
 }
 
 int vfs_is_mounted(const char* path) {
@@ -657,6 +677,8 @@ int vfs_init(void) {
         vfs_mount_fs("devfs", NULL, "/dev");
     }
     vfs_mkdir("/proc", 0555);
+
+    multiboot_modules_to_ramfs();
 
     return 0;
 }

@@ -13,14 +13,14 @@ static int mbr_read(u8 drive, u32 lba, u8* buf) {
     int disk_num = drive - 0x80;
     if (disk_num < 0 || disk_num >= 4) return -1;
     disk_set_disk(disk_num);
-    return disk_read(lba, buf);
+    return disk_read(lba, 1, buf);
 }
 
 static int mbr_write(u8 drive, u32 lba, u8* buf) {
     int disk_num = drive - 0x80;
     if (disk_num < 0 || disk_num >= 4) return -1;
     disk_set_disk(disk_num);
-    return disk_write(lba, buf);
+    return disk_write(lba, 1, buf);
 }
 
 static void lba_to_chs(u32 lba, u8* chs) {
