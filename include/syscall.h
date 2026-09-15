@@ -49,6 +49,7 @@
 #define O_TRUNC    0x200
 #define O_APPEND   0x400
 #define SYS_fs_register  58
+#define SYS_fcntl 29
 
 // inform
 #define SYS_meminfo     50

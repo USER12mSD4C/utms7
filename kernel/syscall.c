@@ -32,6 +32,11 @@
 #define O_APPEND   0x400
 #endif
 
+#ifndef F_GETFL
+#define F_GETFL 3
+#define F_SETFL 4
+#endif
+
 extern void syscall_entry(void);
 
 static inline void wrmsr(u32 msr, u64 val) {
@@ -551,7 +556,6 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
 
     u64 max_vaddr = 0;
     u64 entry = elf_load(elf_data, elf_size, new_pml4, &max_vaddr);
-    print("SYS_EXEC: path="); print(path_buf); print(" entry="); printhex(entry); print("\n");
 
     if (entry == 0) {
         free_address_space(new_pml4);
@@ -642,6 +646,7 @@ static long sys_exec(trap_frame_t* frame, long path, long argv_ptr, long envp_pt
     memcpy((void*)auxv_base, auxv, sizeof(auxv));
 
     p->cr3 = (u64)new_pml4;
+    __asm__ volatile("mov %0, %%cr3" : : "r"(new_pml4) : "memory");
     p->user_rip = entry;
     p->user_rsp = rsp;
     p->heap_start = (max_vaddr + 4095) & ~4095ULL;
@@ -1232,6 +1237,21 @@ static long sys_fs_register(trap_frame_t* frame, long name, long a2, long a3, lo
     return -1;
 }
 
+static long sys_fcntl(trap_frame_t* frame, long fd, long cmd, long arg, long a4, long a5, long a6) {
+    (void)frame; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
+
+    if (cmd == F_GETFL) {
+        return p->fds[fd].flags;
+    } else if (cmd == F_SETFL) {
+        p->fds[fd].flags = (int)arg;
+        return 0;
+    }
+
+    return -1;
+}
+
 int syscall_init(void) {
     for (int i = 0; i < 64; i++) syscall_table[i] = NULL;
 
@@ -1264,6 +1284,7 @@ int syscall_init(void) {
     syscall_table[26] = sys_dup2;
     syscall_table[27] = sys_ioctl;
     syscall_table[28] = sys_clone;
+    syscall_table[29] = sys_fcntl;
     syscall_table[30] = sys_disk_list;
     syscall_table[37] = sys_partition_mount;
     syscall_table[38] = sys_partition_umount;

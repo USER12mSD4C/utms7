@@ -20,6 +20,12 @@ ASTNode *ast_ident(const char *name) {
     return node;
 }
 
+ASTNode *ast_string(const char *str) {
+    ASTNode *node = ast_new(AST_STRING);
+    node->name = strdup(str);
+    return node;
+}
+
 ASTNode *ast_binary(int op, ASTNode *left, ASTNode *right) {
     ASTNode *node = ast_new(AST_BINARY);
     node->op = op;
@@ -42,10 +48,24 @@ ASTNode *ast_var_decl(const char *name, ASTNode *init) {
     return node;
 }
 
+ASTNode *ast_global_var(const char *name, ASTNode *init) {
+    ASTNode *node = ast_new(AST_GLOBAL_VAR);
+    node->name = strdup(name);
+    node->left = init;
+    return node;
+}
+
 ASTNode *ast_assign(const char *name, ASTNode *value) {
     ASTNode *node = ast_new(AST_ASSIGN);
     node->name = strdup(name);
     node->left = value;
+    return node;
+}
+
+ASTNode *ast_assign_expr(ASTNode *target, ASTNode *value) {
+    ASTNode *node = ast_new(AST_ASSIGN);
+    node->left = target;
+    node->right = value;
     return node;
 }
 
@@ -68,6 +88,23 @@ ASTNode *ast_while(ASTNode *cond, ASTNode *body) {
     node->cond = cond;
     node->body = body;
     return node;
+}
+
+ASTNode *ast_for(ASTNode *init, ASTNode *cond, ASTNode *step, ASTNode *body) {
+    ASTNode *node = ast_new(AST_FOR);
+    node->init = init;
+    node->cond = cond;
+    node->step = step;
+    node->body = body;
+    return node;
+}
+
+ASTNode *ast_break(void) {
+    return ast_new(AST_BREAK);
+}
+
+ASTNode *ast_continue(void) {
+    return ast_new(AST_CONTINUE);
 }
 
 ASTNode *ast_block(void) {
@@ -106,6 +143,45 @@ ASTNode *ast_expr_stmt(ASTNode *expr) {
     return node;
 }
 
+ASTNode *ast_index(ASTNode *array, ASTNode *index) {
+    ASTNode *node = ast_new(AST_INDEX);
+    node->left = array;
+    node->right = index;
+    return node;
+}
+
+ASTNode *ast_member(ASTNode *object, const char *field, int op) {
+    ASTNode *node = ast_new(AST_MEMBER);
+    node->left = object;
+    node->name = strdup(field);
+    node->op = op;
+    return node;
+}
+
+ASTNode *ast_addr(ASTNode *operand) {
+    ASTNode *node = ast_new(AST_ADDR);
+    node->left = operand;
+    return node;
+}
+
+ASTNode *ast_deref(ASTNode *operand) {
+    ASTNode *node = ast_new(AST_DEREF);
+    node->left = operand;
+    return node;
+}
+
+ASTNode *ast_sizeof(ASTNode *operand) {
+    ASTNode *node = ast_new(AST_SIZEOF);
+    node->left = operand;
+    return node;
+}
+
+ASTNode *ast_type(int size) {
+    ASTNode *node = ast_new(AST_TYPE);
+    node->type_size = size;
+    return node;
+}
+
 void ast_free(ASTNode *node) {
     if (!node) return;
     if (node->name) free(node->name);
@@ -115,11 +191,19 @@ void ast_free(ASTNode *node) {
     if (node->then_body) ast_free(node->then_body);
     if (node->else_body) ast_free(node->else_body);
     if (node->body) ast_free(node->body);
+    if (node->init) ast_free(node->init);
+    if (node->step) ast_free(node->step);
     if (node->children) {
         for (int i = 0; i < node->child_count; i++) {
             ast_free(node->children[i]);
         }
         free(node->children);
+    }
+    if (node->params) {
+        for (int i = 0; i < node->param_count; i++) {
+            free(node->params[i]);
+        }
+        free(node->params);
     }
     free(node);
 }

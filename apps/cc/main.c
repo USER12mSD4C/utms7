@@ -5,22 +5,40 @@
 #include "../../lib/libc.h"
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        printf("usage: cc <input.c> [output.bin]\n");
+    const char *input = NULL;
+    char output[256];
+    output[0] = '\0';
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 >= argc) {
+                printf("usage: cc <input.c> [-o output]\n");
+                return 1;
+            }
+            i++;
+            snprintf(output, sizeof(output), "%s", argv[i]);
+        } else if (!input) {
+            input = argv[i];
+        } else if (output[0] == '\0') {
+            snprintf(output, sizeof(output), "%s", argv[i]);
+        } else {
+            printf("usage: cc <input.c> [-o output]\n");
+            return 1;
+        }
+    }
+
+    if (!input) {
+        printf("usage: cc <input.c> [-o output]\n");
         return 1;
     }
 
-    const char *input = argv[1];
-    char output[256];
-    if (argc >= 3) {
-        strcpy(output, argv[2]);
-    } else {
-        strcpy(output, input);
+    if (output[0] == '\0') {
+        snprintf(output, sizeof(output), "%s", input);
         int len = strlen(output);
-        if (len > 2 && output[len-2] == '.' && output[len-1] == 'c') {
-            output[len-2] = '\0';
+        if (len > 2 && output[len - 2] == '.' && output[len - 1] == 'c') {
+            output[len - 2] = '\0';
         }
-        strcat(output, ".bin");
+        strncat(output, ".bin", sizeof(output) - strlen(output) - 1);
     }
 
     int fd = open(input, 0);
@@ -55,7 +73,15 @@ int main(int argc, char **argv) {
         return 1;
     }
     codegen_init(cg);
-    codegen_generate(cg, program);
+
+    if (codegen_generate(cg, program) != 0) {
+        printf("cc: main function not found\n");
+        codegen_free(cg);
+        free(cg);
+        ast_free(program);
+        free(src);
+        return 1;
+    }
 
     if (elf_write(output, cg) != 0) {
         printf("cc: failed to write '%s'\n", output);
@@ -67,6 +93,12 @@ int main(int argc, char **argv) {
     }
 
     printf("cc: %s -> %s (%d bytes)\n", input, output, cg->size);
+    printf("cc: rodata=%d bytes\n", cg->rodata_size);
+    printf("cc: first bytes: ");
+    for (int i = 0; i < 16 && i < cg->size; i++) {
+        printf("%02x ", cg->code[i]);
+    }
+    printf("\n");
 
     codegen_free(cg);
     free(cg);

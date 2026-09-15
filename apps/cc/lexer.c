@@ -62,13 +62,38 @@ Token lexer_next(Lexer *lex) {
     if (c == ')') { advance(lex); return make_token(TOK_RPAREN); }
     if (c == '{') { advance(lex); return make_token(TOK_LBRACE); }
     if (c == '}') { advance(lex); return make_token(TOK_RBRACE); }
+    if (c == '[') { advance(lex); return make_token(TOK_LBRACKET); }
+    if (c == ']') { advance(lex); return make_token(TOK_RBRACKET); }
     if (c == ';') { advance(lex); return make_token(TOK_SEMICOLON); }
     if (c == ',') { advance(lex); return make_token(TOK_COMMA); }
-    if (c == '+') { advance(lex); return make_token(TOK_PLUS); }
-    if (c == '-') { advance(lex); return make_token(TOK_MINUS); }
-    if (c == '*') { advance(lex); return make_token(TOK_STAR); }
-    if (c == '/') { advance(lex); return make_token(TOK_SLASH); }
+    if (c == '?') { advance(lex); return make_token(TOK_QUESTION); }
+    if (c == ':') { advance(lex); return make_token(TOK_COLON); }
+    if (c == '.') { advance(lex); return make_token(TOK_DOT); }
     if (c == '%') { advance(lex); return make_token(TOK_PERCENT); }
+
+    if (c == '+') {
+        advance(lex);
+        if (peek(lex) == '+') { advance(lex); return make_token(TOK_INC); }
+        if (peek(lex) == '=') { advance(lex); return make_token(TOK_PLUS_EQ); }
+        return make_token(TOK_PLUS);
+    }
+    if (c == '-') {
+        advance(lex);
+        if (peek(lex) == '-') { advance(lex); return make_token(TOK_DEC); }
+        if (peek(lex) == '=') { advance(lex); return make_token(TOK_MINUS_EQ); }
+        if (peek(lex) == '>') { advance(lex); return make_token(TOK_ARROW); }
+        return make_token(TOK_MINUS);
+    }
+    if (c == '*') {
+        advance(lex);
+        if (peek(lex) == '=') { advance(lex); return make_token(TOK_STAR_EQ); }
+        return make_token(TOK_STAR);
+    }
+    if (c == '/') {
+        advance(lex);
+        if (peek(lex) == '=') { advance(lex); return make_token(TOK_SLASH_EQ); }
+        return make_token(TOK_SLASH);
+    }
 
     if (c == '=') {
         advance(lex);
@@ -93,12 +118,52 @@ Token lexer_next(Lexer *lex) {
     if (c == '&') {
         advance(lex);
         if (peek(lex) == '&') { advance(lex); return make_token(TOK_AND); }
-        return make_error("expected &&");
+        return make_token(TOK_AMP);
     }
     if (c == '|') {
         advance(lex);
         if (peek(lex) == '|') { advance(lex); return make_token(TOK_OR); }
         return make_error("expected ||");
+    }
+
+    if (c == '"') {
+        advance(lex);
+        Token tok = make_token(TOK_STRING);
+        int i = 0;
+        while (peek(lex) && peek(lex) != '"' && peek(lex) != '\n') {
+            char ch = advance(lex);
+            if (ch == '\\' && peek(lex)) {
+                char next = advance(lex);
+                if (next == 'n') ch = '\n';
+                else if (next == 't') ch = '\t';
+                else if (next == '\\') ch = '\\';
+                else if (next == '"') ch = '"';
+                else if (next == '0') ch = '\0';
+                else ch = next;
+            }
+            if (i < 254) tok.text[i++] = ch;
+        }
+        tok.text[i] = '\0';
+        if (peek(lex) == '"') advance(lex);
+        return tok;
+    }
+
+    if (c == '\'') {
+        advance(lex);
+        Token tok = make_token(TOK_NUMBER);
+        char ch = advance(lex);
+        if (ch == '\\' && peek(lex)) {
+            char next = advance(lex);
+            if (next == 'n') ch = '\n';
+            else if (next == 't') ch = '\t';
+            else if (next == '\\') ch = '\\';
+            else if (next == '\'') ch = '\'';
+            else if (next == '0') ch = '\0';
+            else ch = next;
+        }
+        tok.value = (unsigned char)ch;
+        if (peek(lex) == '\'') advance(lex);
+        return tok;
     }
 
     if (c >= '0' && c <= '9') {
@@ -119,6 +184,7 @@ Token lexer_next(Lexer *lex) {
                 val = val * 10 + (advance(lex) - '0');
             }
         }
+        if (peek(lex) == 'L' || peek(lex) == 'l') advance(lex);
         tok.value = val;
         return tok;
     }
@@ -135,11 +201,19 @@ Token lexer_next(Lexer *lex) {
 
         if (strcmp(tok.text, "int") == 0) tok.type = TOK_INT;
         else if (strcmp(tok.text, "void") == 0) tok.type = TOK_VOID;
+        else if (strcmp(tok.text, "char") == 0) tok.type = TOK_CHAR;
+        else if (strcmp(tok.text, "long") == 0) tok.type = TOK_LONG;
+        else if (strcmp(tok.text, "short") == 0) tok.type = TOK_SHORT;
+        else if (strcmp(tok.text, "unsigned") == 0) tok.type = TOK_UNSIGNED;
         else if (strcmp(tok.text, "return") == 0) tok.type = TOK_RETURN;
         else if (strcmp(tok.text, "if") == 0) tok.type = TOK_IF;
         else if (strcmp(tok.text, "else") == 0) tok.type = TOK_ELSE;
         else if (strcmp(tok.text, "while") == 0) tok.type = TOK_WHILE;
         else if (strcmp(tok.text, "for") == 0) tok.type = TOK_FOR;
+        else if (strcmp(tok.text, "break") == 0) tok.type = TOK_BREAK;
+        else if (strcmp(tok.text, "continue") == 0) tok.type = TOK_CONTINUE;
+        else if (strcmp(tok.text, "struct") == 0) tok.type = TOK_STRUCT;
+        else if (strcmp(tok.text, "typedef") == 0) tok.type = TOK_TYPEDEF;
         else tok.type = TOK_IDENT;
         return tok;
     }
@@ -157,17 +231,28 @@ const char *token_type_name(TokenType type) {
         case TOK_EOF: return "EOF";
         case TOK_INT: return "int";
         case TOK_VOID: return "void";
+        case TOK_CHAR: return "char";
+        case TOK_LONG: return "long";
+        case TOK_SHORT: return "short";
+        case TOK_UNSIGNED: return "unsigned";
         case TOK_RETURN: return "return";
         case TOK_IF: return "if";
         case TOK_ELSE: return "else";
         case TOK_WHILE: return "while";
         case TOK_FOR: return "for";
+        case TOK_BREAK: return "break";
+        case TOK_CONTINUE: return "continue";
+        case TOK_STRUCT: return "struct";
+        case TOK_TYPEDEF: return "typedef";
         case TOK_IDENT: return "identifier";
         case TOK_NUMBER: return "number";
+        case TOK_STRING: return "string";
         case TOK_LPAREN: return "(";
         case TOK_RPAREN: return ")";
         case TOK_LBRACE: return "{";
         case TOK_RBRACE: return "}";
+        case TOK_LBRACKET: return "[";
+        case TOK_RBRACKET: return "]";
         case TOK_SEMICOLON: return ";";
         case TOK_COMMA: return ",";
         case TOK_ASSIGN: return "=";
@@ -185,6 +270,17 @@ const char *token_type_name(TokenType type) {
         case TOK_AND: return "&&";
         case TOK_OR: return "||";
         case TOK_NOT: return "!";
+        case TOK_AMP: return "&";
+        case TOK_ARROW: return "->";
+        case TOK_DOT: return ".";
+        case TOK_PLUS_EQ: return "+=";
+        case TOK_MINUS_EQ: return "-=";
+        case TOK_STAR_EQ: return "*=";
+        case TOK_SLASH_EQ: return "/=";
+        case TOK_INC: return "++";
+        case TOK_DEC: return "--";
+        case TOK_QUESTION: return "?";
+        case TOK_COLON: return ":";
         case TOK_ERROR: return "error";
         default: return "unknown";
     }

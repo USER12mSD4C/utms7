@@ -29,6 +29,7 @@
 
 typedef long ssize_t;
 typedef long off_t;
+typedef long time_t;
 
 #define EOF (-1)
 
@@ -193,7 +194,7 @@ int putenv(char *string);
 int setenv(const char *name, const char *value, int overwrite);
 void unsetenv(const char *name);
 
-unsigned int time(void);
+time_t time(time_t *tloc);
 unsigned int getticks(void);
 
 int disk_list(void* disks, int max);
@@ -287,5 +288,42 @@ unsigned int getuid(void);
 unsigned int geteuid(void);
 unsigned int getgid(void);
 unsigned int getegid(void);
+
+#define F_GETFL 3
+#define F_SETFL 4
+
+int fcntl(int fd, int cmd, ...);
+extern char *optarg;
+extern int optind, opterr, optopt;
+int getopt(int argc, char *const argv[], const char *optstring);
+
+struct tm {
+    int tm_sec;
+    int tm_min;
+    int tm_hour;
+    int tm_mday;
+    int tm_mon;
+    int tm_year;
+    int tm_wday;
+    int tm_yday;
+    int tm_isdst;
+};
+
+struct tm *gmtime_r(const time_t *timep, struct tm *result);
+struct tm *gmtime(const time_t *timep);
+struct tm *localtime_r(const time_t *timep, struct tm *result);
+struct tm *localtime(const time_t *timep);
+time_t mktime(struct tm *tm);
+size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
+
+#define SIGINT 2
+#define SIGTERM 15
+#define SIG_DFL ((sighandler_t)0)
+#define SIG_IGN ((sighandler_t)1)
+#define SIG_ERR ((sighandler_t)-1)
+
+typedef void (*sighandler_t)(int);
+sighandler_t signal(int signum, sighandler_t handler);
+int raise(int sig);
 
 #endif

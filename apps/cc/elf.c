@@ -52,7 +52,7 @@ typedef struct {
 } Elf64_Sym;
 
 int elf_write(const char *filename, CodeGen *cg) {
-    int fd = open(filename, 0x41, 0755);
+    int fd = open(filename, 0x241, 0755);
     if (fd < 0) return -1;
 
     u64 text_offset = sizeof(Elf64_Ehdr) + sizeof(Elf64_Phdr);
@@ -129,12 +129,20 @@ int elf_write(const char *filename, CodeGen *cg) {
     shdrs[4].sh_size = sizeof(strtab);
     shdrs[4].sh_addralign = 1;
 
+    u64 main_addr = 0x40000000;
+    for (int i = 0; i < cg->func_count; i++) {
+        if (strcmp(cg->funcs[i].name, "main") == 0) {
+            main_addr = 0x40000000 + (u64)cg->funcs[i].offset;
+            break;
+        }
+    }
+
     Elf64_Sym syms[2];
     memset(syms, 0, sizeof(syms));
     syms[1].st_name = 1;
     syms[1].st_info = 0x12;
     syms[1].st_shndx = 1;
-    syms[1].st_value = 0x40000000;
+    syms[1].st_value = main_addr;
     syms[1].st_size = cg->size;
 
     write(fd, &ehdr, sizeof(ehdr));

@@ -1,6 +1,7 @@
 #include "vfs.h"
 #include "memory.h"
 #include "../include/string.h"
+#include "../include/print.h"
 
 extern u64 multiboot_info_ptr;
 extern void multiboot_modules_to_ramfs(void);
@@ -699,6 +700,7 @@ int vfs_read_entire(const char* path, u8** data, u32* size) {
     }
 
     u32 sz = (u32)node->size;
+
     u8* buf = kmalloc(sz + 1);
     if (!buf) {
         vfs_close(node);

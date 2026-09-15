@@ -255,7 +255,11 @@ void unsetenv(const char *name) {
     }
 }
 
-unsigned int time(void) { return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0) / 1000; }
+time_t time(time_t *tloc) {
+    time_t t = (time_t)(syscall(SYS_gettime, 0, 0, 0, 0, 0, 0) / 1000);
+    if (tloc) *tloc = t;
+    return t;
+}
 unsigned int getticks(void) { return syscall(SYS_gettime, 0, 0, 0, 0, 0, 0); }
 
 int socket(int domain, int type, int protocol) { return syscall(SYS_socket, domain, type, protocol, 0, 0, 0); }
@@ -353,7 +357,253 @@ int access(const char *pathname, int mode) {
     return -1;
 }
 
+int fcntl(int fd, int cmd, ...) {
+    long arg = 0;
+    if (cmd == F_SETFL) {
+        va_list args;
+        va_start(args, cmd);
+        arg = va_arg(args, long);
+        va_end(args);
+    }
+    return syscall(SYS_fcntl, fd, cmd, arg, 0, 0, 0);
+}
+
+char *optarg = NULL;
+int optind = 1;
+int opterr = 1;
+int optopt = 0;
+
+int getopt(int argc, char *const argv[], const char *optstring) {
+    static char *next = NULL;
+
+    if (optind >= argc) return -1;
+
+    char *arg = argv[optind];
+
+    if (!next || *next == '\0') {
+        if (arg[0] != '-' || arg[1] == '\0') return -1;
+
+        if (arg[1] == '-' && arg[2] == '\0') {
+            optind++;
+            return -1;
+        }
+
+        next = arg + 1;
+    }
+
+    char c = *next++;
+    const char *match = strchr(optstring, c);
+
+    if (!match || c == ':') {
+        optopt = c;
+        if (*next == '\0') optind++;
+        if (opterr && optstring[0] != ':') {
+            write(2, "getopt: invalid option -- '", 27);
+            write(2, &c, 1);
+            write(2, "'\n", 2);
+        }
+        return '?';
+    }
+
+    if (match[1] == ':') {
+        if (*next != '\0') {
+            optarg = next;
+            next = NULL;
+        } else if (optind + 1 < argc) {
+            optarg = argv[++optind];
+        } else {
+            optopt = c;
+            if (optstring[0] == ':') return ':';
+            if (opterr) {
+                write(2, "getopt: option requires an argument -- '", 40);
+                write(2, &c, 1);
+                write(2, "'\n", 2);
+            }
+            return '?';
+        }
+        optind++;
+    } else {
+        optarg = NULL;
+        if (*next == '\0') optind++;
+    }
+
+    return c;
+}
+
 unsigned int getuid(void) { return 0; }
 unsigned int geteuid(void) { return 0; }
 unsigned int getgid(void) { return 0; }
 unsigned int getegid(void) { return 0; }
+
+static const int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+static int is_leap_year(int year) {
+    return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+struct tm *gmtime_r(const time_t *timep, struct tm *result) {
+    time_t t = *timep;
+    result->tm_sec = t % 60;
+    t /= 60;
+    result->tm_min = t % 60;
+    t /= 60;
+    result->tm_hour = t % 24;
+    t /= 24;
+
+    result->tm_wday = (t + 4) % 7;
+
+    int year = 1970;
+    while (1) {
+        int days_in_year = is_leap_year(year) ? 366 : 365;
+        if (t < days_in_year) break;
+        t -= days_in_year;
+        year++;
+    }
+    result->tm_year = year - 1900;
+    result->tm_yday = t;
+
+    int mon = 0;
+    while (1) {
+        int dim = days_in_month[mon];
+        if (mon == 1 && is_leap_year(year)) dim++;
+        if (t < dim) break;
+        t -= dim;
+        mon++;
+    }
+    result->tm_mon = mon;
+    result->tm_mday = t + 1;
+    result->tm_isdst = 0;
+
+    return result;
+}
+
+static struct tm tm_buffer;
+
+struct tm *gmtime(const time_t *timep) {
+    return gmtime_r(timep, &tm_buffer);
+}
+
+struct tm *localtime_r(const time_t *timep, struct tm *result) {
+    return gmtime_r(timep, result);
+}
+
+struct tm *localtime(const time_t *timep) {
+    return gmtime(timep);
+}
+
+time_t mktime(struct tm *tm) {
+    time_t days = 0;
+    int year = tm->tm_year + 1900;
+
+    for (int y = 1970; y < year; y++) {
+        days += is_leap_year(y) ? 366 : 365;
+    }
+
+    for (int m = 0; m < tm->tm_mon; m++) {
+        days += days_in_month[m];
+        if (m == 1 && is_leap_year(year)) days++;
+    }
+
+    days += tm->tm_mday - 1;
+
+    return days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+}
+
+static void append_str(char **dst, size_t *remaining, const char *src) {
+    while (*src && *remaining > 1) {
+        **dst = *src++;
+        (*dst)++;
+        (*remaining)--;
+    }
+    **dst = '\0';
+}
+
+static void append_num(char **dst, size_t *remaining, int val, int width) {
+    char buf[16];
+    int i = 0;
+
+    if (val < 0) val = 0;
+
+    do {
+        buf[i++] = '0' + (val % 10);
+        val /= 10;
+    } while (val > 0);
+
+    while (i < width) buf[i++] = '0';
+
+    while (i > 0 && *remaining > 1) {
+        **dst = buf[--i];
+        (*dst)++;
+        (*remaining)--;
+    }
+    **dst = '\0';
+}
+
+size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm) {
+    if (max == 0) return 0;
+
+    char *dst = s;
+    size_t remaining = max;
+
+    while (*fmt && remaining > 1) {
+        if (*fmt == '%') {
+            fmt++;
+            switch (*fmt) {
+                case 'Y':
+                    append_num(&dst, &remaining, tm->tm_year + 1900, 4);
+                    break;
+                case 'm':
+                    append_num(&dst, &remaining, tm->tm_mon + 1, 2);
+                    break;
+                case 'd':
+                    append_num(&dst, &remaining, tm->tm_mday, 2);
+                    break;
+                case 'H':
+                    append_num(&dst, &remaining, tm->tm_hour, 2);
+                    break;
+                case 'M':
+                    append_num(&dst, &remaining, tm->tm_min, 2);
+                    break;
+                case 'S':
+                    append_num(&dst, &remaining, tm->tm_sec, 2);
+                    break;
+                case 'n':
+                    append_str(&dst, &remaining, "\n");
+                    break;
+                case 't':
+                    append_str(&dst, &remaining, "\t");
+                    break;
+                case '%':
+                    append_str(&dst, &remaining, "%");
+                    break;
+                case '\0':
+                    fmt--;
+                    break;
+                default:
+                    append_str(&dst, &remaining, "%");
+                    if (remaining > 1) {
+                        append_str(&dst, &remaining, (char[]){*fmt, '\0'});
+                    }
+                    break;
+            }
+        } else {
+            append_str(&dst, &remaining, (char[]){*fmt, '\0'});
+        }
+        fmt++;
+    }
+
+    return max - remaining;
+}
+
+sighandler_t signal(int signum, sighandler_t handler) {
+    (void)signum;
+    (void)handler;
+    return SIG_DFL;
+}
+
+int raise(int sig) {
+    if (sig == SIGINT || sig == SIGTERM) {
+        _exit(128 + sig);
+    }
+    return -1;
+}

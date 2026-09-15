@@ -22,6 +22,22 @@ typedef struct {
 
 static char cwd[256] = "/";
 static char heredoc_file[64];
+static int last_status = 0;
+static char status_buf[32];
+
+static void update_status(int code) {
+    if (code < 0) code = 1;
+    last_status = code;
+}
+
+static void expand_shell_vars(char **tokens, int count) {
+    snprintf(status_buf, sizeof(status_buf), "%d", last_status);
+    for (int i = 0; i < count; i++) {
+        if (strcmp(tokens[i], "$?") == 0) {
+            tokens[i] = status_buf;
+        }
+    }
+}
 
 static void out(const char *s) {
     write(1, s, strlen(s));
@@ -645,6 +661,7 @@ int main(int argc, char **argv) {
             }
         }
 
+        expand_shell_vars(tokens, targc);
         char *cmd_argv[MAX_ARGS + 1];
         int cmd_argc = 0;
 
@@ -718,6 +735,7 @@ int main(int argc, char **argv) {
             set_color(COL_ERR, 0);
             out("sh: parse error\n");
             set_color(COL_RESET, 0);
+            update_status(1);
             continue;
         }
 
@@ -731,6 +749,7 @@ int main(int argc, char **argv) {
                 set_color(COL_ERR, 0);
                 out("sh: cannot create heredoc file\n");
                 set_color(COL_RESET, 0);
+                update_status(1);
                 continue;
             }
 
@@ -742,6 +761,7 @@ int main(int argc, char **argv) {
                 set_color(COL_ERR, 0);
                 out("sh: heredoc failed\n");
                 set_color(COL_RESET, 0);
+                update_status(1);
                 continue;
             }
 
@@ -755,14 +775,15 @@ int main(int argc, char **argv) {
                 set_color(COL_ERR, 0);
                 out("sh: cannot open heredoc file\n");
                 set_color(COL_RESET, 0);
+                update_status(1);
                 continue;
             }
         }
 
         if (is_builtin(cmd_argv[0])) {
-            run_builtin_with_redirect(cmd_argc, cmd_argv, in_fd, out_fd);
+            update_status(run_builtin_with_redirect(cmd_argc, cmd_argv, in_fd, out_fd));
         } else {
-            run_external(cmd_argc, cmd_argv, in_fd, out_fd);
+            update_status(run_external(cmd_argc, cmd_argv, in_fd, out_fd));
         }
 
         if (heredoc_file[0]) {
