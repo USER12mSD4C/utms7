@@ -9,7 +9,9 @@ static int cat_fd(int fd) {
     ssize_t r;
 
     while ((r = read(fd, buf, sizeof(buf))) > 0) {
-        write(1, buf, (size_t)r);
+        if (write(1, buf, (size_t)r) != r) {
+            return -1;
+        }
     }
 
     return (r < 0) ? -1 : 0;

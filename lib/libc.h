@@ -44,10 +44,10 @@ typedef long off_t;
 extern int errno;
 
 struct stat {
-    unsigned long st_size;
-    int st_mode;
-    int st_blocks;
-};
+    u32 st_size;
+    u8 st_is_dir;
+    u32 st_blocks;
+} __attribute__((packed));
 
 struct dirent {
     char name[256];

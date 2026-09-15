@@ -41,10 +41,10 @@ static inline void wrmsr(u32 msr, u64 val) {
 }
 
 typedef struct {
-    u32 size;
-    u8 is_dir;
-    u32 blocks;
-} sys_stat_t;
+    u32 st_size;
+    u8 st_is_dir;
+    u32 st_blocks;
+} __attribute__((packed)) sys_stat_t;
 
 static int is_user_pointer(void* ptr) {
     u64 addr = (u64)ptr;
@@ -178,7 +178,7 @@ static long sys_write(trap_frame_t* frame, long fd, long buf, long count, long a
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
     if (!is_user_pointer((void*)buf)) return -1;
-    if (fd == 1 || fd == 2) {
+    if ((fd == 1 || fd == 2) && p->fds[fd].data.vnode == NULL) {
         char temp[256];
         long left = count;
         long offset = 0;
@@ -209,7 +209,7 @@ static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
     if (!is_user_pointer((void*)buf)) return -1;
-    if (fd == 0) {
+    if (fd == 0 && p->fds[0].data.vnode == NULL) {
         long read_count = 0;
         u8 *user_buf = (u8*)buf;
         while (!keyboard_data_ready()) { __asm__ volatile("sti"); sched_sleep(1); }
@@ -710,9 +710,9 @@ static long sys_stat(trap_frame_t* frame, long path, long statbuf, long a3, long
     sys_stat_t st;
     u64 size; u32 mode; u8 is_dir;
     vfs_stat(node, &size, &mode, &is_dir);
-    st.size = (u32)size;
-    st.is_dir = is_dir;
-    st.blocks = (st.size + 511) / 512;
+    st.st_size = (u32)size;
+    st.st_is_dir = is_dir;
+    st.st_blocks = (st.st_size + 511) / 512;
     if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;
     return 0;
 }
@@ -729,13 +729,13 @@ static long sys_fstat(trap_frame_t* frame, long fd, long statbuf, long a3, long 
         if (!node) return -1;
         u64 size; u32 mode; u8 is_dir;
         vfs_stat(node, &size, &mode, &is_dir);
-        st.size = (u32)size;
-        st.is_dir = is_dir;
-        st.blocks = (st.size + 511) / 512;
+        st.st_size = (u32)size;
+        st.st_is_dir = is_dir;
+        st.st_blocks = (st.st_size + 511) / 512;
     } else {
-        st.size = 0;
-        st.is_dir = 0;
-        st.blocks = 0;
+        st.st_size = 0;
+        st.st_is_dir = 0;
+        st.st_blocks = 0;
     }
 
     if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;

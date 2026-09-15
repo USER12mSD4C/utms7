@@ -170,6 +170,10 @@ mkfs.ext4.bin: apps/mkfs.o $(UCRT)
 	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.ext4.bin apps/mkfs.o $(UCRT)
 eoc
 
+rmdir.bin: apps/rmdir.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o rmdir.bin $(UCRT) apps/rmdir.o
+eoc
+
 kom:
 	mkdir -p modules
 	cp drivers/mbr.o modules/mbr.ko
@@ -177,7 +181,7 @@ kom:
 	echo " MODULES BUILT "
 eoc
 
-iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin kom
+iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin rmdir.bin kom
 	echo " CREATING ISO "
 	rm -rf iso
 	mkdir -p iso/boot/grub iso/modules
@@ -200,6 +204,7 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	cp cat.bin iso/modules/cat.bin
 	cp cp.bin iso/modules/cp.bin
 	cp mk.bin iso/modules/mk.bin
+	cp rmdir.bin iso/modules/rmdir.bin
 	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
 	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
 	sh -c 'echo "set default=0" >> iso/boot/grub/grub.cfg'
@@ -253,6 +258,7 @@ build:
 	call cat.bin
 	call cp.bin
 	call mk.bin
+	call rmdir.bin
 	call kom
 	echo " BUILD COMPLETE "
 	+flags:

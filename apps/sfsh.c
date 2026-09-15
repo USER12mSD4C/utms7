@@ -204,7 +204,9 @@ static int cat_fd(int fd) {
     ssize_t r;
 
     while ((r = read(fd, buf, sizeof(buf))) > 0) {
-        write(1, buf, (size_t)r);
+        if (write(1, buf, (size_t)r) != r) {
+            return -1;
+        }
     }
 
     return (r < 0) ? -1 : 0;
@@ -513,19 +515,18 @@ static int run_external(int argc, char **argv, int in_fd, int out_fd) {
 }
 
 static int make_heredoc_file(void) {
-    const char *candidates[3];
-    candidates[0] = "/tmp/.heredoc";
-    candidates[1] = "/.heredoc";
-    candidates[2] = ".heredoc";
+    int fd = open(".heredoc", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        close(fd);
+        strcpy(heredoc_file, ".heredoc");
+        return 0;
+    }
 
-    for (int i = 0; i < 3; i++) {
-        int fd = open(candidates[i], O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0) {
-            close(fd);
-            strncpy(heredoc_file, candidates[i], sizeof(heredoc_file) - 1);
-            heredoc_file[sizeof(heredoc_file) - 1] = '\0';
-            return 0;
-        }
+    fd = open("/tmp/.heredoc", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) {
+        close(fd);
+        strcpy(heredoc_file, "/tmp/.heredoc");
+        return 0;
     }
 
     return -1;
@@ -545,6 +546,7 @@ static int collect_heredoc(const char *delim, const char *path) {
         if (read(0, &c, 1) <= 0) continue;
 
         if (c == '\n' || c == '\r') {
+            write(1, "\n", 1);
             hline[hpos] = '\0';
 
             if (strcmp(hline, delim) == 0) break;
@@ -555,9 +557,15 @@ static int collect_heredoc(const char *delim, const char *path) {
             hpos = 0;
             out("> ");
         } else if (c == '\b' || c == 0x7F) {
-            if (hpos > 0) hpos--;
+            if (hpos > 0) {
+                hpos--;
+                write(1, "\b \b", 3);
+            }
         } else if (c >= 32 && c <= 126) {
-            if (hpos < MAX_LINE - 1) hline[hpos++] = c;
+            if (hpos < MAX_LINE - 1) {
+                hline[hpos++] = c;
+                write(1, &c, 1);
+            }
         }
     }
 
@@ -626,6 +634,16 @@ int main(int argc, char **argv) {
         }
 
         tokens[targc] = NULL;
+
+        for (int i = 0; i < targc; i++) {
+            int len = strlen(tokens[i]);
+            if (len >= 2 && (tokens[i][0] == '\'' || tokens[i][0] == '"')) {
+                if (tokens[i][len - 1] == tokens[i][0]) {
+                    tokens[i][len - 1] = '\0';
+                    tokens[i]++;
+                }
+            }
+        }
 
         char *cmd_argv[MAX_ARGS + 1];
         int cmd_argc = 0;

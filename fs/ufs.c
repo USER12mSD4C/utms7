@@ -269,6 +269,8 @@ static int ufs_remove_from_dir(ufs_mount_t* mnt, u32 dir_ino, const char* name) 
                 ents[j].inode = 0;
                 ents[j].name[0] = '\0';
                 ufs_write_block(mnt, b, mnt->blk_buf);
+                dir.size -= sizeof(ufs_dirent_t);
+                ufs_write_inode(mnt, dir_ino, &dir);
                 return 0;
             }
         }
@@ -365,7 +367,23 @@ static int ufs_vfs_unlink(vfs_node_t* dir, const char* name) {
     if (ufs_read_inode(mnt, ino, &inode) != 0) return -1;
 
     if (inode.mode & UFS_INODE_DIR) {
-        if (inode.size > 2 * sizeof(ufs_dirent_t)) return -1;
+        if (inode.size > 2 * sizeof(ufs_dirent_t)) {
+            u32 blocks = (inode.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE;
+            int has_entries = 0;
+            for (u32 i = 0; i < blocks && !has_entries; i++) {
+                u32 b = ufs_get_block(&inode, i);
+                if (!b) continue;
+                if (ufs_read_block(mnt, b, mnt->blk_buf) != 0) continue;
+                ufs_dirent_t* ents = (ufs_dirent_t*)mnt->blk_buf;
+                for (int j = 0; j < UFS_BLOCK_SIZE / sizeof(ufs_dirent_t); j++) {
+                    if (ents[j].inode != 0) {
+                        has_entries = 1;
+                        break;
+                    }
+                }
+            }
+            if (has_entries) return -1;
+        }
     }
 
     ufs_free_inode_blocks(mnt, ino);
