@@ -74,7 +74,17 @@
 #define SYS_bind        48
 #define SYS_listen      49
 #define SYS_accept      50
-#define SYS_poll        51
+
+//idgaf no more about listing them fuck ts
+#define SYS_fs_register  58
+#define SYS_pci_map      59
+#define SYS_pci_unmap    60
+#define SYS_irq_register 61
+#define SYS_irq_wait     62
+#define SYS_ioport_in    63
+#define SYS_ioport_out   64
+#define SYS_poll         65
+
 
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6);
 

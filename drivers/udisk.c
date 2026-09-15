@@ -11,7 +11,7 @@
 static disk_info_t disks[4];
 static int scanned = 0;
 static u64 last_scan_tick = 0;
-extern u32 system_ticks;
+extern u32 get_ticks(void);
 
 int udisk_init(void);
 
@@ -212,7 +212,7 @@ int udisk_init(void) {
 }
 
 int udisk_scan(void) {
-    if (scanned && system_ticks - last_scan_tick < 50) {
+    if (scanned && get_ticks() - last_scan_tick < 50) {
         return 0;
     }
 
@@ -221,7 +221,7 @@ int udisk_scan(void) {
     }
 
     scanned = 1;
-    last_scan_tick = system_ticks;
+    last_scan_tick = get_ticks();
     return 0;
 }
 

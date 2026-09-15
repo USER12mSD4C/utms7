@@ -6,7 +6,7 @@
 #include "../drivers/drm.h"
 #include "ufs.h"
 
-extern u32 system_ticks;
+extern u32 get_ticks(void);
 
 typedef struct { u32 start; u32 len; } extent_t;
 
@@ -54,6 +54,8 @@ typedef struct {
     u32 part_start;
     int current_disk;
     vfs_node_t* dev_node;
+    u32 next_free_block;
+    u32 next_free_inode;
     u8 blk_buf[UFS_BLOCK_SIZE] __attribute__((aligned(16)));
     u8 inode_buf[UFS_BLOCK_SIZE] __attribute__((aligned(16)));
 } ufs_mount_t;
@@ -70,6 +72,11 @@ static int ufs_write_block(ufs_mount_t* mnt, u32 b, u8* buf) {
     u64 offset = (u64)b * UFS_BLOCK_SIZE;
     int res = vfs_write(mnt->dev_node, buf, UFS_BLOCK_SIZE, offset);
     return (res == UFS_BLOCK_SIZE) ? 0 : -1;
+}
+
+static int ufs_write_superblock(ufs_mount_t* mnt) {
+    memcpy(mnt->blk_buf, &mnt->sb, sizeof(ufs_superblock_t));
+    return ufs_write_block(mnt, 0, mnt->blk_buf);
 }
 
 static int ufs_read_inode(ufs_mount_t* mnt, u32 ino, ufs_inode_t* out) {
@@ -113,13 +120,22 @@ static int ufs_bitmap_set(ufs_mount_t* mnt, u32 b, int val) {
 }
 
 static u32 ufs_alloc_block(ufs_mount_t* mnt) {
-    for (u32 i = mnt->sb.data_start; i < mnt->sb.total_blocks; i++) {
-        if (ufs_bitmap_get(mnt, i) == 0) {
-            ufs_bitmap_set(mnt, i, 1);
+    u32 start = mnt->next_free_block;
+    if (start < mnt->sb.data_start) start = mnt->sb.data_start;
+
+    for (u32 i = 0; i < mnt->sb.total_blocks; i++) {
+        u32 b = start + i;
+        if (b >= mnt->sb.total_blocks) b = mnt->sb.data_start + (b - mnt->sb.total_blocks);
+        if (b < mnt->sb.data_start) continue;
+
+        if (ufs_bitmap_get(mnt, b) == 0) {
+            ufs_bitmap_set(mnt, b, 1);
             mnt->sb.free_blocks--;
+            mnt->next_free_block = b + 1;
             memset(mnt->blk_buf, 0, UFS_BLOCK_SIZE);
-            ufs_write_block(mnt, i, mnt->blk_buf);
-            return i;
+            ufs_write_block(mnt, b, mnt->blk_buf);
+            ufs_write_superblock(mnt);
+            return b;
         }
     }
     return 0;
@@ -129,23 +145,34 @@ static void ufs_free_block(ufs_mount_t* mnt, u32 b) {
     if (b == 0 || b >= mnt->sb.total_blocks) return;
     ufs_bitmap_set(mnt, b, 0);
     mnt->sb.free_blocks++;
+    if (b < mnt->next_free_block) mnt->next_free_block = b;
+    ufs_write_superblock(mnt);
 }
 
 static u32 ufs_alloc_inode(ufs_mount_t* mnt) {
     u32 inodes_per_block = UFS_BLOCK_SIZE / sizeof(ufs_inode_t);
     u32 total_blocks = (mnt->sb.inode_count + inodes_per_block - 1) / inodes_per_block;
-    for (u32 i = 0; i < total_blocks; i++) {
+    u32 start = mnt->next_free_inode;
+    if (start < 1) start = 1;
+    if (start > mnt->sb.inode_count) start = 1;
+
+    for (u32 k = 0; k < mnt->sb.inode_count; k++) {
+        u32 ino = start + k;
+        if (ino > mnt->sb.inode_count) ino = 1 + (ino - mnt->sb.inode_count - 1);
+        if (ino == 0 || ino > mnt->sb.inode_count) continue;
+
+        u32 i = (ino - 1) / inodes_per_block;
+        u32 j = (ino - 1) % inodes_per_block;
+
         if (ufs_read_block(mnt, mnt->sb.inode_table_start + i, mnt->blk_buf) != 0) continue;
         ufs_inode_t* inodes = (ufs_inode_t*)mnt->blk_buf;
-        for (u32 j = 0; j < inodes_per_block; j++) {
-            if (inodes[j].mode == 0) {
-                u32 ino = i * inodes_per_block + j + 1;
-                if (ino > mnt->sb.inode_count) break;
-                memset(&inodes[j], 0, sizeof(ufs_inode_t));
-                ufs_write_block(mnt, mnt->sb.inode_table_start + i, mnt->blk_buf);
-                mnt->sb.free_inodes--;
-                return ino;
-            }
+        if (inodes[j].mode == 0) {
+            memset(&inodes[j], 0, sizeof(ufs_inode_t));
+            ufs_write_block(mnt, mnt->sb.inode_table_start + i, mnt->blk_buf);
+            mnt->sb.free_inodes--;
+            mnt->next_free_inode = ino + 1;
+            ufs_write_superblock(mnt);
+            return ino;
         }
     }
     return 0;
@@ -158,6 +185,8 @@ static void ufs_free_inode(ufs_mount_t* mnt, u32 ino) {
     memset(&in, 0, sizeof(in));
     ufs_write_inode(mnt, ino, &in);
     mnt->sb.free_inodes++;
+    if (ino < mnt->next_free_inode) mnt->next_free_inode = ino;
+    ufs_write_superblock(mnt);
 }
 
 static u32 ufs_get_block(ufs_inode_t* in, u32 idx) {
@@ -316,7 +345,7 @@ static int ufs_vfs_create(vfs_node_t* dir, const char* name, u32 mode) {
     ufs_inode_t inode = {0};
     inode.mode = UFS_INODE_FILE | (mode & 0777);
     inode.nlink = 1;
-    inode.atime = inode.mtime = inode.ctime = system_ticks;
+    inode.atime = inode.mtime = inode.ctime = get_ticks();
 
     ufs_write_inode(mnt, ino, &inode);
     return ufs_add_to_dir(mnt, dir_ino, ino, name, 1);
@@ -335,7 +364,7 @@ static int ufs_vfs_mkdir(vfs_node_t* dir, const char* name, u32 mode) {
     ufs_inode_t inode = {0};
     inode.mode = UFS_INODE_DIR | (mode & 0777);
     inode.nlink = 2;
-    inode.atime = inode.mtime = inode.ctime = system_ticks;
+    inode.atime = inode.mtime = inode.ctime = get_ticks();
 
     u32 b = ufs_alloc_block(mnt);
     if (!b) { ufs_free_inode(mnt, ino); return -1; }
@@ -467,7 +496,7 @@ static int ufs_vfs_write(vfs_node_t* node, const void* buf, u64 size, u64 offset
     if (offset + written > inode.size) {
         inode.size = offset + written;
         inode.blocks = (inode.size + 511) / 512;
-        inode.mtime = system_ticks;
+        inode.mtime = get_ticks();
         ufs_write_inode(mnt, ino, &inode);
         node->size = inode.size;
     }
@@ -547,6 +576,9 @@ static int ufs_vfs_mount(vfs_node_t** root, const char* dev) {
     memset(mnt, 0, sizeof(ufs_mount_t));
     mnt->dev_node = dev_node;
 
+    mnt->next_free_block = mnt->sb.data_start;
+    mnt->next_free_inode = 2;
+
     if (vfs_read(dev_node, mnt->blk_buf, UFS_BLOCK_SIZE, 0) != UFS_BLOCK_SIZE) {
         kfree(mnt);
         return -1;
@@ -625,7 +657,7 @@ static int ufs_vfs_format(const char* dev) {
     ufs_inode_t root = {0};
     root.mode = UFS_INODE_DIR | 0755;
     root.nlink = 2;
-    root.atime = root.mtime = root.ctime = system_ticks;
+    root.atime = root.mtime = root.ctime = get_ticks();
     root.size = 2 * sizeof(ufs_dirent_t);
     root.blocks = (root.size + 511) / 512;
     root.extents[0].start = root_block;
@@ -658,6 +690,75 @@ static int ufs_vfs_format(const char* dev) {
     return 0;
 }
 
+static int ufs_vfs_rename(vfs_node_t* old_dir, const char* old_name, vfs_node_t* new_dir, const char* new_name) {
+    ufs_mount_t* mnt = (ufs_mount_t*)old_dir->private;
+    if (!mnt || !mnt->mounted) return -1;
+
+    u32 old_dir_ino = (u32)(u64)old_dir->fs_data;
+    u32 new_dir_ino = (u32)(u64)new_dir->fs_data;
+    u32 ino;
+
+    if (ufs_find_in_dir(mnt, old_dir_ino, old_name, &ino) != 0) return -1;
+
+    ufs_inode_t inode;
+    if (ufs_read_inode(mnt, ino, &inode) != 0) return -1;
+
+    ufs_remove_from_dir(mnt, new_dir_ino, new_name);
+    if (ufs_remove_from_dir(mnt, old_dir_ino, old_name) != 0) return -1;
+
+    u8 type = (inode.mode & UFS_INODE_DIR) ? 2 : 1;
+    return ufs_add_to_dir(mnt, new_dir_ino, ino, new_name, type);
+}
+
+static int ufs_vfs_symlink(vfs_node_t* dir, const char* name, const char* target) {
+    ufs_mount_t* mnt = (ufs_mount_t*)dir->private;
+    if (!mnt || !mnt->mounted) return -1;
+
+    u32 dir_ino = (u32)(u64)dir->fs_data;
+    if (ufs_find_in_dir(mnt, dir_ino, name, NULL) == 0) return -1;
+
+    u32 ino = ufs_alloc_inode(mnt);
+    if (!ino) return -1;
+
+    ufs_inode_t inode = {0};
+    inode.mode = UFS_INODE_SYMLINK | 0777;
+    inode.nlink = 1;
+    inode.atime = inode.mtime = inode.ctime = get_ticks();
+    inode.size = strlen(target);
+
+    u32 b = ufs_alloc_block(mnt);
+    if (!b) { ufs_free_inode(mnt, ino); return -1; }
+
+    memset(mnt->blk_buf, 0, UFS_BLOCK_SIZE);
+    strncpy((char*)mnt->blk_buf, target, UFS_BLOCK_SIZE - 1);
+    ufs_write_block(mnt, b, mnt->blk_buf);
+    ufs_append_block(&inode, b);
+    inode.blocks = (inode.size + 511) / 512;
+
+    ufs_write_inode(mnt, ino, &inode);
+    return ufs_add_to_dir(mnt, dir_ino, ino, name, 3);
+}
+
+static int ufs_vfs_readlink(vfs_node_t* node, char* buf, u32 size) {
+    ufs_mount_t* mnt = (ufs_mount_t*)node->private;
+    if (!mnt || !mnt->mounted) return -1;
+
+    u32 ino = (u32)(u64)node->fs_data;
+    ufs_inode_t inode;
+    if (ufs_read_inode(mnt, ino, &inode) != 0) return -1;
+    if ((inode.mode & 0xF000) != UFS_INODE_SYMLINK) return -1;
+
+    u32 b = ufs_get_block(&inode, 0);
+    if (!b) return -1;
+    if (ufs_read_block(mnt, b, mnt->blk_buf) != 0) return -1;
+
+    u32 to_copy = inode.size;
+    if (to_copy >= size) to_copy = size - 1;
+    memcpy(buf, mnt->blk_buf, to_copy);
+    buf[to_copy] = '\0';
+    return to_copy;
+}
+
 static vfs_fs_ops_t ufs_ops = {
     .name = "ufs",
     .mount = ufs_vfs_mount,
@@ -673,7 +774,10 @@ static vfs_fs_ops_t ufs_ops = {
     .readdir = ufs_vfs_readdir,
     .stat = ufs_vfs_stat,
     .rename = NULL,
-    .format = ufs_vfs_format
+    .format = ufs_vfs_format,
+    .symlink = ufs_vfs_symlink,
+    .readlink = ufs_vfs_readlink,
+    .rename = ufs_vfs_rename,
 };
 
 int ufs_format(u32 start_lba, u32 total_blocks, int disk) {
@@ -712,7 +816,7 @@ int ufs_format(u32 start_lba, u32 total_blocks, int disk) {
     ufs_inode_t root = {0};
     root.mode = UFS_INODE_DIR | 0755;
     root.nlink = 2;
-    root.atime = root.mtime = root.ctime = system_ticks;
+    root.atime = root.mtime = root.ctime = get_ticks();
     root.size = 2 * sizeof(ufs_dirent_t);
     root.blocks = (root.size + 511) / 512;
     root.extents[0].start = root_block;

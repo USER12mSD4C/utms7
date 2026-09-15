@@ -100,7 +100,6 @@ static process_t* dequeue_ready(void) {
 }
 
 u64 sched_do_switch(struct interrupt_frame *frame) {
-    outb(0xE9, 'S');
     if (!sched_initialized) return (u64)frame;
     if (!current) return (u64)frame;
 
@@ -191,13 +190,19 @@ static void idle_loop(void) {
     }
 }
 
+static void (*sched_deferred_irq_cb)(void);
+
+void sched_set_deferred_irq_cb(void (*cb)(void)) {
+    sched_deferred_irq_cb = cb;
+}
+
 static void pit_handler(void) {
-    outb(0xE9, 'T');
     pit_ticks++;
     if (!sched_initialized) {
         return;
     }
     sched_tick();
+    if (sched_deferred_irq_cb) sched_deferred_irq_cb();
 }
 
 static void pit_init(void) {
@@ -976,4 +981,15 @@ int sched_fork(void *frame_ptr) {
     __asm__ volatile ("sti");
 
     return child->pid;
+}
+
+void sched_wake_irq(int irq) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].state != PROC_READY && processes[i].state != PROC_RUNNING) {
+            if (processes[i].irq_mask & (1 << irq)) {
+                processes[i].irq_pending |= (1 << irq);
+                processes[i].state = PROC_READY;
+            }
+        }
+    }
 }

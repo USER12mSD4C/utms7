@@ -50,6 +50,8 @@ typedef struct process {
     fd_entry_t fds[32];
     u64 user_rip;
     u64 user_rsp;
+    u32 irq_mask;
+    u32 irq_pending;
     u8 fpu_context[512] __attribute__((aligned(16)));
 } process_t;
 
@@ -83,5 +85,5 @@ u64 sched_do_switch(struct interrupt_frame* frame);
 void sched_block_on(void* channel);
 void sched_wakeup(void* channel);
 int sched_fork(void* frame);
-
+void sched_wake_irq(int irq);
 #endif

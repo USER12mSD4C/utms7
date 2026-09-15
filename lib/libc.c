@@ -52,8 +52,55 @@
 #define SYS_bind        48
 #define SYS_listen      49
 #define SYS_accept      50
-#define SYS_poll        51
 #define SYS_fs_register  58
+#define SYS_pci_map      59
+#define SYS_pci_unmap    60
+#define SYS_irq_register 61
+#define SYS_irq_wait     62
+#define SYS_ioport_in    63
+#define SYS_ioport_out   64
+#define SYS_poll         65
+
+void *pci_map(int bus, int slot, int func, int bar) {
+    long res = syscall(SYS_pci_map, bus, slot, func, bar, 0, 0);
+    return (res == -1) ? NULL : (void*)res;
+}
+
+void pci_unmap(void *addr, size_t size) {
+    syscall(SYS_pci_unmap, (long)addr, size, 0, 0, 0, 0);
+}
+
+int irq_register(int irq) {
+    return syscall(SYS_irq_register, irq, 0, 0, 0, 0, 0);
+}
+
+int irq_wait(int irq) {
+    return syscall(SYS_irq_wait, irq, 0, 0, 0, 0, 0);
+}
+
+u8 ioport_in8(u16 port) {
+    return syscall(SYS_ioport_in, port, 1, 0, 0, 0, 0);
+}
+
+u16 ioport_in16(u16 port) {
+    return syscall(SYS_ioport_in, port, 2, 0, 0, 0, 0);
+}
+
+u32 ioport_in32(u16 port) {
+    return syscall(SYS_ioport_in, port, 4, 0, 0, 0, 0);
+}
+
+void ioport_out8(u16 port, u8 val) {
+    syscall(SYS_ioport_out, port, val, 1, 0, 0, 0);
+}
+
+void ioport_out16(u16 port, u16 val) {
+    syscall(SYS_ioport_out, port, val, 2, 0, 0, 0);
+}
+
+void ioport_out32(u16 port, u32 val) {
+    syscall(SYS_ioport_out, port, val, 4, 0, 0, 0);
+}
 
 long syscall(long num, long a1, long a2, long a3, long a4, long a5, long a6) {
     register long rax __asm__("rax") = num;
@@ -606,4 +653,17 @@ int raise(int sig) {
         _exit(128 + sig);
     }
     return -1;
+}
+
+int poll(struct pollfd *fds, unsigned long nfds, int timeout) {
+    return syscall(SYS_poll, (long)fds, nfds, timeout, 0, 0, 0);
+}
+
+int tcgetattr(int fd, struct termios *termios_p) {
+    return ioctl(fd, TCGETS, termios_p);
+}
+
+int tcsetattr(int fd, int optional_actions, const struct termios *termios_p) {
+    (void)optional_actions;
+    return ioctl(fd, TCSETS, (void*)termios_p);
 }

@@ -54,6 +54,13 @@
 #define SYS_meminfo     55
 #define SYS_fork        57
 #define SYS_fs_register  58
+#define SYS_pci_map      59
+#define SYS_pci_unmap    60
+#define SYS_irq_register 61
+#define SYS_irq_wait     62
+#define SYS_ioport_in    63
+#define SYS_ioport_out   64
+#define SYS_poll         65
 
 typedef struct {
     u64 rax;

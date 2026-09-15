@@ -67,6 +67,10 @@ kernel/gdt_flush.o: kernel/gdt_flush.asm
 	$(AS) $(ASFLAGS) -o $@ $<
 eoc
 
+linux_compat/%.o: linux_compat/%.c
+	$(CC) $(KCFLAGS) -Ilinux_compat -Ilinux_compat/uapi -c -o $@ $<
+eoc
+
 tools/mkmod: tools/mkmod.c
 	mkdir -p tools
 	gcc -o tools/mkmod tools/mkmod.c
@@ -82,7 +86,7 @@ eoc
 
 CC_OBJS = apps/cc/main.o apps/cc/lexer.o apps/cc/parser.o apps/cc/ast.o apps/cc/codegen.o apps/cc/elf.o
 
-CORE = kernel/kernel.o kernel/kmod.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o kernel/unix.o kernel/vfs.o
+CORE = kernel/kernel.o kernel/kmod.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o kernel/unix.o kernel/vfs.o linux_compat/pci.o   linux_compat/interrupt.o linux_compat/dma.o linux_compat/virtio_gpu.o
 ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/gdt_flush.o
 DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o drivers/devfs.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
@@ -182,6 +186,10 @@ hex.bin: apps/hex.o $(UCRT)
 	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o hex.bin $(UCRT) apps/hex.o
 eoc
 
+editor.bin: apps/editor.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o editor.bin $(UCRT) apps/editor.o
+eoc
+
 kom:
 	mkdir -p modules
 	cp drivers/mbr.o modules/mbr.ko
@@ -189,7 +197,7 @@ kom:
 	echo " MODULES BUILT "
 eoc
 
-iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin rmdir.bin test_libc.bin hex.bin kom
+iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin rmdir.bin test_libc.bin hex.bin editor.bin kom
 	echo " CREATING ISO "
 	rm -rf iso
 	mkdir -p iso/boot/grub iso/modules
@@ -215,6 +223,7 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	cp rmdir.bin iso/modules/rmdir.bin
 	cp test_libc.bin iso/modules/test_libc.bin
 	cp hex.bin iso/modules/hex.bin
+	cp editor.bin iso/modules/editor.bin
 	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
 	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
 	sh -c 'echo "set default=0" >> iso/boot/grub/grub.cfg'
@@ -240,6 +249,7 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	sh -c 'echo "    module2 /modules/mk.bin mk" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/test_libc.bin test_libc" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/hex.bin hex" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/editor.bin editor" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "}" >> iso/boot/grub/grub.cfg'
 	grub-mkrescue -o utms.iso iso/
@@ -296,7 +306,7 @@ eoc
 
 run: iso
 	echo "STARTING UTMS"
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -drive id=disk1,file=disk1g.img,format=raw,if=none -device ahci,id=ahci -device ide-hd,drive=disk1,bus=ahci.0 -vga vmware -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -serial stdio -display gtk
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -drive id=disk1,file=disk1g.img,format=raw,if=none -device ahci,id=ahci -device ide-hd,drive=disk1,bus=ahci.0 -vga none -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -serial stdio -display gtk -device virtio-gpu-pci,xres=1920,yres=1080
 eoc
 
 debug: iso disk1g.img
@@ -306,22 +316,22 @@ eoc
 
 runD:
 	call iso
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -no-reboot -no-shutdown -d int,cpu_reset -D ./qemu.log
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -no-reboot -no-shutdown -device virtio-gpu-pci,xres=1024,yres=768 -d int,cpu_reset -D ./qemu.log
 eoc
 
 run-disk: kernel.bin disk1g.img
 	echo " STARTING UTMS (disk only) "
-	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0
+	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -device virtio-gpu-pci,xres=1024,yres=768
 eoc
 
 run-serial: iso disk1g.img
 	echo " STARTING UTMS (serial) "
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -serial stdio
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -serial stdio -device virtio-gpu-pci,xres=1024,yres=768
 eoc
 
 run-e1000: iso disk1g.img
 	echo " STARTING UTMS (e1000) "
-	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d
+	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device e1000,netdev=net0 -boot d -device virtio-gpu-pci,xres=1024,yres=768
 eoc
 
 clean:

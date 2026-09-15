@@ -16,6 +16,9 @@
 #include "elf.h"
 #include "../include/string.h"
 #include "unix.h"
+#include "../include/termios.h"
+#include "../drivers/pci.h"
+#include "../include/io.h"
 
 #define MAX_FDS 32
 
@@ -44,6 +47,13 @@ static inline void wrmsr(u32 msr, u64 val) {
     u32 high = val >> 32;
     __asm__ volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high));
 }
+
+static struct termios global_termios = {
+    .c_iflag = 0,
+    .c_oflag = 0,
+    .c_cflag = 0,
+    .c_lflag = ICANON | ECHO | ISIG,
+};
 
 typedef struct {
     u32 st_size;
@@ -217,12 +227,29 @@ static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4
     if (fd == 0 && p->fds[0].data.vnode == NULL) {
         long read_count = 0;
         u8 *user_buf = (u8*)buf;
-        while (!keyboard_data_ready()) { __asm__ volatile("sti"); sched_sleep(1); }
-        while (read_count < count && keyboard_data_ready()) {
-            char c = keyboard_getc();
-            u8 tmp = (u8)c;
-            if (copy_to_user(user_buf + read_count, &tmp, 1) != 0) return -1;
-            read_count++;
+        int raw_mode = !(global_termios.c_lflag & ICANON);
+
+        if (raw_mode) {
+            while (read_count < count) {
+                if (!keyboard_data_ready()) {
+                    if (read_count > 0) break;
+                    __asm__ volatile("sti");
+                    sched_sleep(1);
+                    continue;
+                }
+                char c = keyboard_getc();
+                u8 tmp = (u8)c;
+                if (copy_to_user(user_buf + read_count, &tmp, 1) != 0) return -1;
+                read_count++;
+            }
+        } else {
+            while (!keyboard_data_ready()) { __asm__ volatile("sti"); sched_sleep(1); }
+            while (read_count < count && keyboard_data_ready()) {
+                char c = keyboard_getc();
+                u8 tmp = (u8)c;
+                if (copy_to_user(user_buf + read_count, &tmp, 1) != 0) return -1;
+                read_count++;
+            }
         }
         return read_count;
     }
@@ -1100,6 +1127,30 @@ static long sys_ioctl(trap_frame_t* frame, long fd, long request, long arg, long
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
 
+    if (fd == 0 || fd == 1 || fd == 2) {
+        if (request == TCGETS) {
+            if (!is_user_pointer((void*)arg)) return -1;
+            if (copy_to_user((void*)arg, &global_termios, sizeof(global_termios)) != 0) return -1;
+            return 0;
+        }
+        if (request == TCSETS || request == TCSETSW || request == TCSETSF) {
+            if (!is_user_pointer((void*)arg)) return -1;
+            if (copy_from_user(&global_termios, (void*)arg, sizeof(global_termios)) != 0) return -1;
+            return 0;
+        }
+        if (request == TIOCGWINSZ) {
+            if (!is_user_pointer((void*)arg)) return -1;
+            struct winsize ws;
+            ws.ws_row = drm_dev.text_rows;
+            ws.ws_col = drm_dev.text_cols;
+            ws.ws_xpixel = drm_dev.primary_fb.width;
+            ws.ws_ypixel = drm_dev.primary_fb.height;
+            if (copy_to_user((void*)arg, &ws, sizeof(ws)) != 0) return -1;
+            return 0;
+        }
+        return 0;
+    }
+
     if (p->fds[fd].type == 1) {
         u32 size = (request >> 16) & 0x3FFF;
         void *kdata = NULL;
@@ -1110,9 +1161,7 @@ static long sys_ioctl(trap_frame_t* frame, long fd, long request, long arg, long
                 return -1;
             }
         }
-
         int ret = drm_ioctl(request, (unsigned long)kdata);
-
         if (size > 0 && arg != 0 && ret >= 0) {
             copy_to_user((void*)arg, kdata, size);
         }
@@ -1176,7 +1225,61 @@ static long sys_setcolor(trap_frame_t* frame, long fg, long bg, long a3, long a4
 }
 
 typedef long (*syscall_t)(trap_frame_t*, long, long, long, long, long, long);
-static syscall_t syscall_table[64];
+static syscall_t syscall_table[128];
+
+#define POLLIN  0x0001
+#define POLLOUT 0x0004
+
+struct sys_pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+static long sys_poll(trap_frame_t* frame, long fds, long nfds, long timeout, long a4, long a5, long a6) {
+    (void)frame; (void)a4; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)fds)) return -1;
+
+    struct sys_pollfd kfds[32];
+    if (nfds > 32) nfds = 32;
+    if (nfds < 0) return -1;
+    if (copy_from_user(kfds, (void*)fds, nfds * sizeof(struct sys_pollfd)) != 0) return -1;
+
+    int ready = 0;
+    for (int i = 0; i < nfds; i++) {
+        kfds[i].revents = 0;
+        if (kfds[i].fd == 0 && (kfds[i].events & POLLIN)) {
+            if (keyboard_data_ready()) {
+                kfds[i].revents |= POLLIN;
+                ready++;
+            }
+        }
+        if ((kfds[i].fd == 1 || kfds[i].fd == 2) && (kfds[i].events & POLLOUT)) {
+            kfds[i].revents |= POLLOUT;
+            ready++;
+        }
+    }
+
+    if (ready == 0 && timeout != 0) {
+        int sleep_ms = (timeout > 10) ? 10 : (timeout > 0 ? timeout : 1);
+        sched_sleep(sleep_ms);
+        for (int i = 0; i < nfds; i++) {
+            if (kfds[i].fd == 0 && (kfds[i].events & POLLIN)) {
+                if (keyboard_data_ready()) {
+                    kfds[i].revents |= POLLIN;
+                    ready++;
+                }
+            }
+            if ((kfds[i].fd == 1 || kfds[i].fd == 2) && (kfds[i].events & POLLOUT)) {
+                kfds[i].revents |= POLLOUT;
+                ready++;
+            }
+        }
+    }
+
+    if (copy_to_user((void*)fds, kfds, nfds * sizeof(struct sys_pollfd)) != 0) return -1;
+    return ready;
+}
 
 static long sys_bind(trap_frame_t* frame, long fd, long addr, long addrlen, long a4, long a5, long a6) {
     (void)frame; (void)addrlen; (void)a4; (void)a5; (void)a6;
@@ -1237,6 +1340,110 @@ static long sys_fs_register(trap_frame_t* frame, long name, long a2, long a3, lo
     return -1;
 }
 
+static long sys_pci_map(trap_frame_t* frame, long bus, long slot, long func, long bar, long a5, long a6) {
+    (void)frame; (void)a5; (void)a6;
+    u32 vendor = pci_read_config(bus, slot, func, 0x00) & 0xFFFF;
+    if (vendor == 0xFFFF) return -1;
+
+    u32 bar_reg = 0x10 + bar * 4;
+    u32 bar_val = pci_read_config(bus, slot, func, bar_reg);
+    if (bar_val & 1) return -1; // IO space, not supported
+
+    u64 phys = bar_val & 0xFFFFFFF0;
+    u32 size_reg = pci_read_config(bus, slot, func, bar_reg + 4);
+    u64 size = ~(size_reg & 0xFFFFFFF0) + 1;
+    if (size < 4096) size = 4096;
+
+    process_t *p = sched_current();
+    if (!p) return -1;
+
+    u64 virt = p->heap_end;
+    u64* pml4 = (u64*)p->cr3;
+
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+    }
+
+    for (u64 off = 0; off < size; off += 4096) {
+        if (paging_map_for_process(pml4, phys + off, virt + off,
+                                   PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+            if (old_cr3 != p->cr3) {
+                __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+            }
+            return -1;
+        }
+    }
+
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+    }
+
+    p->heap_end = virt + size;
+    return virt;
+}
+
+static long sys_pci_unmap(trap_frame_t* frame, long addr, long size, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p) return -1;
+    u64* pml4 = (u64*)p->cr3;
+    u64 old_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(old_cr3));
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(p->cr3) : "memory");
+    }
+    u64 start_page = (u64)addr & ~0xFFFULL;
+    u64 end_page = ((u64)addr + size + 4095) & ~0xFFFULL;
+    for (u64 virt = start_page; virt < end_page; virt += 4096) {
+        paging_unmap_for_process(pml4, virt);
+    }
+    if (old_cr3 != p->cr3) {
+        __asm__ volatile("mov %0, %%cr3" : : "r"(old_cr3) : "memory");
+    }
+    return 0;
+}
+
+static long sys_irq_register(trap_frame_t* frame, long irq, long a2, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || irq < 0 || irq > 15) return -1;
+    p->irq_mask |= (1 << irq);
+    return 0;
+}
+
+static long sys_irq_wait(trap_frame_t* frame, long irq, long a2, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    process_t *p = sched_current();
+    if (!p || irq < 0 || irq > 15) return -1;
+
+    while (!(p->irq_pending & (1 << irq))) {
+        sched_yield();
+    }
+
+    p->irq_pending &= ~(1 << irq);
+    return 0;
+}
+
+static long sys_ioport_in(trap_frame_t* frame, long port, long size, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+    u16 p = (u16)port;
+    if (size == 1) return inb(p);
+    if (size == 2) return inw(p);
+    if (size == 4) return inl(p);
+    return -1;
+}
+
+static long sys_ioport_out(trap_frame_t* frame, long port, long val, long size, long a4, long a5, long a6) {
+    (void)frame; (void)a4; (void)a5; (void)a6;
+    u16 p = (u16)port;
+    if (size == 1) outb(p, (u8)val);
+    else if (size == 2) outw(p, (u16)val);
+    else if (size == 4) outl(p, (u32)val);
+    return 0;
+}
+
 static long sys_fcntl(trap_frame_t* frame, long fd, long cmd, long arg, long a4, long a5, long a6) {
     (void)frame; (void)a4; (void)a5; (void)a6;
     process_t *p = sched_current();
@@ -1253,7 +1460,7 @@ static long sys_fcntl(trap_frame_t* frame, long fd, long cmd, long arg, long a4,
 }
 
 int syscall_init(void) {
-    for (int i = 0; i < 64; i++) syscall_table[i] = NULL;
+    for (int i = 0; i < 128; i++) syscall_table[i] = NULL;
 
     syscall_table[0] = sys_exit;
     syscall_table[1] = sys_read;
@@ -1308,6 +1515,13 @@ int syscall_init(void) {
     syscall_table[56] = sys_readlink;
     syscall_table[57] = sys_fork;
     syscall_table[58] = sys_fs_register;
+    syscall_table[59] = sys_pci_map;
+    syscall_table[60] = sys_pci_unmap;
+    syscall_table[61] = sys_irq_register;
+    syscall_table[62] = sys_irq_wait;
+    syscall_table[63] = sys_ioport_in;
+    syscall_table[64] = sys_ioport_out;
+    syscall_table[65] = sys_poll;
 
     wrmsr(MSR_LSTAR, (u64)syscall_entry);
 
@@ -1332,7 +1546,7 @@ long syscall_handler_c(trap_frame_t* frame, long num) {
     long a5 = frame->r8;
     long a6 = frame->r9;
 
-    if (num < 0 || num >= 64 || !syscall_table[num]) {
+    if (num < 0 || num >= 128 || !syscall_table[num]) {
         frame->rax = -1;
         return -1;
     }

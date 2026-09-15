@@ -64,7 +64,6 @@ extern drm_device_t drm_dev;
 
 void drm_set_framebuffer(u64 addr, u32 width, u32 height, u32 pitch, u32 bpp);
 int  drm_init(void);
-int  drm_is_active(void);
 
 int  drm_mode_set_crtc(u32 crtc_id,
                        drm_framebuffer_t* fb,
@@ -78,16 +77,8 @@ void drm_framebuffer_destroy(drm_framebuffer_t* fb);
 
 u64 drm_mmap_fb(u64 offset, u64 size);
 
-void drm_putpixel(u32 x, u32 y, u8 r, u8 g, u8 b);
-void drm_clear  (u8 r, u8 g, u8 b);
-void drm_draw_char  (char c, u32 x, u32 y, u8 r, u8 g, u8 b);
-void drm_draw_string(const char* s, u32 x, u32 y, u8 r, u8 g, u8 b);
-
 u32  drm_get_width (void);
 u32  drm_get_height(void);
-
-int  vesa_init(void);
-void vesa_set_framebuffer(u64 addr, u32 width, u32 height, u32 pitch, u32 bpp);
 
 void print(const char* s);
 void println(const char* s);
@@ -96,17 +87,8 @@ void printhex(u64 num);
 void print_setcolor(u8 fg, u8 bg);
 void print_clear(void);
 void print_char(char c);
-int  print_is_graphic(void);
 void print_setpos(u8 x, u8 y);
 void print_getpos(u8* x, u8* y);
-
-void vesa_putpixel(u32 x, u32 y, u8 r, u8 g, u8 b);
-void vesa_clear  (u8 r, u8 g, u8 b);
-void vesa_draw_char  (char c, u32 x, u32 y, u8 r, u8 g, u8 b);
-void vesa_draw_string(const char* s, u32 x, u32 y, u8 r, u8 g, u8 b);
-u32  vesa_get_width (void);
-u32  vesa_get_height(void);
-int  vesa_is_active(void);
 
 #define DRM_IOCTL_BASE                  'd'
 #define DRM_IOC_NONE                    0U
@@ -376,5 +358,16 @@ struct drm_gem_mmap {
 
 void drm_parse_multiboot(u64 mb_info);
 int drm_ioctl(unsigned int cmd, unsigned long arg);
+
+void drm_switch_fb(u64 paddr, void* vaddr, u32 w, u32 h, u32 pitch);
+extern volatile int drm_fb_dirty;
+
+extern void (*drm_flush_hook)(void);
+extern u32 drm_dirty_x0;
+extern u32 drm_dirty_y0;
+extern u32 drm_dirty_x1;
+extern u32 drm_dirty_y1;
+
+void drm_flush_sync(void);
 
 #endif

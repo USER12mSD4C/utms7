@@ -1,9 +1,9 @@
 UTMS OPEN PUBLISHING LICENSE (UOPL)
-Version 1.6.3
+Version 1.6.4 revision A
 
 Copyright (c) 2026 The UOPL Authors
 
-─────────────────────────────────────────────────────────────────
+-----------------------------------------------------------------
 
 1.   DEFINITIONS
      "License" means this document.
@@ -29,7 +29,15 @@ Copyright (c) 2026 The UOPL Authors
      count or revenue later falls back below the threshold. This status
      is not reassessed downward; Section 4.4 separately preserves an
      entity's pre-existing projects from before it first met either
-     criterion.
+     criterion. This status terminates if the entity ceases to exist
+     as a legal entity due to dissolution, bankruptcy, or merger where
+     the surviving entity is a different legal person.
+     An entity that reasonably and in good faith believes it is not a
+     Qualifying Entity, based on its internal records reviewed at least
+     annually, shall not be deemed in willful violation if its status
+     is later determined to have crossed the threshold, provided it
+     ceases Commercial Use or obtains permission within 60 days of
+     written notice.
      "Commercial Use" means any use of the Program that is intended
      for or results in commercial advantage or monetary compensation,
      including but not limited to:
@@ -68,13 +76,9 @@ Copyright (c) 2026 The UOPL Authors
           or documentation.
      3.3. Provide recipients with a copy of this License along with
           the Program.
-     3.4. The Licensor may require, at their discretion, that a copy of
-          this License be embedded in the Program itself (e.g., in a
-          header comment, a dedicated string, or a LICENSE constant).
-          If such embedding is present, any user of the Program is
-          presumed to have been aware of this License upon first
-          compilation, installation, or execution, unless they prove
-          otherwise.
+     3.4. Source distributions must include a copy of this License.
+          Binary distributions must include this License in accompanying
+          documentation or metadata.
      3.5. Any party distributing the Program without including a copy
           of this License is solely responsible for any consequences
           arising from such distribution.
@@ -104,22 +108,21 @@ Copyright (c) 2026 The UOPL Authors
           a request in writing (including email) and explicitly permits
           use. Silence or failure to respond does not constitute
           permission.
-     4.6. The Licensor may request, sent by both email and registered
-          mail with proof of delivery, that an entity provide documented
-          evidence of its status (employee count or financial records).
-          The 30-day period below runs from whichever of the two
-          deliveries is confirmed later. If the entity fails to provide
-          such evidence within 30 days of that confirmed delivery, it
-          shall be conclusively presumed to be a Qualifying Entity for
-          the purposes of this License, and the Licensor may pursue any
-          remedies available under this License or applicable law. This
-          presumption shall not apply if the entity proves that neither
-          notice was actually received due to circumstances beyond its
-          reasonable control.
-     4.7. The Licensor bears the burden of proving that an entity
-          qualifies as a Qualifying Entity under Section 1 in any legal
-          dispute, unless the entity has failed to respond under
-          Section 4.6.
+     4.6. The Licensor may request, by email sent to the entity's
+          publicly listed or registered contact address, that an entity
+          provide documented evidence of its status (employee count or
+          financial records). The entity shall provide such evidence
+          within 30 days of the email's delivery. If the entity fails
+          to provide such evidence within that period, it shall be
+          presumed to be a Qualifying Entity for the purposes of this
+          License. This presumption is rebuttable by clear and
+          convincing evidence. The entity's failure to respond
+          constitutes a material breach of this License.
+     4.7. In any legal dispute, the Licensor bears the burden of
+          proving that an entity qualifies as a Qualifying Entity under
+          Section 1, unless the entity has failed to respond under
+          Section 4.6, in which case the rebuttable presumption of
+          Section 4.6 applies.
 
 5.   PATENT GRANT
      The Licensor hereby grants to each recipient of the Program a
@@ -147,7 +150,7 @@ Copyright (c) 2026 The UOPL Authors
           Stockholm, Sweden, administered by the Arbitration Institute
           of the Stockholm Chamber of Commerce (SCC). The arbitration
           shall be conducted in English.
-     6.4. Disputes involving claims of a value less than €10,000 may,
+     6.4. Disputes involving claims of a value less than 10,000 EUR may,
           at the claimant's discretion, be brought before the ordinary
           courts of Stockholm rather than arbitration.
      6.5. If the entity using the Program is domiciled in a jurisdiction
@@ -169,7 +172,9 @@ Copyright (c) 2026 The UOPL Authors
           b) immediate termination of all rights to use the Program
              under this License;
           c) the right of the Licensor to publicly disclose the
-             non-compliance, provided that no personal data is revealed.
+             non-compliance, provided that no personal data is revealed
+             and the disclosure is limited to factual statements about
+             the license status and does not constitute defamation.
      7.3. These remedies are cumulative and do not replace other
           remedies available under applicable law.
 
@@ -203,6 +208,9 @@ Copyright (c) 2026 The UOPL Authors
           any of the acts above. The party that did incorporate the
           Program into that product remains subject to Section 4 in its
           own right.
+     9.4. Running the Program as an installed operating system, without
+          modification or redistribution of the Program itself, does not
+          constitute Commercial Use under this License.
 
 10.  NOTIFICATION OF VIOLATIONS
      10.1. Any person may report a suspected violation of this License
@@ -218,5 +226,8 @@ Copyright (c) 2026 The UOPL Authors
      understood this License and agree to be bound by its terms. If You
      do not agree to these terms, You may not use the Program.
 
-─────────────────────────────────────────────────────────────────
-UOPL — version 1.6.3, 2026
+12. APPLIANCE (revision A specificated only)
+    License do not applies on "linux_compat" directory in UTMS7 project
+
+-----------------------------------------------------------------
+UOPL - version 1.6.4, revision A, 2026

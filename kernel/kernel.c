@@ -5,6 +5,10 @@
 #include "../include/multiboot2.h"
 #include "vfs.h"
 
+//rest in peace Terry
+
+void (*kernel_idle_hook)(void);
+
 static u8 multiboot_info_copy[8192] __attribute__((aligned(16)));
 u64 multiboot_info_ptr = 0;
 
@@ -24,6 +28,7 @@ void kernel_main(void *mb_info) {
     ski((u64)multiboot_info_copy);
 
     while (1) {
+        if (kernel_idle_hook) kernel_idle_hook();
         __asm__ volatile ("hlt");
     }
 }

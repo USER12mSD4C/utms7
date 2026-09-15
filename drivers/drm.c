@@ -7,7 +7,20 @@
 #include "../kernel/paging.h"
 #include "../kernel/memory.h"
 
+static u32 drm_scratch[1024 * 768];
+
+static void drm_use_scratch(void) {
+    drm_set_framebuffer((u64)drm_scratch, 1024, 768, 4096, 32);
+}
+
 drm_device_t drm_dev;
+volatile int drm_fb_dirty = 0;
+
+void (*drm_flush_hook)(void);
+u32 drm_dirty_x0 = 0xFFFFFFFFu;
+u32 drm_dirty_y0 = 0xFFFFFFFFu;
+u32 drm_dirty_x1 = 0;
+u32 drm_dirty_y1 = 0;
 
 static const u32 ansi_palette[16] = {
     0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA,
@@ -31,6 +44,172 @@ typedef struct {
 } drm_dumb_buffer_t;
 
 static drm_dumb_buffer_t dumb_buffers[DRM_MAX_DUMB_BUFFERS];
+
+typedef struct { u8 ch; u32 fg; u32 bg; } cons_cell_t;
+#define MAX_CONS_COLS 256
+#define MAX_CONS_ROWS 128
+static cons_cell_t cons_screen_static[MAX_CONS_COLS * MAX_CONS_ROWS];
+static cons_cell_t* cons_screen = NULL;
+static u32 cons_cols = 0;
+static u32 cons_rows = 0;
+static u32 cons_cur_x = 0;
+static u32 cons_cur_y = 0;
+static int cons_cur_on = 0;
+
+static void cons_render_cell(u32 x, u32 y, int with_cursor) {
+    if (!drm_dev.initialized || !cons_screen) return;
+    if (x >= cons_cols || y >= cons_rows) return;
+    drm_fb_dirty = 1;
+    if (x < drm_dirty_x0) drm_dirty_x0 = x;
+    if (y < drm_dirty_y0) drm_dirty_y0 = y;
+    if (x > drm_dirty_x1) drm_dirty_x1 = x;
+    if (y > drm_dirty_y1) drm_dirty_y1 = y;
+    cons_cell_t* cell = &cons_screen[y * cons_cols + x];
+    u32 fg = cell->fg;
+    u32 bg = cell->bg;
+    if (with_cursor) { u32 t = fg; fg = bg; bg = t; }
+    drm_framebuffer_t* fb = drm_dev.crtc.fb;
+    u32 wpl = fb->pitch / 4;
+    volatile u32* base = (volatile u32*)fb->vaddr;
+    u32 px = x * 8;
+    u32 py = y * 16;
+    if (cell->ch < 32 || cell->ch > 126) {
+        for (u32 dy = 0; dy < 16; dy++) {
+            for (u32 dx = 0; dx < 8; dx++) {
+                base[(py + dy) * wpl + px + dx] = bg;
+            }
+        }
+        return;
+    }
+    const u8* glyph = font8x16[(int)cell->ch];
+    for (u32 dy = 0; dy < 16; dy++) {
+        u8 line = glyph[dy];
+        for (u32 dx = 0; dx < 8; dx++) {
+            base[(py + dy) * wpl + px + dx] = (line & (1 << (7 - dx))) ? fg : bg;
+        }
+    }
+}
+
+static void cons_render_all(void) {
+    for (u32 y = 0; y < cons_rows; y++) {
+        for (u32 x = 0; x < cons_cols; x++) {
+            cons_render_cell(x, y, 0);
+        }
+    }
+}
+
+static void cons_cursor_refresh(void) {
+    if (!drm_dev.initialized || !cons_screen) return;
+    u32 nx = drm_dev.cursor_x;
+    u32 ny = drm_dev.cursor_y;
+    if (nx >= cons_cols) nx = cons_cols - 1;
+    if (ny >= cons_rows) ny = cons_rows - 1;
+    if (cons_cur_on && (cons_cur_x != nx || cons_cur_y != ny)) {
+        cons_render_cell(cons_cur_x, cons_cur_y, 0);
+    }
+    cons_render_cell(nx, ny, 1);
+    cons_cur_x = nx;
+    cons_cur_y = ny;
+    cons_cur_on = 1;
+}
+
+void drm_flush_sync(void) {
+    if (drm_flush_hook) drm_flush_hook();
+}
+
+static void console_putchar(char c);
+void drm_clear(u8 r, u8 g, u8 b);
+
+void print(const char* s) {
+    while (*s) console_putchar(*s++);
+}
+
+void println(const char* s) {
+    print(s);
+    console_putchar('\n');
+}
+
+void printnum(u64 num) {
+    char buf[32];
+    int i = 0;
+    if (num == 0) {
+        console_putchar('0');
+        return;
+    }
+    while (num > 0) {
+        buf[i++] = '0' + (num % 10);
+        num /= 10;
+    }
+    while (i > 0) console_putchar(buf[--i]);
+}
+
+void printhex(u64 num) {
+    static const char hex[] = "0123456789ABCDEF";
+    console_putchar('0');
+    console_putchar('x');
+    for (int i = 60; i >= 0; i -= 4) console_putchar(hex[(num >> i) & 0xF]);
+}
+
+void print_setcolor(u8 fg, u8 bg) {
+    drm_dev.text_fg = ansi_palette[fg & 0x0F];
+    drm_dev.text_bg = ansi_palette[bg & 0x0F];
+}
+
+void print_clear(void) {
+    if (!drm_dev.initialized) return;
+    drm_clear(0, 0, 0);
+    drm_dev.cursor_x = 0;
+    drm_dev.cursor_y = 0;
+    if (cons_screen) {
+        for (u32 i = 0; i < cons_cols * cons_rows; i++) {
+            cons_screen[i].ch = ' ';
+            cons_screen[i].fg = ansi_palette[15];
+            cons_screen[i].bg = ansi_palette[0];
+        }
+    }
+    cons_cur_on = 0;
+    cons_cursor_refresh();
+    drm_flush_sync();
+}
+
+void print_char(char c) {
+    console_putchar(c);
+}
+
+void drm_switch_fb(u64 paddr, void* vaddr, u32 w, u32 h, u32 pitch) {
+    drm_framebuffer_t* fb = &drm_dev.primary_fb;
+    fb->paddr = paddr;
+    fb->vaddr = vaddr;
+    fb->width = w;
+    fb->height = h;
+    fb->pitch = pitch;
+    fb->bpp = 32;
+    fb->size = (u64)pitch * h;
+    fb->refcount = 1;
+
+    drm_dev.crtc.fb = fb;
+    drm_dev.crtc.enabled = 1;
+    drm_dev.text_cols = w / 8;
+    drm_dev.text_rows = h / 16;
+    drm_dev.cursor_x = 0;
+    drm_dev.cursor_y = 0;
+
+    cons_cols = drm_dev.text_cols;
+    cons_rows = drm_dev.text_rows;
+    if (cons_cols > MAX_CONS_COLS) cons_cols = MAX_CONS_COLS;
+    if (cons_rows > MAX_CONS_ROWS) cons_rows = MAX_CONS_ROWS;
+
+    if (!cons_screen) cons_screen = cons_screen_static;
+    for (u32 i = 0; i < cons_cols * cons_rows; i++) {
+        cons_screen[i].ch = ' ';
+        cons_screen[i].fg = ansi_palette[15];
+        cons_screen[i].bg = ansi_palette[0];
+    }
+    cons_cur_on = 0;
+    cons_render_all();
+    cons_cursor_refresh();
+    drm_flush_sync();
+}
 
 static drm_display_mode_t make_mode(u32 w, u32 h) {
     drm_display_mode_t m;
@@ -167,6 +346,18 @@ int drm_init(void) {
     drm_dev.text_fg  = ansi_palette[15];
     drm_dev.text_bg  = ansi_palette[0];
 
+    cons_cols = drm_dev.text_cols;
+    cons_rows = drm_dev.text_rows;
+    if (cons_cols > MAX_CONS_COLS) cons_cols = MAX_CONS_COLS;
+    if (cons_rows > MAX_CONS_ROWS) cons_rows = MAX_CONS_ROWS;
+    cons_screen = cons_screen_static;
+    for (u32 i = 0; i < cons_cols * cons_rows; i++) {
+        cons_screen[i].ch = ' ';
+        cons_screen[i].fg = ansi_palette[15];
+        cons_screen[i].bg = ansi_palette[0];
+    }
+    cons_cur_on = 0;
+
     for (int i = 0; i < DRM_MAX_DUMB_BUFFERS; i++) {
         dumb_buffers[i].used = 0;
     }
@@ -174,8 +365,6 @@ int drm_init(void) {
     drm_dev.initialized = 1;
     return 0;
 }
-
-int drm_is_active(void) { return drm_dev.initialized; }
 
 int drm_mode_set_crtc(u32 crtc_id,
                       drm_framebuffer_t* fb,
@@ -195,18 +384,6 @@ int drm_mode_set_crtc(u32 crtc_id,
     return 0;
 }
 
-static inline void fb_write32(drm_framebuffer_t* fb, u32 x, u32 y, u32 v) {
-    if (x >= fb->width || y >= fb->height) return;
-    volatile u32* base = (volatile u32*)fb->vaddr;
-    base[y * (fb->pitch / 4) + x] = v;
-}
-
-void drm_putpixel(u32 x, u32 y, u8 r, u8 g, u8 b) {
-    if (!drm_dev.initialized) return;
-    if (drm_dev.crtc.fb->bpp != 32) return;
-    fb_write32(drm_dev.crtc.fb, x, y, (u32)r << 16 | (u32)g << 8 | b);
-}
-
 void drm_clear(u8 r, u8 g, u8 b) {
     if (!drm_dev.initialized) return;
     drm_framebuffer_t* fb = drm_dev.crtc.fb;
@@ -222,55 +399,10 @@ void drm_clear(u8 r, u8 g, u8 b) {
     drm_dev.cursor_y = 0;
 }
 
-void drm_draw_char(char c, u32 x, u32 y, u8 r, u8 g, u8 b) {
-    if (!drm_dev.initialized) return;
-    if ((u8)c > 126) return;
-    drm_framebuffer_t* fb = drm_dev.crtc.fb;
-    u32 color = (u32)r << 16 | (u32)g << 8 | b;
-    const u8* glyph = font8x16[(int)c];
-    for (u32 dy = 0; dy < 16; dy++) {
-        u8 line = glyph[dy];
-        for (u32 dx = 0; dx < 8; dx++) {
-            if (line & (1 << (7 - dx))) {
-                fb_write32(fb, x + dx, y + dy, color);
-            }
-        }
-    }
-}
-
-void drm_draw_string(const char* s, u32 x, u32 y, u8 r, u8 g, u8 b) {
-    if (!drm_dev.initialized) return;
-    while (*s) {
-        drm_draw_char(*s, x, y, r, g, b);
-        x += 8;
-        if (*s == '\n') { x = 0; y += 16; }
-        s++;
-    }
-}
-
 u32 drm_get_width (void) { return drm_dev.primary_fb.width;  }
 u64 drm_fb_phys(void) { return drm_dev.primary_fb.paddr; }
 u64 drm_fb_size(void) { return drm_dev.primary_fb.size; }
 u32 drm_get_height(void) { return drm_dev.primary_fb.height; }
-
-static void scroll_one(void) {
-    drm_framebuffer_t* fb = drm_dev.crtc.fb;
-    u32 words_per_line = fb->pitch / 4;
-    volatile u32* base = (volatile u32*)fb->vaddr;
-
-    for (u32 y = 0; y < fb->height - 16; y++) {
-        for (u32 x = 0; x < fb->width; x++) {
-            u32 dst = y * words_per_line + x;
-            u32 src = (y + 16) * words_per_line + x;
-            base[dst] = base[src];
-        }
-    }
-    for (u32 y = fb->height - 16; y < fb->height; y++) {
-        for (u32 x = 0; x < fb->width; x++) {
-            base[y * words_per_line + x] = drm_dev.text_bg;
-        }
-    }
-}
 
 static inline void serial_putchar(char c) {
     if (c == '\n') {
@@ -279,113 +411,133 @@ static inline void serial_putchar(char c) {
     outb(0x3F8, (u8)c);
 }
 
-static void console_putchar(char c) {
-    serial_putchar(c);
-    if (!drm_dev.initialized) return;
+#define CONS_NORMAL 0
+#define CONS_ESC    1
+#define CONS_CSI    2
 
-    if (c == '\n') {
-        drm_dev.cursor_x = 0;
-        drm_dev.cursor_y++;
-        if (drm_dev.cursor_y >= drm_dev.text_rows) {
-            scroll_one();
-            drm_dev.cursor_y = drm_dev.text_rows - 1;
+static int cons_state = CONS_NORMAL;
+static int cons_params[16];
+static int cons_param_count = 0;
+static int cons_cur_param = 0;
+static int cons_has_param = 0;
+static u32 cons_saved_x = 0;
+static u32 cons_saved_y = 0;
+
+static int cons_param(int idx, int defval) {
+    if (idx < cons_param_count && cons_params[idx] >= 0) return cons_params[idx];
+    return defval;
+}
+
+static void scroll_one(void);
+static void cons_clear_cell(u32 col, u32 row);
+static void cons_clear_line_range(u32 row, u32 from_col, u32 to_col);
+static void cons_clear_screen(void);
+static void console_emit(char c);
+static void console_putchar(char c);
+
+static void cons_csi_dispatch(char final) {
+    switch (final) {
+        case 'H':
+        case 'f': {
+            int row = cons_param(0, 1);
+            int col = cons_param(1, 1);
+            if (row < 1) row = 1;
+            if (col < 1) col = 1;
+            drm_dev.cursor_y = (u32)(row - 1);
+            drm_dev.cursor_x = (u32)(col - 1);
+            if (drm_dev.cursor_y >= drm_dev.text_rows) drm_dev.cursor_y = drm_dev.text_rows - 1;
+            if (drm_dev.cursor_x >= drm_dev.text_cols) drm_dev.cursor_x = drm_dev.text_cols - 1;
+            break;
         }
-        return;
-    }
-    if (c == '\r') { drm_dev.cursor_x = 0; return; }
-
-    if (c == '\b') {
-        if (drm_dev.cursor_x > 0) {
-            drm_dev.cursor_x--;
-            drm_framebuffer_t* fb = drm_dev.crtc.fb;
-            u32 words_per_line = fb->pitch / 4;
-            volatile u32* base = (volatile u32*)fb->vaddr;
-            for (u32 dy = 0; dy < 16; dy++) {
-                for (u32 dx = 0; dx < 8; dx++) {
-                    u32 px = drm_dev.cursor_x * 8 + dx;
-                    u32 py = drm_dev.cursor_y * 16 + dy;
-                    if (px < fb->width && py < fb->height) {
-                        base[py * words_per_line + px] = drm_dev.text_bg;
-                    }
+        case 'J': {
+            int mode = cons_param(0, 0);
+            if (mode == 2 || mode == 3) {
+                cons_clear_screen();
+                drm_dev.cursor_x = 0;
+                drm_dev.cursor_y = 0;
+            } else if (mode == 1) {
+                cons_clear_line_range(drm_dev.cursor_y, 0, drm_dev.cursor_x + 1);
+                for (u32 r = 0; r < drm_dev.cursor_y; r++) {
+                    cons_clear_line_range(r, 0, drm_dev.text_cols);
+                }
+            } else {
+                cons_clear_line_range(drm_dev.cursor_y, drm_dev.cursor_x, drm_dev.text_cols);
+                for (u32 r = drm_dev.cursor_y + 1; r < drm_dev.text_rows; r++) {
+                    cons_clear_line_range(r, 0, drm_dev.text_cols);
                 }
             }
+            break;
         }
-        return;
-    }
-
-    if ((u8)c < 32) return;
-
-    if (drm_dev.cursor_x >= drm_dev.text_cols) {
-        drm_dev.cursor_x = 0;
-        drm_dev.cursor_y++;
-        if (drm_dev.cursor_y >= drm_dev.text_rows) {
-            scroll_one();
-            drm_dev.cursor_y = drm_dev.text_rows - 1;
+        case 'K': {
+            int mode = cons_param(0, 0);
+            if (mode == 1) {
+                cons_clear_line_range(drm_dev.cursor_y, 0, drm_dev.cursor_x + 1);
+            } else if (mode == 2) {
+                cons_clear_line_range(drm_dev.cursor_y, 0, drm_dev.text_cols);
+            } else {
+                cons_clear_line_range(drm_dev.cursor_y, drm_dev.cursor_x, drm_dev.text_cols);
+            }
+            break;
         }
+        case 'A': {
+            int n = cons_param(0, 1);
+            if ((int)drm_dev.cursor_y >= n) drm_dev.cursor_y -= (u32)n;
+            else drm_dev.cursor_y = 0;
+            break;
+        }
+        case 'B': {
+            int n = cons_param(0, 1);
+            drm_dev.cursor_y += (u32)n;
+            if (drm_dev.cursor_y >= drm_dev.text_rows) drm_dev.cursor_y = drm_dev.text_rows - 1;
+            break;
+        }
+        case 'C': {
+            int n = cons_param(0, 1);
+            drm_dev.cursor_x += (u32)n;
+            if (drm_dev.cursor_x >= drm_dev.text_cols) drm_dev.cursor_x = drm_dev.text_cols - 1;
+            break;
+        }
+        case 'D': {
+            int n = cons_param(0, 1);
+            if ((int)drm_dev.cursor_x >= n) drm_dev.cursor_x -= (u32)n;
+            else drm_dev.cursor_x = 0;
+            break;
+        }
+        case 's':
+            cons_saved_x = drm_dev.cursor_x;
+            cons_saved_y = drm_dev.cursor_y;
+            break;
+        case 'u':
+            drm_dev.cursor_x = cons_saved_x;
+            drm_dev.cursor_y = cons_saved_y;
+            break;
+        case 'm': {
+            for (int i = 0; i < cons_param_count; i++) {
+                int v = cons_params[i];
+                if (v < 0) v = 0;
+                if (v == 0) {
+                    drm_dev.text_fg = ansi_palette[15];
+                    drm_dev.text_bg = ansi_palette[0];
+                } else if (v == 7) {
+                    u32 t = drm_dev.text_fg;
+                    drm_dev.text_fg = drm_dev.text_bg;
+                    drm_dev.text_bg = t;
+                } else if (v >= 30 && v <= 37) {
+                    drm_dev.text_fg = ansi_palette[v - 30];
+                } else if (v >= 40 && v <= 47) {
+                    drm_dev.text_bg = ansi_palette[v - 40];
+                } else if (v >= 90 && v <= 97) {
+                    drm_dev.text_fg = ansi_palette[v - 90 + 8];
+                } else if (v >= 100 && v <= 107) {
+                    drm_dev.text_bg = ansi_palette[v - 100 + 8];
+                }
+            }
+            break;
+        }
+        default:
+            break;
     }
-
-    drm_draw_char(c,
-                  drm_dev.cursor_x * 8,
-                  drm_dev.cursor_y * 16,
-                  (drm_dev.text_fg >> 16) & 0xFF,
-                  (drm_dev.text_fg >>  8) & 0xFF,
-                  (drm_dev.text_fg      ) & 0xFF);
-    drm_dev.cursor_x++;
 }
-
-int  vesa_init(void)                              { return drm_init(); }
-void vesa_set_framebuffer(u64 a, u32 w, u32 h, u32 p, u32 b)
-                                                   { drm_set_framebuffer(a,w,h,p,b); }
-
-void print(const char* s)                         { while (*s) console_putchar(*s++); }
-void println(const char* s)                       { print(s); console_putchar('\n'); }
-
-void printnum(u64 num) {
-    char buf[32]; int i = 0;
-    if (num == 0) { console_putchar('0'); return; }
-    while (num > 0) { buf[i++] = '0' + (num % 10); num /= 10; }
-    while (i > 0) console_putchar(buf[--i]);
-}
-
-void printhex(u64 num) {
-    static const char hex[] = "0123456789ABCDEF";
-    console_putchar('0'); console_putchar('x');
-    for (int i = 60; i >= 0; i -= 4) console_putchar(hex[(num >> i) & 0xF]);
-}
-
-void print_setcolor(u8 fg, u8 bg) {
-    drm_dev.text_fg = ansi_palette[fg & 0x0F];
-    drm_dev.text_bg = ansi_palette[bg & 0x0F];
-}
-
-void print_clear(void) {
-    if (!drm_dev.initialized) return;
-    drm_clear(0, 0, 0);
-    drm_dev.cursor_x = 0;
-    drm_dev.cursor_y = 0;
-}
-
-void print_char(char c)                           { console_putchar(c); }
-int  print_is_graphic(void)                       { return drm_dev.initialized; }
-
-void print_setpos(u8 x, u8 y) {
-    if (x < drm_dev.text_cols) drm_dev.cursor_x = x;
-    if (y < drm_dev.text_rows) drm_dev.cursor_y = y;
-}
-void print_getpos(u8* x, u8* y) {
-    if (x) *x = (u8)drm_dev.cursor_x;
-    if (y) *y = (u8)drm_dev.cursor_y;
-}
-
-void vesa_putpixel  (u32 x, u32 y, u8 r, u8 g, u8 b) { drm_putpixel(x,y,r,g,b); }
-void vesa_clear     (u8  r, u8 g, u8 b)              { drm_clear(r,g,b); }
-void vesa_draw_char (char c, u32 x, u32 y, u8 r, u8 g, u8 b)
-                                                     { drm_draw_char(c,x,y,r,g,b); }
-void vesa_draw_string(const char* s, u32 x, u32 y, u8 r, u8 g, u8 b)
-                                                     { drm_draw_string(s,x,y,r,g,b); }
-u32  vesa_get_width (void)                          { return drm_get_width(); }
-u32  vesa_get_height(void)                          { return drm_get_height(); }
-int  vesa_is_active (void)                          { return drm_is_active(); }
 
 static void mode_to_uapi(const drm_display_mode_t* in,
                          struct drm_mode_modeinfo* out) {
@@ -519,6 +671,131 @@ static int drm_uapi_get_encoder(struct drm_mode_get_encoder* e) {
     e->possible_crtcs = 1;
     e->possible_clones = 0;
     return 0;
+}
+
+static void scroll_one(void) {
+    if (!cons_screen) return;
+    for (u32 y = 0; y + 1 < cons_rows; y++) {
+        for (u32 x = 0; x < cons_cols; x++) {
+            cons_screen[y * cons_cols + x] = cons_screen[(y + 1) * cons_cols + x];
+        }
+    }
+    for (u32 x = 0; x < cons_cols; x++) {
+        cons_cell_t* cell = &cons_screen[(cons_rows - 1) * cons_cols + x];
+        cell->ch = ' ';
+        cell->fg = ansi_palette[15];
+        cell->bg = ansi_palette[0];
+    }
+    cons_render_all();
+    drm_dirty_x0 = 0;
+    drm_dirty_y0 = 0;
+    drm_dirty_x1 = cons_cols - 1;
+    drm_dirty_y1 = cons_rows - 1;
+}
+
+static void cons_clear_cell(u32 col, u32 row) {
+    if (!cons_screen || col >= cons_cols || row >= cons_rows) return;
+    cons_cell_t* cell = &cons_screen[row * cons_cols + col];
+    cell->ch = ' ';
+    cell->fg = drm_dev.text_fg;
+    cell->bg = drm_dev.text_bg;
+    cons_render_cell(col, row, 0);
+}
+
+static void cons_clear_line_range(u32 row, u32 from_col, u32 to_col) {
+    for (u32 c = from_col; c < to_col && c < cons_cols; c++) {
+        cons_clear_cell(c, row);
+    }
+}
+
+static void cons_clear_screen(void) {
+    for (u32 r = 0; r < cons_rows; r++) {
+        cons_clear_line_range(r, 0, cons_cols);
+    }
+}
+
+static void console_emit(char c) {
+    serial_putchar(c);
+    if (!drm_dev.initialized) return;
+
+    if (c == '\n') {
+        drm_dev.cursor_x = 0;
+        drm_dev.cursor_y++;
+        if (drm_dev.cursor_y >= drm_dev.text_rows) {
+            scroll_one();
+            drm_dev.cursor_y = drm_dev.text_rows - 1;
+        }
+        return;
+    }
+    if (c == '\r') { drm_dev.cursor_x = 0; return; }
+
+    if (c == '\b') {
+        if (drm_dev.cursor_x > 0) drm_dev.cursor_x--;
+        return;
+    }
+
+    if ((u8)c < 32) return;
+
+    if (drm_dev.cursor_x >= drm_dev.text_cols) {
+        drm_dev.cursor_x = 0;
+        drm_dev.cursor_y++;
+        if (drm_dev.cursor_y >= drm_dev.text_rows) {
+            scroll_one();
+            drm_dev.cursor_y = drm_dev.text_rows - 1;
+        }
+    }
+
+    if (cons_screen && drm_dev.cursor_y < cons_rows) {
+        cons_cell_t* cell = &cons_screen[drm_dev.cursor_y * cons_cols + drm_dev.cursor_x];
+        cell->ch = (u8)c;
+        cell->fg = drm_dev.text_fg;
+        cell->bg = drm_dev.text_bg;
+        cons_render_cell(drm_dev.cursor_x, drm_dev.cursor_y, 0);
+    }
+    drm_dev.cursor_x++;
+}
+
+static void console_putchar(char c) {
+    if (cons_state == CONS_ESC) {
+        if (c == '[') {
+            cons_state = CONS_CSI;
+            cons_param_count = 0;
+            cons_cur_param = 0;
+            cons_has_param = 0;
+        } else {
+            cons_state = CONS_NORMAL;
+        }
+        return;
+    }
+
+    if (cons_state == CONS_CSI) {
+        if (c >= '0' && c <= '9') {
+            cons_cur_param = cons_cur_param * 10 + (c - '0');
+            cons_has_param = 1;
+        } else if (c == ';') {
+            if (cons_param_count < 16) {
+                cons_params[cons_param_count++] = cons_has_param ? cons_cur_param : -1;
+            }
+            cons_cur_param = 0;
+            cons_has_param = 0;
+        } else if (c >= 0x40 && c <= 0x7E) {
+            if (cons_param_count < 16) {
+                cons_params[cons_param_count++] = cons_has_param ? cons_cur_param : -1;
+            }
+            cons_csi_dispatch(c);
+            cons_state = CONS_NORMAL;
+            cons_cursor_refresh();
+        }
+        return;
+    }
+
+    if (c == 0x1B) {
+        cons_state = CONS_ESC;
+        return;
+    }
+
+    console_emit(c);
+    cons_cursor_refresh();
 }
 
 static int drm_uapi_get_crtc(struct drm_mode_crtc* c) {
@@ -786,45 +1063,6 @@ u64 drm_mmap_fb(u64 offset, u64 size) {
     return 0;
 }
 
-#define EFI_GOP_GUID { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } }
-
-typedef struct {
-    u32 data1; u16 data2; u16 data3; u8 data4[8];
-} __attribute__((packed)) efi_guid_t;
-
-typedef struct {
-    u64 signature; u32 revision; u32 header_size; u32 crc32; u32 reserved;
-} __attribute__((packed)) efi_table_header_t;
-
-typedef struct {
-    efi_table_header_t hdr;
-    u64 get_memory_map; u64 allocate_pool; u64 free_pool; u64 create_event;
-    u64 set_timer; u64 wait_for_event; u64 signal_event; u64 close_event;
-    u64 check_event; u64 install_protocol_interface; u64 reinstall_protocol_interface;
-    u64 uninstall_protocol_interface; u64 handle_protocol; u64 reserved2;
-    u64 register_protocol_notify; u64 locate_handle; u64 locate_device_path;
-    u64 install_configuration_table; u64 image_load; u64 image_start; u64 exit;
-    u64 image_unload; u64 exit_boot_services; u64 get_next_monotonic_count;
-    u64 stall; u64 set_watchdog_timer; u64 connect_controller; u64 disconnect_controller;
-    u64 open_protocol; u64 close_protocol; u64 open_protocol_information;
-    u64 protocols_per_handle; u64 locate_handle_buffer; u64 locate_protocol;
-    u64 install_multiple_protocol_interfaces; u64 uninstall_multiple_protocol_interfaces;
-    u64 calculate_crc32; u64 copy_mem; u64 set_mem; u64 create_event_ex;
-} __attribute__((packed)) efi_boot_services_t;
-
-typedef struct {
-    u32 mode; u32 info_size; u64 info; u64 size_of_info;
-} __attribute__((packed)) efi_gop_mode_t;
-
-typedef struct {
-    u32 version; u32 width; u32 height; u32 pixel_format; u32 pixels_per_scanline;
-} __attribute__((packed)) efi_gop_mode_info_t;
-
-typedef struct {
-    u64 query_mode; u64 set_mode; u64 blt;
-    efi_gop_mode_t *mode;
-} __attribute__((packed)) efi_gop_t;
-
 void drm_parse_multiboot(u64 mb_info) {
     outb(0x3F8, 'D');
     outb(0x3F8, 'R');
@@ -832,70 +1070,23 @@ void drm_parse_multiboot(u64 mb_info) {
     outb(0x3F8, '\n');
 
     if (!mb_info) {
-        outb(0x3F8, 'N');
-        drm_set_framebuffer(0xFD000000, 1024, 768, 4096, 32);
+        drm_use_scratch();
         return;
     }
 
-    efi_guid_t gop_guid = EFI_GOP_GUID;
     u8* ptr = (u8*)(mb_info + 8);
-    efi_boot_services_t *bs = NULL;
-    int found_fb = 0;
-
     while (1) {
         u32 type = *(u32*)ptr;
         u32 size = *(u32*)(ptr + 4);
         if (type == 0 || size == 0) break;
-
         if (type == 8) {
-            drm_set_framebuffer(*(u64*)(ptr + 8), *(u32*)(ptr + 20),
-                                *(u32*)(ptr + 24), *(u32*)(ptr + 16),
-                                *(u8*)(ptr + 28));
-            found_fb = 1;
-            break;
+            drm_use_scratch();
+            return;
         }
-
-        if (type == 12) {
-            bs = (efi_boot_services_t*)*(u64*)(ptr + 8);
-        }
-
         ptr += (size + 7) & ~7;
     }
 
-    if (found_fb) return;
-
-    if (bs) {
-        u64 gop_ptr = 0;
-        u64 fn = bs->locate_protocol;
-        if (fn) {
-            __asm__ volatile (
-                "mov %1, %%rcx\n"
-                "xor %%rdx, %%rdx\n"
-                "lea %2, %%r8\n"
-                "call *%3\n"
-                : "=a"(gop_ptr)
-                : "r"(&gop_guid), "m"(gop_ptr), "r"(fn)
-                : "rcx", "rdx", "r8", "r9", "r10", "r11", "memory"
-            );
-        }
-
-        if (gop_ptr) {
-            efi_gop_t *gop = *(efi_gop_t**)gop_ptr;
-            if (gop && gop->mode && gop->mode->info) {
-                efi_gop_mode_info_t *info = (efi_gop_mode_info_t*)gop->mode->info;
-                u64 fb_addr = *(u64*)((u8*)info + sizeof(efi_gop_mode_info_t));
-                u32 width = info->width;
-                u32 height = info->height;
-                u32 pixels_per_scanline = info->pixels_per_scanline;
-                u32 pitch = pixels_per_scanline * 4;
-
-                drm_set_framebuffer(fb_addr, width, height, pitch, 32);
-                return;
-            }
-        }
-    }
-
-    drm_set_framebuffer(0xFD000000, 1024, 768, 4096, 32);
+    drm_use_scratch();
 }
 
 static const char __drm_name[] __attribute__((section(".module_name"))) = "drm";

@@ -1,5 +1,4 @@
 X("paging",     paging_init,     1)
-X("timer",      timer_init,      1)
 X("sched",      sched_init,      1)
 X("syscalls",   syscall_init,    1)
 X("PCI",        pci_init,        1)

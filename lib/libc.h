@@ -326,4 +326,30 @@ typedef void (*sighandler_t)(int);
 sighandler_t signal(int signum, sighandler_t handler);
 int raise(int sig);
 
+#include "../include/termios.h"
+
+#define POLLIN  0x0001
+#define POLLOUT 0x0004
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
+
+int poll(struct pollfd *fds, unsigned long nfds, int timeout);
+int tcgetattr(int fd, struct termios *termios_p);
+int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
+
+void *pci_map(int bus, int slot, int func, int bar);
+void pci_unmap(void *addr, size_t size);
+int irq_register(int irq);
+int irq_wait(int irq);
+u8 ioport_in8(u16 port);
+u16 ioport_in16(u16 port);
+u32 ioport_in32(u16 port);
+void ioport_out8(u16 port, u8 val);
+void ioport_out16(u16 port, u16 val);
+void ioport_out32(u16 port, u32 val);
+
 #endif

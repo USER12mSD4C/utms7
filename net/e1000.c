@@ -8,7 +8,6 @@
 #include "../drivers/drm.h"
 
 #define E1000_VENDOR 0x8086
-#define E1000_DEVICE 0x100E
 
 #define E1000_CTRL     0x0000
 #define E1000_STATUS   0x0008
@@ -133,7 +132,8 @@ static int e1000_map_mmio(void) {
 
 int e1000_init(pci_dev_t *pci) {
     if (!pci) return -1;
-    if (pci->vendor_id != E1000_VENDOR || pci->device_id != E1000_DEVICE) return -1;
+    if (pci->vendor_id != E1000_VENDOR) return -1;
+    if (pci->device_id != 0x100E && pci->device_id != 0x1502) return -1;
 
     sc = kmalloc(sizeof(e1000_softc_t));
     if (!sc) return -1;

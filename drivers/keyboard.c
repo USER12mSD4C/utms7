@@ -29,25 +29,59 @@ static const u8 sc_ascii_shift[] = {
     0, '|','Z','X','C','V','B','N','M','<','>','?', 0,
     '*',0,' ',0
 };
+static volatile int kbd_e0 = 0;
 
 void keyboard_handler(void) {
     u8 sc = inb(KEYBOARD_DATA);
 
-    // Key release events
-    if (sc == 0xAA || sc == 0xB6) {  // Shift release
+    if (sc == 0xE0) {
+        kbd_e0 = 1;
+        return;
+    }
+
+    if (sc == 0xAA || sc == 0xB6) {
         kbd_shift = 0;
         return;
     }
 
-    // Key press events
+    if (kbd_e0) {
+        kbd_e0 = 0;
+        if (sc & 0x80) return;
+
+        const char* seq = NULL;
+        switch (sc) {
+            case 0x48: seq = "\033[A"; break;
+            case 0x50: seq = "\033[B"; break;
+            case 0x4D: seq = "\033[C"; break;
+            case 0x4B: seq = "\033[D"; break;
+            case 0x47: seq = "\033[H"; break;
+            case 0x4F: seq = "\033[F"; break;
+            case 0x49: seq = "\033[5~"; break;
+            case 0x51: seq = "\033[6~"; break;
+            case 0x52: seq = "\033[2~"; break;
+            case 0x53: seq = "\033[3~"; break;
+        }
+
+        if (seq) {
+            while (*seq) {
+                int next = (kbd_head + 1) % BUFFER_SIZE;
+                if (next != kbd_tail) {
+                    kbd_buffer[kbd_head] = *seq++;
+                    kbd_head = next;
+                } else break;
+            }
+        }
+        return;
+    }
+
     if (sc & 0x80) return;
 
-    if (sc == 0x2A || sc == 0x36) {  // Shift press
+    if (sc == 0x2A || sc == 0x36) {
         kbd_shift = 1;
         return;
     }
 
-    if (sc == 0x3A) {  // Caps Lock press
+    if (sc == 0x3A) {
         kbd_caps = !kbd_caps;
         return;
     }
@@ -55,11 +89,10 @@ void keyboard_handler(void) {
     if (sc < 58) {
         u8 c = kbd_shift ? sc_ascii_shift[sc] : sc_ascii[sc];
 
-        // Apply Caps Lock (toggle case for letters)
         if (kbd_caps && !kbd_shift && c >= 'a' && c <= 'z') {
-            c -= 32;  // lowercase to uppercase
+            c -= 32;
         } else if (kbd_caps && kbd_shift && c >= 'A' && c <= 'Z') {
-            c += 32;  // uppercase to lowercase (Caps + Shift = lowercase)
+            c += 32;
         }
 
         if (c) {

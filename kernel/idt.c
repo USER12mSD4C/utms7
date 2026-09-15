@@ -31,9 +31,7 @@ struct idt_ptr {
 static struct idt_entry idt[IDT_ENTRIES] __attribute__((aligned(16)));
 static struct idt_ptr idtp;
 irq_handler_t irq_handlers[16];
-u32 system_ticks = 0;
 
-// Внешние ассемблерные точки входа
 extern void isr_wrapper0(void);   extern void isr_wrapper1(void);
 extern void isr_wrapper2(void);   extern void isr_wrapper3(void);
 extern void isr_wrapper4(void);   extern void isr_wrapper5(void);
@@ -136,10 +134,7 @@ void exception_handler_c(int error_code, int num, u64 cr2, u64 rip, u64 cs, u64 
     }
 }
 
-static void irq0_handler_c(void) {
-    outb(0xE9, 'I');
-    system_ticks++;
-}
+static void irq0_handler_c(void) {}
 
 static void irq1_handler_c(void) { inb(0x60); }
 static void irq2_handler_c(void) {}
@@ -245,14 +240,6 @@ int idt_init(void) {
     irq_unmask(0); // таймер
     irq_unmask(1); // клавиатура
 
-    return 0;
-}
-
-int timer_init(void) {
-    u32 divisor = 1193180 / 100; // 100 Гц
-    outb(0x43, 0x36);
-    outb(0x40, divisor & 0xFF);
-    outb(0x40, (divisor >> 8) & 0xFF);
     return 0;
 }
 

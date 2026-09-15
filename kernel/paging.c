@@ -129,6 +129,19 @@ int paging_map_for_process(u64* pml4_ptr, u64 phys, u64 virt, u64 flags) {
     return 0;
 }
 
+#define MMIO_MAX_REGIONS 16
+
+static u64 mmio_base[MMIO_MAX_REGIONS];
+static u64 mmio_len[MMIO_MAX_REGIONS];
+static int mmio_count;
+
+void mmio_register(u64 base, u64 len) {
+    if (mmio_count >= MMIO_MAX_REGIONS) return;
+    mmio_base[mmio_count] = base & ~0xFFFULL;
+    mmio_len[mmio_count] = (len + 0xFFFULL) & ~0xFFFULL;
+    mmio_count++;
+}
+
 u64* create_address_space(void) {
     u64* new_pml4 = (u64*)pmm_alloc_page();
     if (!new_pml4) return NULL;
@@ -147,10 +160,17 @@ u64* create_address_space(void) {
     u64 fb_phys = drm_fb_phys();
     u64 fb_size = drm_fb_size();
 
-    if (fb_phys >= 0x40000000ULL && fb_size != 0) {
-        for (u64 off = 0; off < fb_size; off += 4096) {
-            if (paging_map_for_process(new_pml4, fb_phys + off, fb_phys + off,
-                PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+    for (u64 off = 0; off < fb_size; off += 4096) {
+        if (paging_map_for_process(new_pml4, fb_phys + off, fb_phys + off,
+            PAGE_PRESENT | PAGE_WRITABLE | PAGE_USER) != 0) {
+            break;
+        }
+    }
+
+    for (int r = 0; r < mmio_count; r++) {
+        for (u64 off = 0; off < mmio_len[r]; off += 4096) {
+            if (paging_map_for_process(new_pml4, mmio_base[r] + off,
+                mmio_base[r] + off, PAGE_PRESENT | PAGE_WRITABLE) != 0) {
                 break;
             }
         }
@@ -224,4 +244,25 @@ void free_address_space(u64* pml4_ptr) {
         pmm_free_page(pdpt);
     }
     pmm_free_page(pml4_ptr);
+}
+
+int paging_unmap_for_process(u64* pml4_ptr, u64 virt_addr) {
+    u64 pml4_idx = (virt_addr >> 39) & 0x1FF;
+    u64 pdpt_idx = (virt_addr >> 30) & 0x1FF;
+    u64 pd_idx    = (virt_addr >> 21) & 0x1FF;
+    u64 pt_idx    = (virt_addr >> 12) & 0x1FF;
+
+    if ((pml4_ptr[pml4_idx] & PAGE_PRESENT) == 0) return -1;
+    u64* pdpt = (u64*)(pml4_ptr[pml4_idx] & ~0xFFFULL);
+    if ((pdpt[pdpt_idx] & PAGE_PRESENT) == 0) return -1;
+    u64* pd = (u64*)(pdpt[pdpt_idx] & ~0xFFFULL);
+    if ((pd[pd_idx] & PAGE_PRESENT) == 0) return -1;
+    if (pd[pd_idx] & PAGE_HUGE) {
+        pd[pd_idx] = 0;
+    } else {
+        u64* pt = (u64*)(pd[pd_idx] & ~0xFFFULL);
+        pt[pt_idx] = 0;
+    }
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt_addr) : "memory");
+    return 0;
 }

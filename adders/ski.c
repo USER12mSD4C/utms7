@@ -219,6 +219,13 @@ void ski(u64 mb_info_addr) {
     automount_first_ufs();
     print("\n");
 
+    extern int vgpu_init(void);
+    if (vgpu_init() == 0) {
+        print_setcolor(0x0A, 0x00);
+        print("[vgpu] virtio-gpu KMS active\n");
+        print_setcolor(0x07, 0x00);
+    }
+
     int total = 0;
     #define X(name, func, crit, ...) total++;
     #include "../kernel/init_table.h"
