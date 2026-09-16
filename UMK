@@ -11,224 +11,207 @@ KCFLAGS = $(CFLAGS) -mno-sse
 UCFLAGS = $(CFLAGS) -msse2
 LDFLAGS = -m elf_x86_64 -T linker.ld -nostdlib
 
-kernel/%.o: kernel/%.c
+B = build
+
+# Kernel object pattern rules
+$(B)/kernel/arch/x86_64/%.o: kernel/arch/x86_64/%.c
+	mkdir -p $(B)/kernel/arch/x86_64
 	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
-drivers/%.o: drivers/%.c
+$(B)/kernel/arch/x86_64/%.o: kernel/arch/x86_64/%.asm
+	mkdir -p $(B)/kernel/arch/x86_64
+	$(AS) $(ASFLAGS) -o $@ $<
+eoc
+
+$(B)/kernel/arch/x86_64/%.o: kernel/arch/x86_64/%.S
+	mkdir -p $(B)/kernel/arch/x86_64
+	$(AS) $(ASFLAGS) -o $@ $<
+eoc
+
+$(B)/kernel/arch/x86_64/syscall_asm.o: kernel/arch/x86_64/syscall.asm
+	mkdir -p $(B)/kernel/arch/x86_64
+	$(AS) $(ASFLAGS) -o $@ $<
+eoc
+
+$(B)/kernel/core/%.o: kernel/core/%.c
+	mkdir -p $(B)/kernel/core
 	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
-adders/%.o: adders/%.c
+$(B)/kernel/drivers/storage/%.o: kernel/drivers/storage/%.c
+	mkdir -p $(B)/kernel/drivers/storage
 	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
-net/%.o: net/%.c
+$(B)/kernel/drivers/input/%.o: kernel/drivers/input/%.c
+	mkdir -p $(B)/kernel/drivers/input
 	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
-lib/%.o: lib/%.c
+$(B)/kernel/drivers/gpu/%.o: kernel/drivers/gpu/%.c
+	mkdir -p $(B)/kernel/drivers/gpu
+	$(CC) $(KCFLAGS) -c -o $@ $<
+eoc
+
+$(B)/kernel/drivers/pci/%.o: kernel/drivers/pci/%.c
+	mkdir -p $(B)/kernel/drivers/pci
+	$(CC) $(KCFLAGS) -c -o $@ $<
+eoc
+
+$(B)/kernel/fs/%.o: kernel/fs/%.c
+	mkdir -p $(B)/kernel/fs
+	$(CC) $(KCFLAGS) -c -o $@ $<
+eoc
+
+# Userspace object pattern rules
+$(B)/apps/core/%.o: apps/core/%.c
+	mkdir -p $(B)/apps/core
 	$(CC) $(UCFLAGS) -c -o $@ $<
 eoc
 
-lib/crt0.o: lib/crt0.asm
-	$(AS) $(ASFLAGS) -o $@ $<
-eoc
-
-fs/%.o: fs/%.c
-	$(CC) $(KCFLAGS) -c -o $@ $<
-eoc
-
-shell/%.o: shell/%.c
-	$(CC) $(KCFLAGS) -c -o $@ $<
-eoc
-
-apps/%.o: apps/%.c
+$(B)/apps/disk/%.o: apps/disk/%.c
+	mkdir -p $(B)/apps/disk
 	$(CC) $(UCFLAGS) -c -o $@ $<
 eoc
 
-kernel/entry.o: kernel/entry.asm
+$(B)/apps/cc/%.o: apps/cc/%.c
+	mkdir -p $(B)/apps/cc
+	$(CC) $(UCFLAGS) -c -o $@ $<
+eoc
+
+$(B)/lib/%.o: lib/%.c
+	mkdir -p $(B)/lib
+	$(CC) $(UCFLAGS) -c -o $@ $<
+eoc
+
+$(B)/lib/crt0.o: lib/crt0.asm
+	mkdir -p $(B)/lib
 	$(AS) $(ASFLAGS) -o $@ $<
 eoc
 
-kernel/isr.o: kernel/isr.asm
-	$(AS) $(ASFLAGS) -o $@ $<
+# Other components
+$(B)/adders/%.o: adders/%.c
+	mkdir -p $(B)/adders
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
-kernel/sched_asm.o: kernel/sched_asm.S
-	$(AS) $(ASFLAGS) -o $@ $<
+$(B)/net/%.o: net/%.c
+	mkdir -p $(B)/net
+	$(CC) $(KCFLAGS) -c -o $@ $<
 eoc
 
-kernel/syscall_asm.o: kernel/syscall.asm
-	$(AS) $(ASFLAGS) -o $@ $<
-eoc
-
-kernel/gdt_flush.o: kernel/gdt_flush.asm
-	$(AS) $(ASFLAGS) -o $@ $<
-eoc
-
-linux_compat/%.o: linux_compat/%.c
+$(B)/linux_compat/%.o: linux_compat/%.c
+	mkdir -p $(B)/linux_compat
 	$(CC) $(KCFLAGS) -Ilinux_compat -Ilinux_compat/uapi -c -o $@ $<
 eoc
 
-tools/mkmod: tools/mkmod.c
-	mkdir -p tools
-	gcc -o tools/mkmod tools/mkmod.c
+# Object groups
+ARCH = $(B)/kernel/arch/x86_64/entry.o $(B)/kernel/arch/x86_64/isr.o $(B)/kernel/arch/x86_64/syscall_asm.o $(B)/kernel/arch/x86_64/gdt_flush.o $(B)/kernel/arch/x86_64/gdt.o $(B)/kernel/arch/x86_64/idt.o $(B)/kernel/arch/x86_64/paging.o $(B)/kernel/arch/x86_64/irq.o
+
+KRN = $(B)/kernel/core/kernel.o $(B)/kernel/core/sched.o $(B)/kernel/core/memory.o $(B)/kernel/core/vfs.o $(B)/kernel/core/unix.o $(B)/kernel/core/panic.o $(B)/kernel/core/kmod.o $(B)/kernel/core/binfmt.o $(B)/kernel/core/elf.o $(B)/kernel/core/syscall.o $(B)/kernel/core/acpi.o
+
+STR = $(B)/kernel/drivers/storage/disk.o $(B)/kernel/drivers/storage/ahci.o $(B)/kernel/drivers/storage/mbr.o $(B)/kernel/drivers/storage/gpt.o $(B)/kernel/drivers/storage/udisk.o
+
+INP = $(B)/kernel/drivers/input/keyboard.o $(B)/kernel/drivers/input/mouse.o
+
+GPU = $(B)/kernel/drivers/gpu/drm.o $(B)/kernel/drivers/gpu/i915.o
+
+PCI = $(B)/kernel/drivers/pci/pci.o
+
+FS = $(B)/kernel/fs/ufs.o $(B)/kernel/fs/fat.o $(B)/kernel/fs/fat32.o $(B)/kernel/fs/ext4.o $(B)/kernel/fs/procfs.o $(B)/kernel/fs/devfs.o
+
+NET = $(B)/net/arp.o $(B)/net/ip.o $(B)/net/icmp.o $(B)/net/tcp.o $(B)/net/udp.o $(B)/net/dhcp.o $(B)/net/dns.o $(B)/net/http.o $(B)/net/net.o $(B)/net/e1000.o $(B)/net/rtl8139.o $(B)/net/netconfig.o
+
+LCMP = $(B)/linux_compat/pci.o $(B)/linux_compat/interrupt.o $(B)/linux_compat/dma.o $(B)/linux_compat/virtio_gpu.o
+
+ADD = $(B)/adders/ski.o
+
+LIBC = $(B)/lib/string.o $(B)/lib/ctype.o $(B)/lib/stdlib.o $(B)/lib/stdio.o $(B)/lib/errno.o $(B)/lib/libc.o
+CRT = $(B)/lib/crt0.o $(LIBC)
+LIB = $(B)/lib/font.o $(B)/lib/zlib.o $(LIBC)
+
+ALL = $(ARCH) $(KRN) $(STR) $(INP) $(GPU) $(PCI) $(FS) $(NET) $(LIB) $(LCMP) $(ADD)
+
+# Kernel binary
+$(B)/kernel.bin: $(ALL)
+	mkdir -p $(B)
+	$(LD) $(LDFLAGS) -o $@ $(ALL)
 eoc
 
-drivers/mbr.o: drivers/mbr.c
-	$(CC) $(KCFLAGS) -c -o $@ $<
+# Userspace apps
+$(B)/bin/%.bin: $(B)/apps/core/%.o $(CRT)
+	mkdir -p $(B)/bin
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o $@ $(CRT) $<
 eoc
 
-apps/cc/%.o: apps/cc/%.c
-	$(CC) $(UCFLAGS) -c -o $@ $<
+$(B)/bin/udisk.bin: $(B)/apps/disk/udisk.o $(CRT)
+	mkdir -p $(B)/bin
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o $@ $(CRT) $(B)/apps/disk/udisk.o
 eoc
 
-chroot.bin: apps/chroot.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o chroot.bin $(UCRT) apps/chroot.o
+$(B)/bin/lsblk.bin: $(B)/apps/disk/lsblk.o $(CRT)
+	mkdir -p $(B)/bin
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o $@ $(CRT) $(B)/apps/disk/lsblk.o
 eoc
 
-CC_OBJS = apps/cc/main.o apps/cc/lexer.o apps/cc/parser.o apps/cc/ast.o apps/cc/codegen.o apps/cc/elf.o
-
-CORE = kernel/kernel.o kernel/kmod.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o kernel/unix.o kernel/vfs.o linux_compat/pci.o   linux_compat/interrupt.o linux_compat/dma.o linux_compat/virtio_gpu.o
-ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/gdt_flush.o
-DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o drivers/devfs.o drivers/i915.o
-NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
-LIBC = lib/string.o lib/ctype.o lib/stdlib.o lib/stdio.o lib/errno.o lib/libc.o
-UCRT = lib/crt0.o $(LIBC)
-LIB = lib/font.o lib/zlib.o $(LIBC)
-FS = fs/ufs.o fs/fat.o fs/fat32.o fs/ext4.o fs/procfs.o
-ADDERS = adders/ski.o
-
-ALL = $(CORE) $(ASM) $(DRV) $(NET) $(LIB) $(FS) $(ADDERS)
-
-kernel.bin: $(ALL)
-	$(LD) $(LDFLAGS) -o kernel.bin $(ALL)
+$(B)/bin/mount.bin: $(B)/apps/disk/mount.o $(CRT)
+	mkdir -p $(B)/bin
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o $@ $(CRT) $(B)/apps/disk/mount.o
 eoc
 
-init.bin: apps/init.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o init.bin $(UCRT) apps/init.o
+$(B)/bin/umount.bin: $(B)/apps/disk/umount.o $(CRT)
+	mkdir -p $(B)/bin
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o $@ $(CRT) $(B)/apps/disk/umount.o
 eoc
 
-sfsh.bin: apps/sfsh.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o sfsh.bin $(UCRT) apps/sfsh.o
+$(B)/bin/mkfs.bin: $(B)/apps/disk/mkfs.o $(CRT)
+	mkdir -p $(B)/bin
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o $@ $(CRT) $(B)/apps/disk/mkfs.o
 eoc
 
-ls.bin: apps/ls.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o ls.bin $(UCRT) apps/ls.o
+$(B)/bin/cc.bin: $(B)/apps/cc/main.o $(B)/apps/cc/lexer.o $(B)/apps/cc/parser.o $(B)/apps/cc/ast.o $(B)/apps/cc/codegen.o $(B)/apps/cc/elf.o $(CRT)
+	mkdir -p $(B)/bin
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o $@ $(CRT) $(B)/apps/cc/main.o $(B)/apps/cc/lexer.o $(B)/apps/cc/parser.o $(B)/apps/cc/ast.o $(B)/apps/cc/codegen.o $(B)/apps/cc/elf.o
 eoc
 
-mkdir.bin: apps/mkdir.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkdir.bin $(UCRT) apps/mkdir.o
-eoc
+# All binaries
+BINS = $(B)/bin/init.bin $(B)/bin/sfsh.bin $(B)/bin/ls.bin $(B)/bin/mkdir.bin $(B)/bin/touch.bin $(B)/bin/rm.bin $(B)/bin/cat.bin $(B)/bin/cp.bin $(B)/bin/mk.bin $(B)/bin/rmdir.bin $(B)/bin/hex.bin $(B)/bin/editor.bin $(B)/bin/test_libc.bin $(B)/bin/chroot.bin $(B)/bin/udisk.bin $(B)/bin/lsblk.bin $(B)/bin/mount.bin $(B)/bin/umount.bin $(B)/bin/mkfs.bin $(B)/bin/cc.bin
 
-touch.bin: apps/touch.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o touch.bin $(UCRT) apps/touch.o
-eoc
-
-rm.bin: apps/rm.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o rm.bin $(UCRT) apps/rm.o
-eoc
-
-cat.bin: apps/cat.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o cat.bin $(UCRT) apps/cat.o
-eoc
-
-cp.bin: apps/cp.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o cp.bin $(UCRT) apps/cp.o
-eoc
-
-mk.bin: apps/mk.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mk.bin $(UCRT) apps/mk.o
-eoc
-
-udisk.bin: apps/udisk.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o udisk.bin apps/udisk.o $(UCRT)
-eoc
-
-lsblk.bin: apps/lsblk.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o lsblk.bin apps/lsblk.o $(UCRT)
-eoc
-
-mount.bin: apps/mount.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mount.bin apps/mount.o $(UCRT)
-eoc
-
-umount.bin: apps/umount.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o umount.bin apps/umount.o $(UCRT)
-eoc
-
-mkfs.bin: apps/mkfs.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.bin apps/mkfs.o $(UCRT)
-eoc
-
-cc.bin: $(CC_OBJS) $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o cc.bin $(CC_OBJS) $(UCRT)
-eoc
-
-mkfs.ufs.bin: apps/mkfs.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.ufs.bin apps/mkfs.o $(UCRT)
-eoc
-
-mkfs.fat.bin: apps/mkfs.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.fat.bin apps/mkfs.o $(UCRT)
-eoc
-
-mkfs.ext4.bin: apps/mkfs.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o mkfs.ext4.bin apps/mkfs.o $(UCRT)
-eoc
-
-rmdir.bin: apps/rmdir.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o rmdir.bin $(UCRT) apps/rmdir.o
-eoc
-
-test_libc.bin: apps/test_libc.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o test_libc.bin $(UCRT) apps/test_libc.o
-eoc
-
-hex.bin: apps/hex.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o hex.bin $(UCRT) apps/hex.o
-eoc
-
-editor.bin: apps/editor.o $(UCRT)
-	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o editor.bin $(UCRT) apps/editor.o
-eoc
-
-kom:
+# Modules
+kom: $(B)/kernel/drivers/storage/mbr.o $(B)/kernel/drivers/storage/gpt.o
 	mkdir -p modules
-	cp drivers/mbr.o modules/mbr.ko
-	cp drivers/gpt.o modules/gpt.ko
+	cp $(B)/kernel/drivers/storage/mbr.o modules/mbr.ko
+	cp $(B)/kernel/drivers/storage/gpt.o modules/gpt.ko
 	echo " MODULES BUILT "
 eoc
 
-iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin rmdir.bin test_libc.bin hex.bin editor.bin chroot.bin kom
+# ISO
+iso: $(B)/kernel.bin $(BINS) kom
 	echo " CREATING ISO "
 	rm -rf iso
 	mkdir -p iso/boot/grub iso/modules
-	cp kernel.bin iso/boot/kernel.bin
-	cp init.bin iso/modules/init.bin
-	cp sfsh.bin iso/modules/sfsh.bin
-	cp cc.bin iso/modules/cc.bin
-	cp udisk.bin iso/modules/udisk.bin
-	cp lsblk.bin iso/modules/lsblk.bin
-	cp mount.bin iso/modules/mount.bin
-	cp umount.bin iso/modules/umount.bin
-	cp mkfs.bin iso/modules/mkfs.bin
-	cp mkfs.ufs.bin iso/modules/mkfs.ufs.bin
-	cp mkfs.fat.bin iso/modules/mkfs.fat.bin
-	cp mkfs.ext4.bin iso/modules/mkfs.ext4.bin
-	cp ls.bin iso/modules/ls.bin
-	cp mkdir.bin iso/modules/mkdir.bin
-	cp touch.bin iso/modules/touch.bin
-	cp rm.bin iso/modules/rm.bin
-	cp cat.bin iso/modules/cat.bin
-	cp cp.bin iso/modules/cp.bin
-	cp mk.bin iso/modules/mk.bin
-	cp rmdir.bin iso/modules/rmdir.bin
-	cp test_libc.bin iso/modules/test_libc.bin
-	cp hex.bin iso/modules/hex.bin
-	cp editor.bin iso/modules/editor.bin
-	cp chroot.bin iso/modules/chroot.bin
+	cp $(B)/kernel.bin iso/boot/kernel.bin
+	cp $(B)/bin/init.bin iso/modules/init.bin
+	cp $(B)/bin/sfsh.bin iso/modules/sfsh.bin
+	cp $(B)/bin/cc.bin iso/modules/cc.bin
+	cp $(B)/bin/udisk.bin iso/modules/udisk.bin
+	cp $(B)/bin/lsblk.bin iso/modules/lsblk.bin
+	cp $(B)/bin/mount.bin iso/modules/mount.bin
+	cp $(B)/bin/umount.bin iso/modules/umount.bin
+	cp $(B)/bin/mkfs.bin iso/modules/mkfs.bin
+	cp $(B)/bin/ls.bin iso/modules/ls.bin
+	cp $(B)/bin/mkdir.bin iso/modules/mkdir.bin
+	cp $(B)/bin/touch.bin iso/modules/touch.bin
+	cp $(B)/bin/rm.bin iso/modules/rm.bin
+	cp $(B)/bin/cat.bin iso/modules/cat.bin
+	cp $(B)/bin/cp.bin iso/modules/cp.bin
+	cp $(B)/bin/mk.bin iso/modules/mk.bin
+	cp $(B)/bin/rmdir.bin iso/modules/rmdir.bin
+	cp $(B)/bin/test_libc.bin iso/modules/test_libc.bin
+	cp $(B)/bin/hex.bin iso/modules/hex.bin
+	cp $(B)/bin/editor.bin iso/modules/editor.bin
+	cp $(B)/bin/chroot.bin iso/modules/chroot.bin
 	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
 	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
 	sh -c 'echo "set default=0" >> iso/boot/grub/grub.cfg'
@@ -242,9 +225,6 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	sh -c 'echo "    module2 /modules/mount.bin mount" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/umount.bin umount" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/mkfs.bin mkfs" >> iso/boot/grub/grub.cfg'
-	sh -c 'echo "    module2 /modules/mkfs.ufs.bin mkfs.ufs" >> iso/boot/grub/grub.cfg'
-	sh -c 'echo "    module2 /modules/mkfs.fat.bin mkfs.fat" >> iso/boot/grub/grub.cfg'
-	sh -c 'echo "    module2 /modules/mkfs.ext4.bin mkfs.ext4" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/ls.bin ls" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/mkdir.bin mkdir" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/touch.bin touch" >> iso/boot/grub/grub.cfg'
@@ -267,48 +247,26 @@ eoc
 
 build:
 	echo " BUILDING UTMS "
-	call kernel.bin
-	call init.bin
-	call sfsh.bin
-	call cc.bin
-	call udisk.bin
-	call lsblk.bin
-	call mount.bin
-	call umount.bin
-	call mkfs.bin
-	call mkfs.ufs.bin
-	call mkfs.fat.bin
-	call mkfs.ext4.bin
-	call ls.bin
-	call mkdir.bin
-	call touch.bin
-	call rm.bin
-	call cat.bin
-	call cp.bin
-	call mk.bin
-	call rmdir.bin
-	call chroot.bin
+	call $(B)/kernel.bin
+	call $(B)/bin/init.bin
+	call $(B)/bin/sfsh.bin
+	call $(B)/bin/cc.bin
+	call $(B)/bin/udisk.bin
+	call $(B)/bin/lsblk.bin
+	call $(B)/bin/mount.bin
+	call $(B)/bin/umount.bin
+	call $(B)/bin/mkfs.bin
+	call $(B)/bin/ls.bin
+	call $(B)/bin/mkdir.bin
+	call $(B)/bin/touch.bin
+	call $(B)/bin/rm.bin
+	call $(B)/bin/cat.bin
+	call $(B)/bin/cp.bin
+	call $(B)/bin/mk.bin
+	call $(B)/bin/rmdir.bin
+	call $(B)/bin/chroot.bin
 	call kom
 	echo " BUILD COMPLETE "
-	+flags:
-		-fg(clean):
-			echo "[CLEAN] Cleaning before build..."
-			call clean
-			call kernel.bin
-			call init.bin
-			call sfsh.bin
-			call cc.bin
-			call kom
-		eofg
-		+fg(iso):
-			echo "[ISO] Creating ISO..."
-			call iso
-		eofg
-		+fg(disk):
-			echo "[DISK] Creating disk..."
-			call disk1g.img
-		eofg
-	;
 eoc
 
 run: iso
@@ -326,9 +284,9 @@ runD:
 	qemu-system-x86_64 -cdrom utms.iso -m 512 -hda disk1g.img -vga std -netdev user,id=net0 -device rtl8139,netdev=net0 -boot d -no-reboot -no-shutdown -device virtio-gpu-pci,xres=1024,yres=768 -d int,cpu_reset -D ./qemu.log
 eoc
 
-run-disk: kernel.bin disk1g.img
+run-disk: $(B)/kernel.bin disk1g.img
 	echo " STARTING UTMS (disk only) "
-	qemu-system-x86_64 -kernel kernel.bin -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -device virtio-gpu-pci,xres=1024,yres=768
+	qemu-system-x86_64 -kernel $(B)/kernel.bin -m 512 -hda disk1g.img -vga std -global VGA.vgamem_mb=64 -netdev user,id=net0 -device rtl8139,netdev=net0 -device virtio-gpu-pci,xres=1024,yres=768
 eoc
 
 run-serial: iso disk1g.img
@@ -343,11 +301,12 @@ eoc
 
 clean:
 	echo " CLEANING "
-	rm -rf apps/cc/*.o apps/cc/*.d lib/*.o lib/*.d fs/*.o fs/*.d kernel/*.o kernel/*.d drivers/*.o drivers/*.d adders/*.o adders/*.d apps/*.o apps/*.d *.bin *.iso iso/ modules/ tools/mkmod
+	rm -rf $(B) modules iso utms.iso
+	rm -f *.bin
 	+flags:
 		-fg(all):
 			echo "[ALL] Full clean with disks..."
-			rm -rf *.o */*.o *.bin *.iso iso/ disk*.img modules/ tools/mkmod
+			rm -rf disk*.img
 		eofg
 	;
 eoc

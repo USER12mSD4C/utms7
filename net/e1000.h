@@ -2,7 +2,7 @@
 #define E1000_H
 
 #include "../include/types.h"
-#include "../drivers/pci.h"
+#include "../kernel/drivers/pci/pci.h"
 
 #define E1000_DEVICE_82540EM 0x100E
 #define E1000_DEVICE_82579LM 0x1502

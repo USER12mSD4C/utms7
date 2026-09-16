@@ -1,18 +1,18 @@
-#include "../drivers/drm.h"
-#include "../kernel/memory.h"
-#include "../fs/ufs.h"
-#include "../drivers/disk.h"
-#include "../kernel/gdt.h"
-#include "../kernel/idt.h"
-#include "../kernel/syscall.h"
+#include "../kernel/drivers/gpu/drm.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/fs/ufs.h"
+#include "../kernel/drivers/storage/disk.h"
+#include "../kernel/arch/x86_64/gdt.h"
+#include "../kernel/arch/x86_64/idt.h"
+#include "../kernel/core/syscall.h"
 #include "../include/multiboot2.h"
 #include "../include/string.h"
-#include "../kernel/paging.h"
-#include "../kernel/sched.h"
-#include "../kernel/kmod.h"
-#include "../drivers/pci.h"
+#include "../kernel/arch/x86_64/paging.h"
+#include "../kernel/core/sched.h"
+#include "../kernel/core/kmod.h"
+#include "../kernel/drivers/pci/pci.h"
 #include "../net/net.h"
-#include "../drivers/keyboard.h"
+#include "../kernel/drivers/input/keyboard.h"
 #include "../include/udisk.h"
 
 extern u64 __bss_end;
@@ -228,7 +228,7 @@ void ski(u64 mb_info_addr) {
 
     int total = 0;
     #define X(name, func, crit, ...) total++;
-    #include "../kernel/init_table.h"
+    #include "../kernel/core/init_table.h"
     #undef X
     int current = 0;
     #define X(name, func, crit, ...) \
@@ -266,7 +266,7 @@ void ski(u64 mb_info_addr) {
             } \
             print_setcolor(0x07, 0x00); \
         } while(0);
-    #include "../kernel/init_table.h"
+    #include "../kernel/core/init_table.h"
     #undef X
 
     print("\nUTMS Kernel loaded\\\\\nUTMS Innovative Technologies [UIT], under UOPL_1.6.4\n\n");

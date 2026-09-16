@@ -1,8 +1,8 @@
 #include "../include/netconfig.h"
 #include "../include/string.h"
-#include "../kernel/vfs.h"
-#include "../kernel/memory.h"
-#include "../drivers/drm.h"
+#include "../kernel/core/vfs.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/drivers/gpu/drm.h"
 
 static net_config_t config;
 

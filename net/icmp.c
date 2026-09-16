@@ -3,7 +3,7 @@
 #include "net.h"
 #include "../include/string.h"
 #include "../include/endian.h"
-#include "../kernel/memory.h"
+#include "../kernel/core/memory.h"
 
 static u16 icmp_id = 0x1234;
 static u16 icmp_seq = 0;

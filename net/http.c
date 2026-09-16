@@ -3,7 +3,7 @@
 #include "tcp.h"
 #include "dns.h"
 #include "net.h"
-#include "../kernel/memory.h"
+#include "../kernel/core/memory.h"
 #include "../include/string.h"
 
 typedef struct {

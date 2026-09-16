@@ -4,8 +4,8 @@
 #include "net.h"
 #include "../include/string.h"
 #include "../include/endian.h"
-#include "../kernel/memory.h"
-#include "../drivers/drm.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/drivers/gpu/drm.h"
 
 #define UDP_MAX_PORTS 16
 #define UDP_BUFFER_SIZE 8192

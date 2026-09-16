@@ -3,7 +3,7 @@
 #define RTL8139_H
 
 #include "../include/types.h"
-#include "../drivers/pci.h"
+#include "../kernel/drivers/pci/pci.h"
 
 int rtl8139_init(pci_dev_t *pci);
 void rtl8139_send(u8 *data, u16 len);

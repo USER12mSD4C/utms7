@@ -2,7 +2,7 @@
 #define LINUX_COMPAT_SLAB_H
 
 #include "types.h"
-#include "../kernel/memory.h"
+#include "../kernel/core/memory.h"
 #include "../include/string.h"
 
 #define GFP_KERNEL 0

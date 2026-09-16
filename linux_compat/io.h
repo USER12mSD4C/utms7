@@ -2,7 +2,7 @@
 #define LINUX_COMPAT_IO_H
 
 #include "types.h"
-#include "../kernel/paging.h"
+#include "../kernel/arch/x86_64/paging.h"
 
 static inline void __iomem *ioremap(u64 phys, size_t size) {
     u64 pages = (size + 4095) / 4096;

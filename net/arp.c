@@ -4,8 +4,8 @@
 #include "ethernet.h"
 #include "../include/string.h"
 #include "../include/endian.h"
-#include "../kernel/memory.h"
-#include "../drivers/drm.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/drivers/gpu/drm.h"
 
 #define ARP_CACHE_SIZE 16
 

@@ -1,7 +1,7 @@
 #include "types.h"
 #include "interrupt.h"
 extern void idt_register_irq(int irq, void (*handler)(void));
-#include "../kernel/memory.h"
+#include "../kernel/core/memory.h"
 
 struct irq_action {
     lc_irq_handler_t handler;

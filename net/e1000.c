@@ -2,10 +2,10 @@
 #include "e1000.h"
 #include "../include/io.h"
 #include "../include/string.h"
-#include "../kernel/memory.h"
-#include "../kernel/paging.h"
-#include "../drivers/pci.h"
-#include "../drivers/drm.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/arch/x86_64/paging.h"
+#include "../kernel/drivers/pci/pci.h"
+#include "../kernel/drivers/gpu/drm.h"
 
 #define E1000_VENDOR 0x8086
 

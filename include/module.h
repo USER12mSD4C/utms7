@@ -2,7 +2,7 @@
 #define MODULE_H
 
 #include "types.h"
-#include "../kernel/elf.h"
+#include "../kernel/core/elf.h"
 
 typedef struct loaded_module {
     char name[64];

@@ -1,10 +1,10 @@
 #include "types.h"
 #include "pci.h"
 #include "dma.h"
-#include "../kernel/memory.h"
-#include "../kernel/paging.h"
-#include "../kernel/sched.h"
-#include "../drivers/drm.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/arch/x86_64/paging.h"
+#include "../kernel/core/sched.h"
+#include "../kernel/drivers/gpu/drm.h"
 #include "../include/string.h"
 #include <linux/virtio_gpu.h>
 

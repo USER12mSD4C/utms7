@@ -1,5 +1,5 @@
 #include "../include/string.h"
-#include "../kernel/memory.h"
+#include "../kernel/core/memory.h"
 
 #define ZLIB_MAX_BITS 15
 #define ZLIB_MAX_LIT 288

@@ -3,7 +3,7 @@
 #include "net.h"
 #include "../include/string.h"
 #include "../include/endian.h"
-#include "../kernel/memory.h"
+#include "../kernel/core/memory.h"
 
 #define DHCP_SERVER_PORT 67
 #define DHCP_CLIENT_PORT 68

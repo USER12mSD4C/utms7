@@ -5,7 +5,7 @@
 #include "ethernet.h"
 #include "../include/string.h"
 #include "../include/endian.h"
-#include "../kernel/memory.h"
+#include "../kernel/core/memory.h"
 
 u16 ip_checksum(u16 *data, int len) {
     u32 sum = 0;

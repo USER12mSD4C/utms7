@@ -4,9 +4,9 @@
 #include "net.h"
 #include "../include/string.h"
 #include "../include/endian.h"
-#include "../kernel/memory.h"
-#include "../kernel/sched.h"
-#include "../drivers/drm.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/core/sched.h"
+#include "../kernel/drivers/gpu/drm.h"
 
 #define MAX_SOCKETS 32
 #define TCP_RETRANSMIT_MS 500

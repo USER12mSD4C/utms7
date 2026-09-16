@@ -2,7 +2,7 @@
 #define GPT_H
 
 #include "../include/types.h"
-#include "../kernel/vfs.h"
+#include "../kernel/core/vfs.h"
 
 #define GPT_HEADER_SIGNATURE 0x5452415020494645ULL
 #define GPT_PARTITION_SIGNATURE 0x0000000000000000ULL

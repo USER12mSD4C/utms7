@@ -2,9 +2,9 @@
 #include "rtl8139.h"
 #include "../include/io.h"
 #include "../include/string.h"
-#include "../kernel/memory.h"
-#include "../drivers/pci.h"
-#include "../drivers/drm.h"
+#include "../kernel/core/memory.h"
+#include "../kernel/drivers/pci/pci.h"
+#include "../kernel/drivers/gpu/drm.h"
 
 extern void net_handle_packet(u8 *packet, int len);
 
