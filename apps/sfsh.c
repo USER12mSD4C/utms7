@@ -183,10 +183,8 @@ static int cmd_cd(int argc, char **argv) {
 
 static int cmd_ls(int argc, char** argv) {
     const char* path = (argc > 1) ? argv[1] : cwd;
-    struct dirent ents[128];
-
-    long n = syscall(SYS_readdir, (long)path, (long)ents, 128, 0, 0, 0);
-    if (n < 0) {
+    DIR *dir = opendir(path);
+    if (!dir) {
         set_color(COL_ERR, 0);
         out("ls: cannot access '");
         out(path);
@@ -195,21 +193,33 @@ static int cmd_ls(int argc, char** argv) {
         return -1;
     }
 
-    for (long i = 0; i < n; i++) {
-        if (strcmp(ents[i].name, ".") == 0 || strcmp(ents[i].name, "..") == 0) continue;
+    struct linux_dirent64 *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
 
-        if (ents[i].is_dir) {
+        if (ent->d_type == 4) {
             set_color(COL_DIR, 0);
-            out(ents[i].name);
+            out(ent->d_name);
             out("/\n");
         } else {
             set_color(COL_RESET, 0);
-            out(ents[i].name);
-            out("  ");
-            put_u64(ents[i].size);
-            out(" B\n");
+            out(ent->d_name);
+            char full_path[512];
+            if (strcmp(path, "/") == 0) {
+                snprintf(full_path, sizeof(full_path), "/%s", ent->d_name);
+            } else {
+                snprintf(full_path, sizeof(full_path), "%s/%s", path, ent->d_name);
+            }
+            struct stat st;
+            if (stat(full_path, &st) == 0) {
+                out("  ");
+                put_u64(st.st_size);
+                out(" B");
+            }
+            out("\n");
         }
     }
+    closedir(dir);
 
     set_color(COL_RESET, 0);
     return 0;
@@ -311,7 +321,7 @@ static int cmd_ps(int argc, char **argv) {
     (void)argv;
 
     ps_entry_t ents[32];
-    long n = syscall(SYS_ps, (long)ents, 32, 0, 0, 0, 0);
+    long n = syscall(uSYS_ps, (long)ents, 32, 0, 0, 0, 0);
 
     if (n <= 0) {
         out("no processes\n");
@@ -362,7 +372,7 @@ static int cmd_mem(int argc, char **argv) {
     unsigned long long u = 0;
     unsigned long long f = 0;
 
-    syscall(SYS_meminfo, (long)&t, (long)&u, (long)&f, 0, 0, 0);
+    syscall(uSYS_meminfo, (long)&t, (long)&u, (long)&f, 0, 0, 0);
 
     out("total: ");
     put_u64(t / 1024);
@@ -383,7 +393,7 @@ static int cmd_uptime(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    unsigned long ticks = (unsigned long)syscall(SYS_gettime, 0, 0, 0, 0, 0, 0);
+    unsigned long ticks = (unsigned long)syscall(uSYS_gettime, 0, 0, 0, 0, 0, 0);
     unsigned long s = ticks / 1000;
     unsigned long h = s / 3600;
     unsigned long m = (s % 3600) / 60;

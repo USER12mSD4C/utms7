@@ -6,5 +6,11 @@
 *.img
 *.log
 *.ko
+*.mod
+*.symvers
+*.order
+*.cmd
+tools/ufs/mkfs.ufs
+ufs.mod.c
 iso
 .umk_cache

@@ -29,6 +29,12 @@ SECTIONS
         *(.data.*)
     }
 
+    .fs_init : ALIGN(8) {
+        __start_fs_init = .;
+        *(.fs_init)
+        __stop_fs_init = .;
+    }
+
     .bss : ALIGN(4096) {
         __bss_start = .;
         *(COMMON)

@@ -32,7 +32,6 @@ typedef struct {
     u32 rev_level;
     u16 def_resuid;
     u16 def_resgid;
-    // ...还有很多
 } __attribute__((packed)) ext4_superblock_t;
 
 int ext4_mount(u32 start_lba);

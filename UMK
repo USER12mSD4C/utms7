@@ -84,16 +84,20 @@ apps/cc/%.o: apps/cc/%.c
 	$(CC) $(UCFLAGS) -c -o $@ $<
 eoc
 
+chroot.bin: apps/chroot.o $(UCRT)
+	$(LD) -m elf_x86_64 -T user.ld -nostdlib -o chroot.bin $(UCRT) apps/chroot.o
+eoc
+
 CC_OBJS = apps/cc/main.o apps/cc/lexer.o apps/cc/parser.o apps/cc/ast.o apps/cc/codegen.o apps/cc/elf.o
 
 CORE = kernel/kernel.o kernel/kmod.o kernel/elf.o kernel/binfmt.o kernel/syscall.o kernel/gdt.o kernel/idt.o kernel/memory.o kernel/paging.o kernel/panic.o kernel/sched.o kernel/irq.o kernel/unix.o kernel/vfs.o linux_compat/pci.o   linux_compat/interrupt.o linux_compat/dma.o linux_compat/virtio_gpu.o
 ASM = kernel/entry.o kernel/isr.o kernel/syscall_asm.o kernel/gdt_flush.o
-DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o drivers/devfs.o
+DRV = drivers/mbr.o drivers/drm.o drivers/keyboard.o drivers/mouse.o drivers/disk.o drivers/gpt.o drivers/udisk.o drivers/pci.o drivers/ahci.o drivers/devfs.o drivers/i915.o
 NET = net/arp.o net/ip.o net/icmp.o net/tcp.o net/udp.o net/dhcp.o net/dns.o net/http.o net/net.o net/e1000.o net/rtl8139.o net/netconfig.o
 LIBC = lib/string.o lib/ctype.o lib/stdlib.o lib/stdio.o lib/errno.o lib/libc.o
 UCRT = lib/crt0.o $(LIBC)
 LIB = lib/font.o lib/zlib.o $(LIBC)
-FS = fs/ufs.o fs/fat.o fs/fat32.o fs/ext4.o
+FS = fs/ufs.o fs/fat.o fs/fat32.o fs/ext4.o fs/procfs.o
 ADDERS = adders/ski.o
 
 ALL = $(CORE) $(ASM) $(DRV) $(NET) $(LIB) $(FS) $(ADDERS)
@@ -197,7 +201,7 @@ kom:
 	echo " MODULES BUILT "
 eoc
 
-iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin rmdir.bin test_libc.bin hex.bin editor.bin kom
+iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bin mkfs.bin mkfs.ufs.bin mkfs.fat.bin mkfs.ext4.bin ls.bin mkdir.bin touch.bin rm.bin cat.bin cp.bin mk.bin rmdir.bin test_libc.bin hex.bin editor.bin chroot.bin kom
 	echo " CREATING ISO "
 	rm -rf iso
 	mkdir -p iso/boot/grub iso/modules
@@ -224,6 +228,7 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	cp test_libc.bin iso/modules/test_libc.bin
 	cp hex.bin iso/modules/hex.bin
 	cp editor.bin iso/modules/editor.bin
+	cp chroot.bin iso/modules/chroot.bin
 	sh -c 'for f in modules/*.ko; do if [ -f "$$f" ]; then cp "$$f" iso/modules/; fi; done'
 	sh -c 'echo "set timeout=0" > iso/boot/grub/grub.cfg'
 	sh -c 'echo "set default=0" >> iso/boot/grub/grub.cfg'
@@ -250,6 +255,7 @@ iso: kernel.bin init.bin sfsh.bin cc.bin udisk.bin lsblk.bin mount.bin umount.bi
 	sh -c 'echo "    module2 /modules/test_libc.bin test_libc" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/hex.bin hex" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    module2 /modules/editor.bin editor" >> iso/boot/grub/grub.cfg'
+	sh -c 'echo "    module2 /modules/chroot.bin chroot" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "    boot" >> iso/boot/grub/grub.cfg'
 	sh -c 'echo "}" >> iso/boot/grub/grub.cfg'
 	grub-mkrescue -o utms.iso iso/
@@ -281,6 +287,7 @@ build:
 	call cp.bin
 	call mk.bin
 	call rmdir.bin
+	call chroot.bin
 	call kom
 	echo " BUILD COMPLETE "
 	+flags:

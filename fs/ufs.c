@@ -5,6 +5,7 @@
 #include "../include/udisk.h"
 #include "../drivers/drm.h"
 #include "ufs.h"
+#include "../include/errno.h"
 
 extern u32 get_ticks(void);
 
@@ -62,19 +63,46 @@ typedef struct {
 
 static vfs_fs_ops_t ufs_ops;
 
+static u32 ufs_calc_inode_checksum(ufs_inode_t* in) {
+    u32* ptr = (u32*)in;
+    u32 sum = 0;
+    u32 old_checksum = in->checksum;
+    in->checksum = 0;
+    for (u32 i = 0; i < sizeof(ufs_inode_t) / 4; i++) {
+        sum ^= ptr[i];
+    }
+    in->checksum = old_checksum;
+    return sum;
+}
+
+static u32 ufs_calc_sb_checksum(ufs_superblock_t* sb) {
+    u32* ptr = (u32*)sb;
+    u32 sum = 0;
+    u32 old_checksum = sb->checksum;
+    sb->checksum = 0;
+    for (u32 i = 0; i < sizeof(ufs_superblock_t) / 4; i++) {
+        sum ^= ptr[i];
+    }
+    sb->checksum = old_checksum;
+    return sum;
+}
+
 static int ufs_read_block(ufs_mount_t* mnt, u32 b, u8* buf) {
+    if (b >= mnt->sb.total_blocks) return -EINVAL;
     u64 offset = (u64)b * UFS_BLOCK_SIZE;
     int res = vfs_read(mnt->dev_node, buf, UFS_BLOCK_SIZE, offset);
-    return (res == UFS_BLOCK_SIZE) ? 0 : -1;
+    return (res == UFS_BLOCK_SIZE) ? 0 : -EIO;
 }
 
 static int ufs_write_block(ufs_mount_t* mnt, u32 b, u8* buf) {
+    if (b >= mnt->sb.total_blocks) return -EINVAL;
     u64 offset = (u64)b * UFS_BLOCK_SIZE;
     int res = vfs_write(mnt->dev_node, buf, UFS_BLOCK_SIZE, offset);
-    return (res == UFS_BLOCK_SIZE) ? 0 : -1;
+    return (res == UFS_BLOCK_SIZE) ? 0 : -EIO;
 }
 
 static int ufs_write_superblock(ufs_mount_t* mnt) {
+    mnt->sb.checksum = ufs_calc_sb_checksum(&mnt->sb);
     memcpy(mnt->blk_buf, &mnt->sb, sizeof(ufs_superblock_t));
     return ufs_write_block(mnt, 0, mnt->blk_buf);
 }
@@ -334,20 +362,17 @@ static int ufs_vfs_lookup(vfs_node_t* dir, const char* name, vfs_node_t** out) {
 
 static int ufs_vfs_create(vfs_node_t* dir, const char* name, u32 mode) {
     ufs_mount_t* mnt = (ufs_mount_t*)dir->private;
-    if (!mnt || !mnt->mounted) return -1;
-
+    if (!mnt || !mnt->mounted) return -EINVAL;
     u32 dir_ino = (u32)(u64)dir->fs_data;
-    if (ufs_find_in_dir(mnt, dir_ino, name, NULL) == 0) return -1;
-
+    if (ufs_find_in_dir(mnt, dir_ino, name, NULL) == 0) return -EEXIST;
     u32 ino = ufs_alloc_inode(mnt);
-    if (!ino) return -1;
-
+    if (!ino) return -ENOSPC;
     ufs_inode_t inode = {0};
     inode.mode = UFS_INODE_FILE | (mode & 0777);
     inode.nlink = 1;
     inode.atime = inode.mtime = inode.ctime = get_ticks();
-
-    ufs_write_inode(mnt, ino, &inode);
+    int res = ufs_write_inode(mnt, ino, &inode);
+    if (res != 0) { ufs_free_inode(mnt, ino); return res; }
     return ufs_add_to_dir(mnt, dir_ino, ino, name, 1);
 }
 
@@ -411,7 +436,7 @@ static int ufs_vfs_unlink(vfs_node_t* dir, const char* name) {
                     }
                 }
             }
-            if (has_entries) return -1;
+            if (has_entries) return -ENOTEMPTY;
         }
     }
 
@@ -587,7 +612,11 @@ static int ufs_vfs_mount(vfs_node_t** root, const char* dev) {
     memcpy(&mnt->sb, mnt->blk_buf, sizeof(ufs_superblock_t));
     if (mnt->sb.magic != UFS_MAGIC) {
         kfree(mnt);
-        return -1;
+        return -EINVAL;
+    }
+    if (mnt->sb.checksum != ufs_calc_sb_checksum(&mnt->sb)) {
+        kfree(mnt);
+        return -EIO;
     }
 
     mnt->mounted = 1;
@@ -608,8 +637,9 @@ static int ufs_vfs_mount(vfs_node_t** root, const char* dev) {
 }
 
 static int ufs_vfs_unmount(vfs_node_t* root) {
-    if (!root || !root->private) return -1;
+    if (!root || !root->private) return -EINVAL;
     ufs_mount_t* mnt = (ufs_mount_t*)root->private;
+    ufs_write_superblock(mnt);
     mnt->mounted = 0;
     kfree(mnt);
     return 0;
@@ -682,6 +712,7 @@ static int ufs_vfs_format(const char* dev) {
     if (ufs_write_block(&mnt, root_block, mnt.blk_buf) != 0) return -1;
 
     mnt.sb.free_inodes = inode_count - 1;
+    mnt.sb.checksum = ufs_calc_sb_checksum(&mnt.sb);
 
     memset(mnt.blk_buf, 0, UFS_BLOCK_SIZE);
     memcpy(mnt.blk_buf, &mnt.sb, sizeof(mnt.sb));
@@ -841,6 +872,7 @@ int ufs_format(u32 start_lba, u32 total_blocks, int disk) {
     if (ufs_write_block(&mnt, root_block, mnt.blk_buf) != 0) return -1;
 
     mnt.sb.free_inodes = inode_count - 1;
+    mnt.sb.checksum = ufs_calc_sb_checksum(&mnt.sb);
 
     memset(mnt.blk_buf, 0, UFS_BLOCK_SIZE);
     memcpy(mnt.blk_buf, &mnt.sb, sizeof(mnt.sb));
@@ -852,6 +884,9 @@ int ufs_format(u32 start_lba, u32 total_blocks, int disk) {
 int ufs_register(void) {
     return vfs_register_fs(&ufs_ops);
 }
+
+#include "../include/fs_auto.h"
+FS_REGISTER("ufs", ufs_register);
 
 //TODO блять нахуй блять пизда не удалять
 /*1. Добавить синхронизацию - блокировки для защиты от гонок при многозадачности

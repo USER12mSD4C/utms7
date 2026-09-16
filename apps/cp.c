@@ -67,23 +67,23 @@ static int copy_recursive(const char *src, const char *dst) {
         }
     }
 
-    struct dirent *ent;
+    struct linux_dirent64 *ent;
     char src_child[512];
     char dst_child[512];
     int ret = 0;
 
     while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->name, ".") == 0 || strcmp(ent->name, "..") == 0) continue;
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
 
         strcpy(src_child, src);
         if (src[strlen(src) - 1] != '/') strcat(src_child, "/");
-        strcat(src_child, ent->name);
+        strcat(src_child, ent->d_name);
 
         strcpy(dst_child, dst);
         if (dst[strlen(dst) - 1] != '/') strcat(dst_child, "/");
-        strcat(dst_child, ent->name);
+        strcat(dst_child, ent->d_name);
 
-        if (ent->is_dir) {
+        if (ent->d_type == 4) {
             if (copy_recursive(src_child, dst_child) != 0) ret = -1;
         } else {
             if (copy_file(src_child, dst_child) != 0) ret = -1;

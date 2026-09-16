@@ -2,7 +2,9 @@
 #include "memory.h"
 #include "../include/string.h"
 #include "../include/print.h"
+#include "../include/fs_auto.h"
 
+extern const char* sched_get_chroot(void);
 extern u64 multiboot_info_ptr;
 extern void multiboot_modules_to_ramfs(void);
 
@@ -12,28 +14,24 @@ static vfs_mount_t mounts[VFS_MAX_MOUNTS];
 static vfs_node_t* root_node = NULL;
 static int vfs_ready = 0;
 extern const char* fs_get_current_dir(void);
-extern u64 multiboot_info_ptr;
 
 static char* make_absolute_path(const char* path, char* buf, u32 buf_size) {
     if (!path || !buf || buf_size == 0) return NULL;
-
     if (path[0] == '/') {
         strncpy(buf, path, buf_size - 1);
         buf[buf_size - 1] = '\0';
         return buf;
     }
-
     const char* cwd = fs_get_current_dir();
     if (!cwd || cwd[0] == '\0') cwd = "/";
-
     if (strcmp(cwd, "/") == 0) {
         snprintf(buf, buf_size, "/%s", path);
     } else {
         snprintf(buf, buf_size, "%s/%s", cwd, path);
     }
-
     return buf;
 }
+
 static vfs_fs_ops_t ramfs_ops;
 
 const char* vfs_absolute_path(const char* path, char* buf, u32 buf_size) {
@@ -54,8 +52,17 @@ vfs_node_t* vfs_root(void) { return root_node; }
 
 int vfs_register_fs(vfs_fs_ops_t* ops) {
     if (!ops || !ops->name || fs_count >= 16) return -1;
+    for (int i = 0; i < fs_count; i++) {
+        if (strcmp(fs_list[i]->name, ops->name) == 0) return 0;
+    }
     fs_list[fs_count++] = ops;
     return 0;
+}
+
+int vfs_get_fs_count(void) { return fs_count; }
+vfs_fs_ops_t* vfs_get_fs_by_index(int i) {
+    if (i < 0 || i >= fs_count) return NULL;
+    return fs_list[i];
 }
 
 static vfs_node_t* ramfs_find_child(vfs_node_t* dir, const char* name) {
@@ -302,11 +309,9 @@ static vfs_node_t* resolve_path_internal(const char* path, int depth) {
     if (!vfs_ready || !path || depth > 8) return NULL;
     if (path[0] == '\0') return root_node;
     if (path[0] != '/') return NULL;
-
     const char* rel = NULL;
     vfs_mount_t* mnt = find_mount(path, &rel);
     if (!mnt || !mnt->root) return NULL;
-
     vfs_node_t* node = mnt->root;
     if (node->type == VFS_SYMLINK) {
         char target[VFS_MAX_NAME];
@@ -315,14 +320,11 @@ static vfs_node_t* resolve_path_internal(const char* path, int depth) {
             if (target[0] == '/') return resolve_path_internal(target, depth + 1);
         }
     }
-
     if (!rel || rel[0] == '\0') return node;
-
     char tmp[1024];
     strncpy(tmp, rel, sizeof(tmp) - 1);
     tmp[sizeof(tmp) - 1] = '\0';
     char* p = tmp;
-
     while (*p) {
         while (*p == '/') p++;
         if (*p == '\0') break;
@@ -330,21 +332,18 @@ static vfs_node_t* resolve_path_internal(const char* path, int depth) {
         while (*p && *p != '/') p++;
         char saved = 0;
         if (*p) { saved = *p; *p = '\0'; }
-
         if (strcmp(comp, ".") == 0) { if (saved) *p = saved; continue; }
         if (strcmp(comp, "..") == 0) {
             if (node->parent) node = node->parent;
             if (saved) *p = saved;
             continue;
         }
-
         if (node->type != VFS_DIR) return NULL;
         vfs_node_t* next = NULL;
         if (lookup_one(node, comp, &next) != 0) return NULL;
         node = next;
         if (saved) *p = saved;
     }
-
     return node;
 }
 
@@ -352,18 +351,25 @@ vfs_node_t* vfs_resolve_path(const char* path) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return NULL;
+
+    const char* chroot = sched_get_chroot();
+    char final_path[1024];
+
+    if (chroot && chroot[0] && strcmp(chroot, "/") != 0 && resolved[0] == '/') {
+        if (strcmp(resolved, "/") == 0) {
+            strncpy(final_path, chroot, sizeof(final_path) - 1);
+            final_path[sizeof(final_path) - 1] = '\0';
+        } else {
+            snprintf(final_path, sizeof(final_path), "%s%s", chroot, resolved);
+        }
+        return resolve_path_internal(final_path, 0);
+    }
+
     return resolve_path_internal(resolved, 0);
 }
 
 int vfs_mount_fs(const char* fstype, const char* dev, const char* mountpoint) {
     if (!fstype || !mountpoint) return -1;
-
-    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
-        if (mounts[i].used && strcmp(mounts[i].path, mountpoint) == 0) {
-            vfs_unmount(mountpoint);
-            break;
-        }
-    }
 
     vfs_fs_ops_t* ops = NULL;
     for (int i = 0; i < fs_count; i++) {
@@ -372,27 +378,42 @@ int vfs_mount_fs(const char* fstype, const char* dev, const char* mountpoint) {
             break;
         }
     }
-
-    int slot = -1;
-    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
-        if (!mounts[i].used) {
-            slot = i;
-            break;
-        }
-    }
-
-    if (slot < 0) return -1;
+    if (!ops || !ops->mount) return -1;
 
     vfs_node_t* fs_root = NULL;
     if (ops->mount(&fs_root, dev) != 0) return -1;
     if (!fs_root) return -1;
     if (!fs_root->fs) fs_root->fs = ops;
 
-    strncpy(mounts[slot].path, mountpoint, VFS_MAX_NAME - 1);
-    mounts[slot].path[VFS_MAX_NAME - 1] = '\0';
-    mounts[slot].root = fs_root;
-    mounts[slot].fs = ops;
-    mounts[slot].used = 1;
+    int old_slot = -1;
+    int slot = -1;
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (mounts[i].used && strcmp(mounts[i].path, mountpoint) == 0) {
+            old_slot = i;
+        }
+        if (!mounts[i].used && slot < 0) {
+            slot = i;
+        }
+    }
+
+    int target_slot = (old_slot >= 0) ? old_slot : slot;
+    if (target_slot < 0) {
+        if (fs_root->fs && fs_root->fs->unmount) fs_root->fs->unmount(fs_root);
+        return -1;
+    }
+
+    if (old_slot >= 0) {
+        vfs_node_t* old_root = mounts[old_slot].root;
+        if (mounts[old_slot].fs && mounts[old_slot].fs->unmount) {
+            mounts[old_slot].fs->unmount(old_root);
+        }
+    }
+
+    strncpy(mounts[target_slot].path, mountpoint, VFS_MAX_NAME - 1);
+    mounts[target_slot].path[VFS_MAX_NAME - 1] = '\0';
+    mounts[target_slot].root = fs_root;
+    mounts[target_slot].fs = ops;
+    mounts[target_slot].used = 1;
 
     if (strcmp(mountpoint, "/") == 0) root_node = fs_root;
 
@@ -401,27 +422,17 @@ int vfs_mount_fs(const char* fstype, const char* dev, const char* mountpoint) {
 
 int vfs_unmount(const char* mountpoint) {
     if (!mountpoint) return -1;
-
     int best = -1;
     for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
-        if (mounts[i].used && strcmp(mounts[i].path, mountpoint) == 0) {
-            best = i;
-        }
+        if (mounts[i].used && strcmp(mounts[i].path, mountpoint) == 0) best = i;
     }
-
     if (best < 0) return -1;
-
     vfs_node_t* old_root = mounts[best].root;
-
-    if (mounts[best].fs && mounts[best].fs->unmount) {
-        mounts[best].fs->unmount(old_root);
-    }
-
+    if (mounts[best].fs && mounts[best].fs->unmount) mounts[best].fs->unmount(old_root);
     mounts[best].used = 0;
     mounts[best].root = NULL;
     mounts[best].fs = NULL;
     mounts[best].path[0] = '\0';
-
     if (strcmp(mountpoint, "/") == 0) {
         root_node = NULL;
         for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
@@ -431,33 +442,24 @@ int vfs_unmount(const char* mountpoint) {
             }
         }
     }
-
     return 0;
 }
 
 int vfs_is_mounted(const char* path) {
     if (!path) return 0;
-
     for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
         if (mounts[i].used && strcmp(mounts[i].path, path) == 0) return 1;
     }
-
     return 0;
 }
 
 int vfs_format(const char* fstype, const char* dev) {
     if (!fstype || !dev) return -1;
-
     vfs_fs_ops_t* ops = NULL;
     for (int i = 0; i < fs_count; i++) {
-        if (strcmp(fs_list[i]->name, fstype) == 0) {
-            ops = fs_list[i];
-            break;
-        }
+        if (strcmp(fs_list[i]->name, fstype) == 0) { ops = fs_list[i]; break; }
     }
-
     if (!ops || !ops->format) return -1;
-
     return ops->format(dev);
 }
 
@@ -465,26 +467,18 @@ vfs_node_t* vfs_open(const char* path, int flags, int mode) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return NULL;
-
     vfs_node_t* node = vfs_resolve_path(resolved);
-
     if (node) {
-        if ((flags & 0x200) && node->type == VFS_FILE && node->fs == &ramfs_ops) {
-            node->size = 0;
-        }
+        if ((flags & 0x200) && node->type == VFS_FILE && node->fs == &ramfs_ops) node->size = 0;
         node->refcount++;
         return node;
     }
-
     if (!(flags & 0x40)) return NULL;
-
     char dir_path[1024];
     strncpy(dir_path, resolved, sizeof(dir_path) - 1);
     dir_path[sizeof(dir_path) - 1] = '\0';
-
     char* slash = strrchr(dir_path, '/');
     if (!slash) return NULL;
-
     char name[VFS_MAX_NAME];
     if (slash == dir_path) {
         strcpy(name, slash + 1);
@@ -493,15 +487,11 @@ vfs_node_t* vfs_open(const char* path, int flags, int mode) {
         strcpy(name, slash + 1);
         *slash = '\0';
     }
-
     vfs_node_t* dir = vfs_resolve_path(dir_path);
     if (!dir || dir->type != VFS_DIR || !dir->fs || !dir->fs->create) return NULL;
-
     if (dir->fs->create(dir, name, mode) != 0) return NULL;
-
     vfs_node_t* new_node = NULL;
     if (dir->fs->lookup(dir, name, &new_node) != 0) return NULL;
-
     new_node->refcount++;
     return new_node;
 }
@@ -530,36 +520,28 @@ int vfs_readdir(vfs_node_t* dir, vfs_dirent_t* entries, u32* count) {
 int vfs_stat(vfs_node_t* node, u64* size, u32* mode, u8* is_dir) {
     if (!node) return -1;
     if (node->fs && node->fs->stat) return node->fs->stat(node, size, mode, is_dir);
-
     if (size) *size = node->size;
     if (mode) *mode = node->mode;
     if (is_dir) *is_dir = (node->type == VFS_DIR) ? 1 : 0;
-
     return 0;
 }
 
 static int split_path(const char* path, char* dir_buf, u32 dir_size, char* name_buf, u32 name_size) {
     if (!path || !dir_buf || !name_buf || dir_size == 0 || name_size == 0) return -1;
-
     strncpy(dir_buf, path, dir_size - 1);
     dir_buf[dir_size - 1] = '\0';
-
     char* slash = strrchr(dir_buf, '/');
     if (!slash) return -1;
-
     const char* comp = slash + 1;
     u64 comp_len = strlen(comp);
     if (comp_len >= name_size) return -1;
-
     strcpy(name_buf, comp);
-
     if (slash == dir_buf) {
         dir_buf[0] = '/';
         dir_buf[1] = '\0';
     } else {
         *slash = '\0';
     }
-
     return 0;
 }
 
@@ -567,15 +549,11 @@ int vfs_mkdir(const char* path, u32 mode) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
-
     char dir_path[1024];
     char name[VFS_MAX_NAME];
-
     if (split_path(resolved, dir_path, sizeof(dir_path), name, sizeof(name)) != 0) return -1;
-
     vfs_node_t* dir = vfs_resolve_path(dir_path);
     if (!dir || dir->type != VFS_DIR || !dir->fs || !dir->fs->mkdir) return -1;
-
     return dir->fs->mkdir(dir, name, mode);
 }
 
@@ -583,15 +561,11 @@ int vfs_unlink(const char* path) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
-
     char dir_path[1024];
     char name[VFS_MAX_NAME];
-
     if (split_path(resolved, dir_path, sizeof(dir_path), name, sizeof(name)) != 0) return -1;
-
     vfs_node_t* dir = vfs_resolve_path(dir_path);
     if (!dir || dir->type != VFS_DIR || !dir->fs || !dir->fs->unlink) return -1;
-
     return dir->fs->unlink(dir, name);
 }
 
@@ -599,36 +573,26 @@ int vfs_rmdir(const char* path) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
-
     vfs_node_t* node = vfs_resolve_path(resolved);
     if (!node) return -1;
     if (node->type != VFS_DIR) return -1;
-
     return vfs_unlink(resolved);
 }
 
 int vfs_rename(const char* old, const char* new) {
-    char old_abs[1024];
-    char new_abs[1024];
+    char old_abs[1024], new_abs[1024];
     const char* old_resolved = make_absolute_path(old, old_abs, sizeof(old_abs));
     const char* new_resolved = make_absolute_path(new, new_abs, sizeof(new_abs));
     if (!old_resolved || !new_resolved) return -1;
-
-    char old_dir_path[1024];
-    char old_name[VFS_MAX_NAME];
-    char new_dir_path[1024];
-    char new_name[VFS_MAX_NAME];
-
+    char old_dir_path[1024], old_name[VFS_MAX_NAME];
+    char new_dir_path[1024], new_name[VFS_MAX_NAME];
     if (split_path(old_resolved, old_dir_path, sizeof(old_dir_path), old_name, sizeof(old_name)) != 0) return -1;
     if (split_path(new_resolved, new_dir_path, sizeof(new_dir_path), new_name, sizeof(new_name)) != 0) return -1;
-
     vfs_node_t* old_dir = vfs_resolve_path(old_dir_path);
     vfs_node_t* new_dir = vfs_resolve_path(new_dir_path);
-
     if (!old_dir || !new_dir) return -1;
     if (old_dir->type != VFS_DIR || new_dir->type != VFS_DIR) return -1;
     if (!old_dir->fs || !old_dir->fs->rename) return -1;
-
     return old_dir->fs->rename(old_dir, old_name, new_dir, new_name);
 }
 
@@ -636,15 +600,11 @@ int vfs_symlink(const char* target, const char* linkpath) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(linkpath, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
-
     char dir_path[1024];
     char name[VFS_MAX_NAME];
-
     if (split_path(resolved, dir_path, sizeof(dir_path), name, sizeof(name)) != 0) return -1;
-
     vfs_node_t* dir = vfs_resolve_path(dir_path);
     if (!dir || dir->type != VFS_DIR || !dir->fs || !dir->fs->symlink) return -1;
-
     return dir->fs->symlink(dir, name, target);
 }
 
@@ -652,10 +612,25 @@ int vfs_readlink(const char* path, char* buf, u32 size) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
-
     vfs_node_t* node = vfs_resolve_path(resolved);
     if (!node || node->type != VFS_SYMLINK || !node->fs || !node->fs->readlink) return -1;
     return node->fs->readlink(node, buf, size);
+}
+
+extern fs_init_entry_t __start_fs_init;
+extern fs_init_entry_t __stop_fs_init;
+
+static void vfs_auto_register(void) {
+    fs_init_entry_t* p = &__start_fs_init;
+    while (p < &__stop_fs_init) {
+        if (p->init) {
+            print("  [VFS] auto-registering: ");
+            print(p->name);
+            print("\n");
+            p->init();
+        }
+        p++;
+    }
 }
 
 int vfs_init(void) {
@@ -665,10 +640,11 @@ int vfs_init(void) {
     vfs_ready = 0;
 
     if (vfs_register_fs(&ramfs_ops) != 0) return -1;
+
+    vfs_auto_register();
+
     if (vfs_mount_fs("ramfs", NULL, "/") != 0) return -1;
-
     vfs_ready = 1;
-
     if (!root_node) return -1;
 
     vfs_mkdir("/tmp", 0777);
@@ -677,70 +653,42 @@ int vfs_init(void) {
     if (devfs_register() == 0) {
         vfs_mount_fs("devfs", NULL, "/dev");
     }
-    vfs_mkdir("/proc", 0555);
-
+    vfs_mount_fs("procfs", NULL, "/proc");
     multiboot_modules_to_ramfs();
-
     return 0;
 }
 
 int vfs_read_entire(const char* path, u8** data, u32* size) {
     if (!path || !data || !size) return -1;
-
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
-
     vfs_node_t* node = vfs_open(resolved, 0, 0);
     if (!node) return -1;
-
-    if (node->size > 0xFFFFFFFFULL) {
-        vfs_close(node);
-        return -1;
-    }
-
+    if (node->size > 0xFFFFFFFFULL) { vfs_close(node); return -1; }
     u32 sz = (u32)node->size;
-
     u8* buf = kmalloc(sz + 1);
-    if (!buf) {
-        vfs_close(node);
-        return -1;
-    }
-
+    if (!buf) { vfs_close(node); return -1; }
     if (sz > 0) {
-        if (vfs_read(node, buf, sz, 0) != (int)sz) {
-            kfree(buf);
-            vfs_close(node);
-            return -1;
-        }
+        if (vfs_read(node, buf, sz, 0) != (int)sz) { kfree(buf); vfs_close(node); return -1; }
     }
-
     buf[sz] = 0;
     vfs_close(node);
-
     *data = buf;
     *size = sz;
-
     return 0;
 }
 
 int vfs_write_entire(const char* path, const u8* data, u32 size) {
     if (!path || (!data && size != 0)) return -1;
-
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return -1;
-
     vfs_node_t* node = vfs_open(resolved, 0x40 | 0x200, 0644);
     if (!node) return -1;
-
     int res = 0;
-    if (size > 0) {
-        res = vfs_write(node, data, size, 0);
-    }
-
+    if (size > 0) res = vfs_write(node, data, size, 0);
     vfs_close(node);
-
     return (res == (int)size) ? 0 : -1;
 }
 
@@ -748,16 +696,13 @@ int vfs_exists(const char* path) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return 0;
-
-    vfs_node_t* node = vfs_resolve_path(resolved);
-    return node != NULL;
+    return vfs_resolve_path(resolved) != NULL;
 }
 
 int vfs_isdir(const char* path) {
     char abs_path[1024];
     const char* resolved = make_absolute_path(path, abs_path, sizeof(abs_path));
     if (!resolved) return 0;
-
     vfs_node_t* node = vfs_resolve_path(resolved);
     if (!node) return 0;
     return node->type == VFS_DIR;

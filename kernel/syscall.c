@@ -55,11 +55,34 @@ static struct termios global_termios = {
     .c_lflag = ICANON | ECHO | ISIG,
 };
 
-typedef struct {
-    u32 st_size;
-    u8 st_is_dir;
-    u32 st_blocks;
-} __attribute__((packed)) sys_stat_t;
+struct linux_stat {
+    u64 st_dev;
+    u64 st_ino;
+    u64 st_nlink;
+    u32 st_mode;
+    u32 st_uid;
+    u32 st_gid;
+    u32 __pad0;
+    u64 st_rdev;
+    u64 st_size;
+    long st_blksize;
+    long st_blocks;
+    u64 st_atime;
+    u64 st_atime_nsec;
+    u64 st_mtime;
+    u64 st_mtime_nsec;
+    u64 st_ctime;
+    u64 st_ctime_nsec;
+    long __unused[3];
+} __attribute__((packed));
+
+struct linux_dirent64 {
+    u64 d_ino;
+    long d_off;
+    u16 d_reclen;
+    u8  d_type;
+    char d_name[];
+} __attribute__((packed));
 
 static int is_user_pointer(void* ptr) {
     u64 addr = (u64)ptr;
@@ -243,7 +266,10 @@ static long sys_read(trap_frame_t* frame, long fd, long buf, long count, long a4
                 read_count++;
             }
         } else {
-            while (!keyboard_data_ready()) { __asm__ volatile("sti"); sched_sleep(1); }
+            while (!keyboard_data_ready()) {
+                __asm__ volatile("sti");
+                sched_sleep(1);
+            }
             while (read_count < count && keyboard_data_ready()) {
                 char c = keyboard_getc();
                 u8 tmp = (u8)c;
@@ -739,12 +765,15 @@ static long sys_stat(trap_frame_t* frame, long path, long statbuf, long a3, long
     if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
     vfs_node_t* node = vfs_resolve_path(path_buf);
     if (!node) return -1;
-    sys_stat_t st;
+    struct linux_stat st;
+    memset(&st, 0, sizeof(st));
     u64 size; u32 mode; u8 is_dir;
     vfs_stat(node, &size, &mode, &is_dir);
-    st.st_size = (u32)size;
-    st.st_is_dir = is_dir;
-    st.st_blocks = (st.st_size + 511) / 512;
+    st.st_size = size;
+    st.st_mode = mode | (is_dir ? 0040000 : 0100000);
+    st.st_nlink = 1;
+    st.st_blksize = 4096;
+    st.st_blocks = (size + 511) / 512;
     if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;
     return 0;
 }
@@ -754,22 +783,22 @@ static long sys_fstat(trap_frame_t* frame, long fd, long statbuf, long a3, long 
     process_t *p = sched_current();
     if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used) return -1;
     if (!is_user_pointer((void*)statbuf)) return -1;
-
-    sys_stat_t st;
+    struct linux_stat st;
+    memset(&st, 0, sizeof(st));
     if (p->fds[fd].type == 0) {
         vfs_node_t* node = p->fds[fd].data.vnode;
         if (!node) return -1;
         u64 size; u32 mode; u8 is_dir;
         vfs_stat(node, &size, &mode, &is_dir);
-        st.st_size = (u32)size;
-        st.st_is_dir = is_dir;
-        st.st_blocks = (st.st_size + 511) / 512;
+        st.st_size = size;
+        st.st_mode = mode | (is_dir ? 0040000 : 0100000);
+        st.st_nlink = 1;
+        st.st_blksize = 4096;
+        st.st_blocks = (size + 511) / 512;
     } else {
-        st.st_size = 0;
-        st.st_is_dir = 0;
-        st.st_blocks = 0;
+        st.st_mode = 0020000;
+        st.st_nlink = 1;
     }
-
     if (copy_to_user((void*)statbuf, &st, sizeof(st)) != 0) return -1;
     return 0;
 }
@@ -807,12 +836,23 @@ static long sys_rename(trap_frame_t* frame, long old, long new, long a3, long a4
 }
 
 static void normalize_path(const char* input, char* output, u32 out_size) {
-    char parts[64][256];
+    if (!input || !output || out_size == 0) return;
+
+    char* tmp = kmalloc(1024);
+    char (*parts)[256] = kmalloc(64 * 256);
+
+    if (!tmp || !parts) {
+        if (tmp) kfree(tmp);
+        if (parts) kfree(parts);
+        output[0] = '/';
+        output[1] = '\0';
+        return;
+    }
+
     int part_count = 0;
 
-    char tmp[1024];
-    strncpy(tmp, input, sizeof(tmp) - 1);
-    tmp[sizeof(tmp) - 1] = '\0';
+    strncpy(tmp, input, 1024 - 1);
+    tmp[1024 - 1] = '\0';
 
     char* p = tmp;
     while (*p) {
@@ -824,10 +864,9 @@ static void normalize_path(const char* input, char* output, u32 out_size) {
         char saved = *p;
         *p = '\0';
 
-        if (strcmp(start, ".") == 0) {
-        } else if (strcmp(start, "..") == 0) {
+        if (strcmp(start, "..") == 0) {
             if (part_count > 0) part_count--;
-        } else {
+        } else if (strcmp(start, ".") != 0) {
             if (part_count < 64) {
                 strncpy(parts[part_count], start, 255);
                 parts[part_count][255] = '\0';
@@ -854,6 +893,46 @@ static void normalize_path(const char* input, char* output, u32 out_size) {
         }
         output[pos] = '\0';
     }
+
+    kfree(parts);
+    kfree(tmp);
+}
+
+static long sys_chroot(trap_frame_t* frame, long path, long a2, long a3, long a4, long a5, long a6) {
+    (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
+    if (!is_user_pointer((void*)path)) return -1;
+
+    char path_buf[256];
+    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
+
+    char abs_path[256];
+    const char* resolved = vfs_absolute_path(path_buf, abs_path, sizeof(abs_path));
+    if (!resolved) return -1;
+
+    process_t *p = sched_current();
+    char real_path[512];
+
+    if (p && p->chroot_path[0] && strcmp(p->chroot_path, "/") != 0 && resolved[0] == '/') {
+        if (strcmp(resolved, "/") == 0) {
+            strncpy(real_path, p->chroot_path, sizeof(real_path) - 1);
+        } else {
+            snprintf(real_path, sizeof(real_path), "%s%s", p->chroot_path, resolved);
+        }
+    } else {
+        strncpy(real_path, resolved, sizeof(real_path) - 1);
+    }
+    real_path[sizeof(real_path) - 1] = '\0';
+
+    char normalized[256];
+    normalize_path(real_path, normalized, sizeof(normalized));
+
+    if (!vfs_isdir(normalized)) return -1;
+
+    strncpy(p->chroot_path, normalized, 255);
+    p->chroot_path[255] = '\0';
+
+    fs_set_current_dir("/");
+    return 0;
 }
 
 static long sys_chdir(trap_frame_t* frame, long path, long a2, long a3, long a4, long a5, long a6) {
@@ -881,51 +960,91 @@ static long sys_getcwd(trap_frame_t* frame, long buf, long size, long a3, long a
     (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)buf)) return -1;
 
-    const char* fs_get_current_dir(void);
     const char* cwd = fs_get_current_dir();
     if (!cwd) cwd = "/";
 
-    unsigned long len = strlen(cwd) + 1;
-    if (len > (unsigned long)size) return -1;
+    process_t *p = sched_current();
+    const char* real_cwd = cwd;
+    if (p && p->chroot_path[0] && strcmp(p->chroot_path, "/") != 0) {
+        u32 chroot_len = strlen(p->chroot_path);
+        if (strncmp(cwd, p->chroot_path, chroot_len) == 0) {
+            real_cwd = cwd + chroot_len;
+            if (real_cwd[0] == '\0') real_cwd = "/";
+        } else {
+            real_cwd = "/";
+        }
+    }
 
-    if (copy_to_user((void*)buf, cwd, len) != 0) return -1;
+    unsigned long len = strlen(real_cwd) + 1;
+    if (len > (unsigned long)size) return -1;
+    if (copy_to_user((void*)buf, real_cwd, len) != 0) return -1;
     return len;
 }
 
-static long sys_readdir(trap_frame_t* frame, long path, long entries, long count, long a4, long a5, long a6) {
+static long sys_getdents64(trap_frame_t* frame, long fd, long buf_ptr, long count, long a4, long a5, long a6) {
     (void)frame; (void)a4; (void)a5; (void)a6;
-    if (!is_user_pointer((void*)path) || !is_user_pointer((void*)entries)) return -1;
-    char path_buf[256];
-    if (copy_string_from_user(path_buf, (const char*)path, 255) != 0) return -1;
-
-    vfs_node_t* dir = vfs_resolve_path(path_buf);
+    process_t *p = sched_current();
+    if (!p || fd < 0 || fd >= MAX_FDS || !p->fds[fd].used || p->fds[fd].type != 0) return -1;
+    if (!is_user_pointer((void*)buf_ptr) || count <= 0 || count > 1048576) return -1;
+    vfs_node_t* dir = p->fds[fd].data.vnode;
     if (!dir) return -1;
 
-    vfs_dirent_t* kernel_entries = kmalloc(count * sizeof(vfs_dirent_t));
+    u32 max_entries = 256;
+    vfs_dirent_t* kernel_entries = kmalloc(max_entries * sizeof(vfs_dirent_t));
     if (!kernel_entries) return -1;
 
-    u32 kernel_count = (u32)count;
-    if (vfs_readdir(dir, kernel_entries, &kernel_count) != 0) {
+    if (vfs_readdir(dir, kernel_entries, &max_entries) != 0) {
         kfree(kernel_entries);
         return -1;
     }
 
-    for (u32 i = 0; i < kernel_count; i++) {
-        vfs_user_dirent_t user_entry;
-        memset(&user_entry, 0, sizeof(user_entry));
-        strncpy(user_entry.name, kernel_entries[i].name, VFS_MAX_NAME - 1);
-        user_entry.name[VFS_MAX_NAME - 1] = '\0';
-        user_entry.size = (u32)kernel_entries[i].size;
-        user_entry.is_dir = (kernel_entries[i].type == VFS_DIR) ? 1 : 0;
-
-        if (copy_to_user((void*)((char*)entries + i * sizeof(vfs_user_dirent_t)), &user_entry, sizeof(vfs_user_dirent_t)) != 0) {
-            kfree(kernel_entries);
-            return -1;
-        }
+    u32 start = (u32)p->fds[fd].pos;
+    if (start >= max_entries) {
+        kfree(kernel_entries);
+        return 0;
     }
 
+    u8* out_buf = kmalloc((u64)count);
+    if (!out_buf) {
+        kfree(kernel_entries);
+        return -1;
+    }
+
+    u32 pos = 0;
+    u32 new_pos = start;
+
+    for (u32 i = start; i < max_entries; i++) {
+        u16 name_len = (u16)(strlen(kernel_entries[i].name) + 1);
+        u16 reclen = (u16)((sizeof(struct linux_dirent64) + name_len + 7) & ~7);
+        if (pos + reclen > (u32)count) break;
+
+        struct linux_dirent64* ent = (struct linux_dirent64*)(out_buf + pos);
+        ent->d_ino = i + 1;
+        ent->d_off = i + 1;
+        ent->d_reclen = reclen;
+        ent->d_type = (kernel_entries[i].type == VFS_DIR) ? 4 : 8;
+        memcpy(ent->d_name, kernel_entries[i].name, name_len);
+
+        pos += reclen;
+        new_pos = i + 1;
+    }
+
+    if (pos == 0) {
+        kfree(out_buf);
+        kfree(kernel_entries);
+        return -1;
+    }
+
+    if (copy_to_user((void*)buf_ptr, out_buf, pos) != 0) {
+        kfree(out_buf);
+        kfree(kernel_entries);
+        return -1;
+    }
+
+    p->fds[fd].pos = new_pos;
+    kfree(out_buf);
     kfree(kernel_entries);
-    return kernel_count;
+    return pos;
 }
 
 static long sys_disk_list(trap_frame_t* frame, long disks_ptr, long max, long a3, long a4, long a5, long a6) {
@@ -947,22 +1066,29 @@ static long sys_disk_list(trap_frame_t* frame, long disks_ptr, long max, long a3
     return count;
 }
 
-static long sys_partition_mount(trap_frame_t* frame, long dev, long point, long a3, long a4, long a5, long a6) {
-    (void)frame; (void)a3; (void)a4; (void)a5; (void)a6;
+static long sys_partition_mount(trap_frame_t* frame, long dev, long point, long fstype_arg, long a4, long a5, long a6) {
+    (void)frame; (void)a4; (void)a5; (void)a6;
     if (!is_user_pointer((void*)dev) || !is_user_pointer((void*)point)) return -1;
 
-    char dev_buf[32], point_buf[256];
+    char dev_buf[32], point_buf[256], fs_buf[32];
     if (copy_string_from_user(dev_buf, (const char*)dev, 31) != 0) return -1;
     if (copy_string_from_user(point_buf, (const char*)point, 255) != 0) return -1;
 
-    if (vfs_is_mounted(point_buf)) {
-        vfs_unmount(point_buf);
+    if (fstype_arg && is_user_pointer((void*)fstype_arg)) {
+        if (copy_string_from_user(fs_buf, (const char*)fstype_arg, 31) != 0) {
+            strcpy(fs_buf, "ufs");
+        }
+    } else {
+        strcpy(fs_buf, "ufs");
     }
 
-    if (vfs_mount_fs("ufs", dev_buf, point_buf) != 0) return -1;
+    if (vfs_mount_fs(fs_buf, dev_buf, point_buf) != 0) return -1;
 
-    void fs_set_current_dir(const char*);
-    fs_set_current_dir(point_buf);
+    if (point_buf[0] == '/' && point_buf[1] == '\0') {
+        void fs_set_current_dir(const char*);
+        fs_set_current_dir("/");
+    }
+
     return 0;
 }
 
@@ -1225,7 +1351,7 @@ static long sys_setcolor(trap_frame_t* frame, long fg, long bg, long a3, long a4
 }
 
 typedef long (*syscall_t)(trap_frame_t*, long, long, long, long, long, long);
-static syscall_t syscall_table[128];
+static syscall_t syscall_table[512];
 
 #define POLLIN  0x0001
 #define POLLOUT 0x0004
@@ -1328,16 +1454,7 @@ static long sys_readlink(trap_frame_t* frame, long path, long buf, long size, lo
 
 static long sys_fs_register(trap_frame_t* frame, long name, long a2, long a3, long a4, long a5, long a6) {
     (void)frame; (void)a2; (void)a3; (void)a4; (void)a5; (void)a6;
-    if (!is_user_pointer((void*)name)) return -1;
-    char name_buf[32];
-    if (copy_string_from_user(name_buf, (const char*)name, 31) != 0) return -1;
-
-    if (strcmp(name_buf, "ufs") == 0) {
-        extern int ufs_register(void);
-        return ufs_register();
-    }
-
-    return -1;
+    return 0;
 }
 
 static long sys_pci_map(trap_frame_t* frame, long bus, long slot, long func, long bar, long a5, long a6) {
@@ -1460,71 +1577,81 @@ static long sys_fcntl(trap_frame_t* frame, long fd, long cmd, long arg, long a4,
 }
 
 int syscall_init(void) {
-    for (int i = 0; i < 128; i++) syscall_table[i] = NULL;
+    for (int i = 0; i < 512; i++) syscall_table[i] = NULL;
 
-    syscall_table[0] = sys_exit;
-    syscall_table[1] = sys_read;
-    syscall_table[2] = sys_write;
-    syscall_table[3] = sys_open;
-    syscall_table[4] = sys_close;
-    syscall_table[5] = sys_brk;
-    syscall_table[6] = sys_getpid;
-    syscall_table[7] = sys_getppid;
-    syscall_table[8] = sys_sleep;
-    syscall_table[9] = sys_yield;
-    syscall_table[10] = sys_mmap;
-    syscall_table[11] = sys_munmap;
-    syscall_table[12] = sys_exec;
-    syscall_table[13] = sys_waitpid;
-    syscall_table[14] = sys_kill;
-    syscall_table[15] = sys_lseek;
-    syscall_table[16] = sys_stat;
-    syscall_table[17] = sys_fstat;
-    syscall_table[18] = sys_mkdir;
-    syscall_table[19] = sys_rmdir;
-    syscall_table[20] = sys_unlink;
-    syscall_table[21] = sys_rename;
-    syscall_table[22] = sys_chdir;
-    syscall_table[23] = sys_getcwd;
-    syscall_table[24] = sys_readdir;
-    syscall_table[25] = sys_dup;
-    syscall_table[26] = sys_dup2;
-    syscall_table[27] = sys_ioctl;
-    syscall_table[28] = sys_clone;
-    syscall_table[29] = sys_fcntl;
-    syscall_table[30] = sys_disk_list;
-    syscall_table[37] = sys_partition_mount;
-    syscall_table[38] = sys_partition_umount;
-    syscall_table[39] = sys_partition_format;
-    syscall_table[40] = sys_socket;
-    syscall_table[41] = sys_connect;
-    syscall_table[42] = sys_disk_table;
-    syscall_table[43] = sys_partition_create;
-    syscall_table[44] = sys_partition_delete;
-    syscall_table[45] = sys_send;
-    syscall_table[46] = sys_recv;
-    syscall_table[47] = sys_gethostbyname;
-    syscall_table[48] = sys_bind;
-    syscall_table[49] = sys_listen;
-    syscall_table[50] = sys_accept;
-    syscall_table[51] = sys_ps;
-    syscall_table[52] = sys_gettime;
-    syscall_table[53] = sys_clear;
-    syscall_table[54] = sys_setcolor;
-    syscall_table[55] = sys_symlink;
-    syscall_table[56] = sys_readlink;
-    syscall_table[57] = sys_fork;
-    syscall_table[58] = sys_fs_register;
-    syscall_table[59] = sys_pci_map;
-    syscall_table[60] = sys_pci_unmap;
-    syscall_table[61] = sys_irq_register;
-    syscall_table[62] = sys_irq_wait;
-    syscall_table[63] = sys_ioport_in;
-    syscall_table[64] = sys_ioport_out;
-    syscall_table[65] = sys_poll;
+    syscall_table[SYS_read] = sys_read;
+    syscall_table[SYS_write] = sys_write;
+    syscall_table[SYS_open] = sys_open;
+    syscall_table[SYS_close] = sys_close;
+    syscall_table[SYS_stat] = sys_stat;
+    syscall_table[SYS_fstat] = sys_fstat;
+    syscall_table[SYS_poll] = sys_poll;
+    syscall_table[SYS_lseek] = sys_lseek;
+    syscall_table[SYS_mmap] = sys_mmap;
+    syscall_table[SYS_munmap] = sys_munmap;
+    syscall_table[SYS_brk] = sys_brk;
+    syscall_table[SYS_ioctl] = sys_ioctl;
+    syscall_table[SYS_access] = sys_stat;
+    syscall_table[SYS_dup] = sys_dup;
+    syscall_table[SYS_dup2] = sys_dup2;
+    syscall_table[SYS_getpid] = sys_getpid;
+    syscall_table[SYS_getppid] = sys_getppid;
+    syscall_table[SYS_socket] = sys_socket;
+    syscall_table[SYS_connect] = sys_connect;
+    syscall_table[SYS_accept] = sys_accept;
+    syscall_table[SYS_sendto] = sys_send;
+    syscall_table[SYS_recvfrom] = sys_recv;
+    syscall_table[SYS_bind] = sys_bind;
+    syscall_table[SYS_listen] = sys_listen;
+    syscall_table[SYS_clone] = sys_clone;
+    syscall_table[SYS_fork] = sys_fork;
+    syscall_table[SYS_execve] = sys_exec;
+    syscall_table[SYS_exit] = sys_exit;
+    syscall_table[SYS_exit_group] = sys_exit;
+    syscall_table[SYS_wait4] = sys_waitpid;
+    syscall_table[SYS_kill] = sys_kill;
+    syscall_table[SYS_chroot] = sys_chroot;
+    syscall_table[SYS_fcntl] = sys_fcntl;
+    syscall_table[SYS_getcwd] = sys_getcwd;
+    syscall_table[SYS_chdir] = sys_chdir;
+    syscall_table[SYS_rename] = sys_rename;
+    syscall_table[SYS_mkdir] = sys_mkdir;
+    syscall_table[SYS_rmdir] = sys_rmdir;
+    syscall_table[SYS_unlink] = sys_unlink;
+    syscall_table[SYS_symlink] = sys_symlink;
+    syscall_table[SYS_readlink] = sys_readlink;
+    syscall_table[SYS_getuid] = sys_getpid;
+    syscall_table[SYS_getgid] = sys_getpid;
+    syscall_table[SYS_geteuid] = sys_getpid;
+    syscall_table[SYS_getegid] = sys_getpid;
+    syscall_table[SYS_gettid] = sys_getpid;
+    syscall_table[SYS_getdents64] = sys_getdents64;
+    syscall_table[SYS_clock_gettime] = sys_gettime;
+    syscall_table[SYS_sched_yield] = sys_yield;
+
+    syscall_table[uSYS_disk_list] = sys_disk_list;
+    syscall_table[uSYS_part_mount] = sys_partition_mount;
+    syscall_table[uSYS_part_umount] = sys_partition_umount;
+    syscall_table[uSYS_part_format] = sys_partition_format;
+    syscall_table[uSYS_disk_table] = sys_disk_table;
+    syscall_table[uSYS_part_create] = sys_partition_create;
+    syscall_table[uSYS_part_delete] = sys_partition_delete;
+    syscall_table[uSYS_gethostbyname] = sys_gethostbyname;
+    syscall_table[uSYS_ps] = sys_ps;
+    syscall_table[uSYS_gettime] = sys_gettime;
+    syscall_table[uSYS_clear] = sys_clear;
+    syscall_table[uSYS_setcolor] = sys_setcolor;
+    syscall_table[uSYS_meminfo] = sys_meminfo;
+    syscall_table[uSYS_fs_register] = sys_fs_register;
+    syscall_table[uSYS_pci_map] = sys_pci_map;
+    syscall_table[uSYS_pci_unmap] = sys_pci_unmap;
+    syscall_table[uSYS_irq_register] = sys_irq_register;
+    syscall_table[uSYS_irq_wait] = sys_irq_wait;
+    syscall_table[uSYS_ioport_in] = sys_ioport_in;
+    syscall_table[uSYS_ioport_out] = sys_ioport_out;
+    syscall_table[uSYS_sleep] = sys_sleep;
 
     wrmsr(MSR_LSTAR, (u64)syscall_entry);
-
     u64 star = ((u64)0x18 << 48) | ((u64)0x08 << 32);
     wrmsr(MSR_STAR, star);
     wrmsr(MSR_SFMASK, 0x200);
@@ -1546,7 +1673,7 @@ long syscall_handler_c(trap_frame_t* frame, long num) {
     long a5 = frame->r8;
     long a6 = frame->r9;
 
-    if (num < 0 || num >= 128 || !syscall_table[num]) {
+    if (num < 0 || num >= 512 || !syscall_table[num]) {
         frame->rax = -1;
         return -1;
     }

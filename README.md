@@ -1,6 +1,6 @@
 # UTMS7
 
-under UOPL 1.6.4
+under UOPL 1.6.4 revision A
 
 ## 1. Overview
 
@@ -42,14 +42,14 @@ Ethernet, ARP, IPv4, ICMP, UDP, TCP, DHCP client, DNS client, HTTP client.
 ### 2.5 Userspace
 
 - init.bin: first user process, restarts the shell.
-- sh.bin: shell with pipes, redirection and history.
+- sfsh.bin: shell with pipes, redirection and history.
 - Both are ELF64 executables linked at 0x40000000.
 
 ## 3. Build and run
 
 Requirements: gcc, nasm, binutils, grub2-mkrescue, xorriso, qemu-system-x86_64.
 
-- umk build: build kernel.bin, init.bin, sh.bin.
+- umk build: build kernel.bin, init.bin, sfsh.bin.
 - umk run: create utms.iso and start QEMU.
 - umk runD: start QEMU with interrupt log in qemu.log.
 - umk clean: delete build output.
@@ -62,7 +62,7 @@ Requirements: gcc, nasm, binutils, grub2-mkrescue, xorriso, qemu-system-x86_64.
 - fs/: file systems.
 - lib/: shared C library, kernel side and user side.
 - commands/: shell builtin commands.
-- apps/: user programs (init, sh).
+- apps/: user programs (init, sfsh).
 - adders/: early boot init (ski).
 - tools/: mkmod, the UMOK module packer.
 
@@ -78,3 +78,5 @@ Requirements: gcc, nasm, binutils, grub2-mkrescue, xorriso, qemu-system-x86_64.
 - Modules are relocatable objects packed by tools/mkmod into UMOK.
 - The loader resolves undefined symbols against the kernel symbol table.
 - Entry point: .module_entry section.
+
+and who tf needs readme for a unix-like OS?

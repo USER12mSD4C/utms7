@@ -64,12 +64,12 @@ int main(int argc, char **argv) {
     out("opendir/readdir test:\n");
     DIR *dir = opendir("/");
     if (dir) {
-        struct dirent *ent;
+        struct linux_dirent64 *ent;
         int count = 0;
         while ((ent = readdir(dir)) != NULL && count < 5) {
             out("  ");
-            out(ent->name);
-            if (ent->is_dir) out("/");
+            out(ent->d_name);
+            if (ent->d_type == 4) out("/");
             out("\n");
             count++;
         }

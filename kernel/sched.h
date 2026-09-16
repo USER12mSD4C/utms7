@@ -52,6 +52,7 @@ typedef struct process {
     u64 user_rsp;
     u32 irq_mask;
     u32 irq_pending;
+    char chroot_path[256];
     u8 fpu_context[512] __attribute__((aligned(16)));
 } process_t;
 

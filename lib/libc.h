@@ -32,29 +32,44 @@ typedef long off_t;
 typedef long time_t;
 
 #define EOF (-1)
-
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
-
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
-
 #define RAND_MAX 32767
 
 extern int errno;
 
+struct timespec {
+    long tv_sec;
+    long tv_nsec;
+};
+
 struct stat {
-    u32 st_size;
-    u8 st_is_dir;
-    u32 st_blocks;
+    u64 st_dev;
+    u64 st_ino;
+    u64 st_nlink;
+    u32 st_mode;
+    u32 st_uid;
+    u32 st_gid;
+    u32 __pad0;
+    u64 st_rdev;
+    u64 st_size;
+    long st_blksize;
+    long st_blocks;
+    struct timespec st_atim;
+    struct timespec st_mtim;
+    struct timespec st_ctim;
+    long __unused[3];
 } __attribute__((packed));
 
-struct dirent {
-    char name[256];
-    u32 size;
-    u8 is_dir;
-    u8 pad[3];
+struct linux_dirent64 {
+    u64 d_ino;
+    u64 d_off;
+    u16 d_reclen;
+    u8  d_type;
+    char d_name[];
 } __attribute__((packed));
 
 typedef struct _FILE {
@@ -79,11 +94,10 @@ int fstat(int fd, struct stat *buf);
 int dup(int oldfd);
 int dup2(int oldfd, int newfd);
 int ioctl(int fd, unsigned long request, void *arg);
-
 int mkdir(const char *path, int mode);
 int rmdir(const char *path);
 int unlink(const char *path);
-int rename(const char *old, const char *new);
+int rename(const char *old, const char *new_path);
 int chdir(const char *path);
 char *getcwd(char *buf, size_t size);
 int fs_register(const char* name);
@@ -136,10 +150,13 @@ double strtod(const char *nptr, char **endptr);
 int atoi(const char *nptr);
 long atol(const char *nptr);
 double atof(const char *nptr);
+
 void srand(unsigned int seed);
 int rand(void);
+
 void *bsearch(const void *key, const void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
 void qsort(void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
+
 void abort(void);
 void exit(int status);
 
@@ -171,7 +188,6 @@ int vprintf(const char *fmt, va_list args);
 int vsprintf(char *str, const char *fmt, va_list args);
 int vsnprintf(char *str, size_t size, const char *fmt, va_list args);
 int vfprintf(FILE *stream, const char *fmt, va_list args);
-
 int scanf(const char *fmt, ...);
 int sscanf(const char *str, const char *fmt, ...);
 int fscanf(FILE *stream, const char *fmt, ...);
@@ -265,22 +281,19 @@ typedef struct {
     u8 is_gpt;
 } __attribute__((packed)) disk_info_user_t;
 
-extern int errno;
-
 typedef struct _DIR {
-    char path[256];
-    struct dirent entries[64];
-    int count;
-    int index;
+    int fd;
+    int buf_pos;
+    int buf_end;
+    char buf[1024];
 } DIR;
 
 DIR *opendir(const char *name);
-struct dirent *readdir(DIR *dirp);
+struct linux_dirent64 *readdir(DIR *dirp);
 int closedir(DIR *dirp);
 
 void perror(const char *s);
 char *strerror(int errnum);
-
 int isatty(int fd);
 int access(const char *pathname, int mode);
 
@@ -291,8 +304,8 @@ unsigned int getegid(void);
 
 #define F_GETFL 3
 #define F_SETFL 4
-
 int fcntl(int fd, int cmd, ...);
+
 extern char *optarg;
 extern int optind, opterr, optopt;
 int getopt(int argc, char *const argv[], const char *optstring);
@@ -321,7 +334,6 @@ size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 #define SIG_DFL ((sighandler_t)0)
 #define SIG_IGN ((sighandler_t)1)
 #define SIG_ERR ((sighandler_t)-1)
-
 typedef void (*sighandler_t)(int);
 sighandler_t signal(int signum, sighandler_t handler);
 int raise(int sig);
@@ -330,13 +342,11 @@ int raise(int sig);
 
 #define POLLIN  0x0001
 #define POLLOUT 0x0004
-
 struct pollfd {
     int fd;
     short events;
     short revents;
 };
-
 int poll(struct pollfd *fds, unsigned long nfds, int timeout);
 int tcgetattr(int fd, struct termios *termios_p);
 int tcsetattr(int fd, int optional_actions, const struct termios *termios_p);
@@ -351,5 +361,6 @@ u32 ioport_in32(u16 port);
 void ioport_out8(u16 port, u8 val);
 void ioport_out16(u16 port, u16 val);
 void ioport_out32(u16 port, u32 val);
+int chroot(const char *path);
 
 #endif

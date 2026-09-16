@@ -3,6 +3,16 @@
 
 #define ALIGN_UP(x, align) (((x) + (align) - 1) & ~((align) - 1))
 
+static inline u64 mem_lock(void) {
+    u64 flags;
+    __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+}
+
+static inline void mem_unlock(u64 flags) {
+    __asm__ volatile("push %0; popfq" :: "r"(flags) : "memory");
+}
+
 static block_header_t* free_list = NULL;
 static int initialized = 0;
 static u64 total_memory = 0;
@@ -65,16 +75,14 @@ void memory_add_region(u64 base, u64 size) {
 
 void* kmalloc(u64 size) {
     if (!initialized || size == 0) return NULL;
-
+    u64 flags = mem_lock();
     size = ALIGN_UP(size, 8);
-
     block_header_t* prev = NULL;
     block_header_t* curr = free_list;
-
+    void* result = NULL;
     while (curr) {
         if (curr->free && curr->size >= size) {
             u64 remaining = curr->size - size;
-
             if (remaining >= sizeof(block_header_t) + 16) {
                 block_header_t* new_block = (block_header_t*)((u8*)curr + sizeof(block_header_t) + size);
                 new_block->size = remaining - sizeof(block_header_t);
@@ -83,41 +91,37 @@ void* kmalloc(u64 size) {
                 curr->size = size;
                 curr->next = new_block;
             }
-
-            if (prev)
-                prev->next = curr->next;
-            else
-                free_list = curr->next;
-
+            if (prev) prev->next = curr->next;
+            else free_list = curr->next;
             curr->free = 0;
             curr->next = NULL;
             used_memory += curr->size + sizeof(block_header_t);
-
-            return (void*)((u8*)curr + sizeof(block_header_t));
+            result = (void*)((u8*)curr + sizeof(block_header_t));
+            break;
         }
         prev = curr;
         curr = curr->next;
     }
-
-    return NULL;
+    mem_unlock(flags);
+    return result;
 }
 
 void kfree(void* ptr) {
     if (!initialized || !ptr) return;
-
+    u64 flags = mem_lock();
     block_header_t* block = (block_header_t*)((u8*)ptr - sizeof(block_header_t));
-    if (block->free) return;
-
+    if (block->free) {
+        mem_unlock(flags);
+        return;
+    }
     block->free = 1;
     used_memory -= block->size + sizeof(block_header_t);
-
     block_header_t** pp = &free_list;
     while (*pp && (u64)(*pp) < (u64)block) {
         pp = &(*pp)->next;
     }
     block->next = *pp;
     *pp = block;
-
     if (block->next) {
         u8* block_end = (u8*)block + sizeof(block_header_t) + block->size;
         if (block_end == (u8*)block->next) {
@@ -125,7 +129,6 @@ void kfree(void* ptr) {
             block->next = block->next->next;
         }
     }
-
     block_header_t* prev = NULL;
     block_header_t* curr = free_list;
     while (curr && curr != block) {
@@ -139,6 +142,7 @@ void kfree(void* ptr) {
             prev->next = block->next;
         }
     }
+    mem_unlock(flags);
 }
 
 u64 memory_used(void) { return used_memory; }
@@ -172,6 +176,8 @@ void pmm_init_region(u64 base, u64 size) {
 
 void* pmm_alloc_page(void) {
     if (!pmm_bitmap) return NULL;
+    u64 flags = mem_lock();
+    void* p = NULL;
     for (u64 i = 0; i < pmm_total; i++) {
         u64 idx = (pmm_cursor + i) % pmm_total;
         u64 byte = idx / 8;
@@ -179,25 +185,28 @@ void* pmm_alloc_page(void) {
         if (!(pmm_bitmap[byte] & bit)) {
             pmm_bitmap[byte] |= bit;
             pmm_cursor = (idx + 1) % pmm_total;
-            void* p = (void*)(pmm_base + idx * PMM_PAGE_SIZE);
-            memset(p, 0, PMM_PAGE_SIZE);
-            return p;
+            p = (void*)(pmm_base + idx * PMM_PAGE_SIZE);
+            break;
         }
     }
-    return NULL;
+    mem_unlock(flags);
+    if (p) memset(p, 0, PMM_PAGE_SIZE);
+    return p;
 }
 
 void pmm_free_page(void* ptr) {
     if (!pmm_bitmap || !ptr) return;
+    u64 flags = mem_lock();
     u64 addr = (u64)ptr;
-    if (addr < pmm_base) return;
-    u64 idx = (addr - pmm_base) / PMM_PAGE_SIZE;
-    if (idx >= pmm_total) return;
-    u64 byte = idx / 8;
-    u8 bit = (u8)(1 << (idx % 8));
-    if (pmm_bitmap[byte] & bit) {
-        pmm_bitmap[byte] &= (u8)~bit;
+    if (addr >= pmm_base) {
+        u64 idx = (addr - pmm_base) / PMM_PAGE_SIZE;
+        if (idx < pmm_total) {
+            u64 byte = idx / 8;
+            u8 bit = (u8)(1 << (idx % 8));
+            pmm_bitmap[byte] &= (u8)~bit;
+        }
     }
+    mem_unlock(flags);
 }
 
 void* kmalloc_aligned(u64 size, u32 alignment) {

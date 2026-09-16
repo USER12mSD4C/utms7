@@ -6,6 +6,7 @@
 #include "../include/io.h"
 #include "../kernel/paging.h"
 #include "../kernel/memory.h"
+#include "../drivers/i915.h"
 
 static u32 drm_scratch[1024 * 768];
 
@@ -968,8 +969,20 @@ static int drm_uapi_create_dumb(struct drm_mode_create_dumb* c) {
     u64 size = (u64)pitch * c->height;
     size = (size + 4095) & ~4095;
 
-    void* vaddr = kmalloc(size);
-    if (!vaddr) return -12;
+    void* vaddr = NULL;
+    u64 phys = 0;
+
+    if (i915_present()) {
+        u64 gem_handle = i915_gem_create((u32)size);
+        if (gem_handle == 0) return -12;
+        vaddr = i915_gem_map(gem_handle);
+        if (!vaddr) { i915_gem_destroy(gem_handle); return -12; }
+        phys = (u64)vaddr;
+    } else {
+        vaddr = kmalloc(size);
+        if (!vaddr) return -12;
+        phys = (u64)vaddr;
+    }
 
     memset(vaddr, 0, size);
 
@@ -980,7 +993,7 @@ static int drm_uapi_create_dumb(struct drm_mode_create_dumb* c) {
     buf->bpp = bpp;
     buf->pitch = pitch;
     buf->size = size;
-    buf->paddr = (u64)vaddr;
+    buf->paddr = phys;
     buf->vaddr = vaddr;
     buf->used = 1;
 
@@ -1012,7 +1025,9 @@ static int drm_uapi_destroy_dumb(struct drm_mode_destroy_dumb* d) {
 
     for (int i = 0; i < DRM_MAX_DUMB_BUFFERS; i++) {
         if (dumb_buffers[i].used && dumb_buffers[i].handle == d->handle) {
-            kfree(dumb_buffers[i].vaddr);
+            if (!i915_present()) {
+                kfree(dumb_buffers[i].vaddr);
+            }
             dumb_buffers[i].used = 0;
             return 0;
         }

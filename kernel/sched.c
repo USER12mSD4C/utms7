@@ -117,6 +117,7 @@ u64 sched_do_switch(struct interrupt_frame *frame) {
             waking->next = NULL;
             waking->state = PROC_READY;
             waking->sleep_until = 0;
+
             enqueue_ready(waking);
         } else {
             sp_prev = sp;
@@ -150,6 +151,9 @@ u64 sched_do_switch(struct interrupt_frame *frame) {
     restore_fpu(next->fpu_context);
 
     tss_set_rsp0(next->kstack + KERNEL_STACK_SIZE);
+
+    extern u64 kernel_stack_temp;
+    kernel_stack_temp = next->kstack + KERNEL_STACK_SIZE;
 
     if (prev->cr3 != next->cr3) {
         __asm__ volatile ("mov %0, %%cr3" : : "r"(next->cr3) : "memory");
@@ -283,6 +287,7 @@ int sched_init(void) {
     process_t *idle = &processes[0];
     idle->pid = 0;
     strcpy(idle->name, "idle");
+    strcpy(idle->chroot_path, "/");
     idle->state = PROC_READY;
     idle->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ) + 1000;
     idle->cr3 = (u64)0x1000;
@@ -363,6 +368,7 @@ int sched_create_kthread(const char* name, void (*entry)(void*), void* arg) {
     p->ppid = current ? current->pid : 0;
     strncpy(p->name, name, 31);
     p->name[31] = '\0';
+    strcpy(p->chroot_path, "/");
     p->state = PROC_READY;
     p->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
     p->cr3 = current ? current->cr3 : (u64)0x1000;
@@ -467,6 +473,16 @@ void sched_tick(void) {
     if (current->ticks_left == 0 && current->state == PROC_RUNNING) {
         current->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
         sched_need_resched = 1;
+    }
+
+    u32 now = get_ticks_internal();
+    process_t *sp = sleep_queue;
+    while (sp) {
+        if (sp->sleep_until <= now) {
+            sched_need_resched = 1;
+            break;
+        }
+        sp = sp->next;
     }
 }
 
@@ -578,6 +594,7 @@ int sched_clone(u64 user_rip, u64 user_rsp) {
     child->ppid = parent->pid;
     strncpy(child->name, parent->name, 27);
     child->name[27] = '\0';
+    strcpy(child->chroot_path, parent->chroot_path);
     child->state = PROC_READY;
     child->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
 
@@ -678,6 +695,7 @@ int sched_create_process(const char* name, u8* elf_data, u32 elf_size) {
     p->ppid = current ? current->pid : 0;
     strncpy(p->name, name, 31);
     p->name[31] = '\0';
+    strcpy(p->chroot_path, "/");
     p->state = PROC_READY;
     p->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
 
@@ -843,6 +861,7 @@ void sched_wakeup(void *channel) {
             processes[i].state = PROC_READY;
             processes[i].waiting_for = NULL;
             enqueue_ready(&processes[i]);
+            sched_need_resched = 1;
         }
     }
     __asm__ volatile ("sti");
@@ -901,6 +920,7 @@ int sched_fork(void *frame_ptr) {
     child->ppid = parent->pid;
     strncpy(child->name, parent->name, 31);
     child->name[31] = '\0';
+    strcpy(child->chroot_path, parent->chroot_path);
     child->state = PROC_READY;
     child->ticks_left = TIME_SLICE_MS / (1000 / PIT_TARGET_HZ);
 
@@ -989,7 +1009,14 @@ void sched_wake_irq(int irq) {
             if (processes[i].irq_mask & (1 << irq)) {
                 processes[i].irq_pending |= (1 << irq);
                 processes[i].state = PROC_READY;
+                sched_need_resched = 1;
             }
         }
     }
+}
+
+const char* sched_get_chroot(void) {
+    if (!current) return "/";
+    if (current->chroot_path[0] == '\0') return "/";
+    return current->chroot_path;
 }

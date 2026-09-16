@@ -20,17 +20,17 @@ static int remove_recursive(const char *path) {
         return -1;
     }
 
-    struct dirent *ent;
+    struct linux_dirent64 *ent;
     char child[512];
 
     while ((ent = readdir(dir)) != NULL) {
-        if (strcmp(ent->name, ".") == 0 || strcmp(ent->name, "..") == 0) continue;
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
 
         strcpy(child, path);
         if (path[strlen(path) - 1] != '/') strcat(child, "/");
-        strcat(child, ent->name);
+        strcat(child, ent->d_name);
 
-        if (ent->is_dir) {
+        if (ent->d_type == 4) {
             if (remove_recursive(child) != 0) {
                 closedir(dir);
                 return -1;

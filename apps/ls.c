@@ -29,29 +29,41 @@ int main(int argc, char **argv) {
     getcwd(cwd, sizeof(cwd));
 
     const char* path = (argc > 1) ? argv[1] : cwd;
-    struct dirent ents[128];
-
-    long n = syscall(SYS_readdir, (long)path, (long)ents, 128, 0, 0, 0);
-    if (n < 0) {
+    DIR *dir = opendir(path);
+    if (!dir) {
         out("ls: cannot access '");
         out(path);
         out("'\n");
         return 1;
     }
 
-    for (long i = 0; i < n; i++) {
-        if (ents[i].is_dir) {
+    struct linux_dirent64 *ent;
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
+
+        if (ent->d_type == 4) {
             set_color(0x0B, 0);
-            out(ents[i].name);
+            out(ent->d_name);
             out("/\n");
         } else {
             set_color(0x07, 0);
-            out(ents[i].name);
-            out("  ");
-            put_u64(ents[i].size);
-            out(" B\n");
+            out(ent->d_name);
+            char full_path[512];
+            if (strcmp(path, "/") == 0) {
+                snprintf(full_path, sizeof(full_path), "/%s", ent->d_name);
+            } else {
+                snprintf(full_path, sizeof(full_path), "%s/%s", path, ent->d_name);
+            }
+            struct stat st;
+            if (stat(full_path, &st) == 0) {
+                out("  ");
+                put_u64(st.st_size);
+                out(" B");
+            }
+            out("\n");
         }
     }
+    closedir(dir);
 
     set_color(0x07, 0);
     return 0;
